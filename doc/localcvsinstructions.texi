@@ -1,0 +1,1 @@
+../../pintos-vt-local/doc/localcvsinstructions.texi
