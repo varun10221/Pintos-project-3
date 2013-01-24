@@ -65,14 +65,12 @@ environment.
 @node Source Tree Overview
 @subsection Source Tree Overview
 
-Now you can extract the source for Pintos into a directory named
-@file{pintos/src}, by executing
+To obtain our local copy of Pintos, you need to use the @command{git}
+version control system.
+Use this command
 @example
-zcat @value{localpintostarpath} | tar x
+git clone yoursloid@@rlogin.cs.vt.edu:/web/courses/cs4284/pintos.git
 @end example
-Alternatively, fetch
-@uref{@value{localpintoshttppath}}
-and extract it in a similar way.
 
 Let's take a look at what's inside.  Here's the directory structure
 that you should see in @file{pintos/src}:

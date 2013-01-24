@@ -6,6 +6,7 @@ Here are some tools that you might find useful while developing code.
 @menu
 * Tags::
 * cscope::
+* git::
 * CVS::
 @ifset recommendvnc
 * VNC::
@@ -77,7 +78,15 @@ Unix-like environments.
 For more information, visit the @uref{https://www.cvshome.org/, , CVS
 home page}.
 
-@include localcvsinstructions.texi
+@node git
+@section git
+
+As of 2012, we recommend you use git. We will set up an upstream repository
+to distribute the provided code.   We will commit any needed updates to this
+master repository.  You should clone this repository.
+
+To share work among team members, use NFSv4 ACLs to allow each other access
+to your repositories.  
 
 @ifset recommendvnc
 @node VNC
