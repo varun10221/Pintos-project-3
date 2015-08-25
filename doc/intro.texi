@@ -67,10 +67,11 @@ environment.
 
 To obtain our local copy of Pintos, you need to use the @command{git}
 version control system.
-Use this command
-@example
-git clone yoursloid@@rlogin.cs.vt.edu:/web/courses/cs4284/pintos.git
-@end example
+To start with, you should fork my copy available at
+@uref{https://git.cs.vt.edu/gback/pintos-2015}
+
+As we are using gitlab for the first time this semester, instructions
+will be posted separately.
 
 Let's take a look at what's inside.  Here's the directory structure
 that you should see in @file{pintos/src}:
