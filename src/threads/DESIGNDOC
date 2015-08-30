@@ -52,7 +52,46 @@ Mai Dahshan <mdahshan@vt.edu>
 
 For Monday 31 Aug:
 Jamie's proposed design
-  TODO
+
+  As provided, timer_sleep calls thread_yield until ticks <= timer_elapsed.
+  thread_yield puts the caller at the end of the ready list, leaves its state as THREAD_READY, and then schedules a thread to run
+    (could be the caller). This can result in busy looping, using up CPU cycles scheduling and unscheduling the sleeping thread
+    until enough ticks have passed. For short sleeps this is OK, but for long sleeps this wastes a lot of CPU.
+
+  It would be preferable if the sleeping thread were not considered for scheduling until its requested number of ticks have passed.
+  There is no requirement that the thread be woken up after exactly x ticks (unless the system is otherwise idle).
+
+  Proposal 1: Complete accuracy, at the expense (perhaps) of system responsiveness
+  
+  - Introduce a new list of sleeping threads in thread.c: static struct list sleeping_list
+  - Add a THREAD_SLEEPING category to enum thread_status
+  - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken
+  - When a thread calls timer_sleep, it adds itself to this list and yields
+  - In the timer interrupt handler, traverse the sleeping_list and add to ready_list any threads list that have finished their sleep
+
+  Problem: If the system has a lot of threads that call timer_sleep, traversing the sleeping_list to find threads that should be woken can be expensive.
+    The interrupt handler must run as fast as possible to improve system responsiveness. We don't want to spend ticks iterating over a list.
+
+  Variation: keep the sleeping_list sorted by soonest-to-wake, minimizing the time spent traversing it in the timer interrupt handler
+    
+  Proposal 2: System responsiveness, at the expense of accuracy
+
+  (The first three are the same as Proposal 1)
+  - Introduce a new list of sleeping threads in thread.c: static struct list sleeping_list
+  - Add a THREAD_SLEEPING category to enum thread_status
+  - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken
+  Differences:
+  - Introduce another "system" thread (joining the elite club of idle_thread and initial_thread). Call it waker_thread
+     waker_thread is always on the ready list and when scheduled, it:
+      - iterates over the sleeping_list
+      - adds any ready-to-wake threads to the ready_list
+      - yields
+
+  Here we're still burning CPU cycles, but in a high-sleeper scenario only one thread is being scheduled to burn cycles
+    instead of multiple threads.
+
+  Proposal 3:
+    Instead of introducing a waker_thread, have the idle_thread check the sleeper_list instead. It's not doing anything else anyway...
 
 Mai's proposed design
   TODO
