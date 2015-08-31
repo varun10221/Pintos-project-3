@@ -1,0 +1,38 @@
+Project 1 schedule, creating during discussion on Monday 31 August.
+
+Prior to meeting on Wed. 2 Sept:
+Jamie:
+  - bring alarm clock implementation
+  - bring design of priority scheduler
+  - bring thoughts about design of BSD scheduler
+Mai:
+  - bring design of alarm clock
+  - bring design of priority scheduler
+
+Wednesday 2 Sept: Meeting.
+  - discuss alarm clock design and implementation; finalize design and decide on needed changes
+  - discuss priority scheduler design and finalize design
+
+Work following Wednesday 2 Sept. meeting:
+  - modify alarm clock implementation as needed (Friday)
+  - implement priority scheduler (Sun/Mon)
+  - design BSD scheduler (Friday)
+
+Friday 4 Sept. meeting:
+  - discuss and finalize BSD scheduler design (could also be done on Friday for weekend implementation?)
+
+Work following Friday meeting:
+  - continue to implement priority scheduler
+  - begin to implement BSD scheduler
+
+Sunday or Monday meeting:
+  - discuss priority scheduling implementation
+  - discuss progress on BSD scheduler design/implementation
+
+Work following Sunday/Monday meeting:
+  - implement BSD scheduler
+
+Wednesday: 
+  - discuss BSD scheduler implementation
+  - verify all tests pass
+  - finalize project documentation
