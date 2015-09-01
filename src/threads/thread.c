@@ -24,12 +24,26 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* List of sleeping processes, i.e. those waiting for enough time to pass 
+   before they should be scheduled. */
+struct list sleeping_list;
+/* Lock to control access to sleeping_list. */
+struct lock sleeping_list_lock;
+/* Semaphore to signal that the timer interrupt handler ran. 
+   Used by timer_interrupt and the waker thread. */
+struct semaphore timer_interrupt_occurred;
+/* What time was it when the timer interrupt handler went off? */
+int64_t timer_interrupt_ticks;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
+
+/* Waker thread. */
+static struct thread *waker_thread;
 
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
@@ -62,6 +76,7 @@ bool thread_mlfqs;
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
+static void waker (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
 static void init_thread (struct thread *, const char *name, int priority);
@@ -77,6 +92,8 @@ static tid_t allocate_tid (void);
    was careful to put the bottom of the stack at a page boundary.
 
    Also initializes the run queue and the tid lock.
+   Also initializes the sleeping_list and the associated 
+     synchronization variables.
 
    After calling this function, be sure to initialize the page
    allocator before trying to create any threads with
@@ -91,6 +108,9 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  lock_init (&sleeping_list_lock);
+  list_init (&sleeping_list);
+  sema_init (&timer_interrupt_occurred, 0);
   list_init (&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -101,20 +121,32 @@ thread_init (void)
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
-   Also creates the idle thread. */
+   Also creates the idle thread and the waker thread. */
 void
 thread_start (void) 
 {
+  tid_t new_tid;
+
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
-  thread_create ("idle", PRI_MIN, idle, &idle_started);
+  new_tid = thread_create ("idle", PRI_MIN, idle, &idle_started);
+  ASSERT (new_tid != TID_ERROR);
+
+  /* Create the idle thread. */
+  struct semaphore waker_started;
+  sema_init (&waker_started, 0);
+  new_tid = thread_create ("waker", PRI_MAX, waker, &waker_started);
+  ASSERT (new_tid != TID_ERROR);
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
+
+  /* Wait for the waker thread to initialize waker_thread. */
+  sema_down (&waker_started);
 }
 
 /* Called by the timer interrupt handler at each timer tick.
@@ -414,6 +446,63 @@ idle (void *idle_started_ UNUSED)
     }
 }
 
+/* Waker thread.  Signaled occasionally by the interrupt handler to wake sleeping threads found on the sleeper_list.
+
+   The waker thread is initially put on the ready list by
+   thread_start().  It will be scheduled once initially, at which
+   point it initializes waker_thread, "up"s the semaphore passed
+   to it to enable thread_start() to continue, and immediately
+   blocks on the semaphore.  After that, the waker thread never appears in the
+   ready list.  It is returned by next_thread_to_run() as a
+   special case when the ready list is empty. */
+static void
+waker (void *waker_started_ UNUSED) 
+{
+  enum intr_level old_level;
+
+  struct semaphore *waker_started = waker_started_;
+  waker_thread = thread_current ();
+  sema_up (waker_started);
+
+  for (;;) 
+    {
+      /* Wait to be woken by the timer interrupt handler. */
+      sema_down (&timer_interrupt_occurred);
+
+      lock_acquire (&sleeping_list_lock);
+
+      /* Any threads ready to be woken? */
+      struct list_elem *e = list_begin (&sleeping_list);
+      while (e != list_end (&sleeping_list))
+        {
+          struct thread *t = list_entry (e, struct thread, elem);
+          ASSERT (0 < t->wake_me_at);
+          /* See timer_sleep: threads in sleeping_list may have 
+             status THREAD_RUNNING until thread_block() is called. 
+             Until thread status is THREAD_BLOCKED, we cannot safely 
+             move the thread to the ready list. */
+          if (t->status == THREAD_BLOCKED && t->wake_me_at <= timer_interrupt_ticks)
+            {
+              /* Wake up the thread. */
+              t->status = THREAD_READY;
+              t->wake_me_at = 0;
+              e = list_remove (e);
+
+              /* Atomically add to ready_list.
+                 We disable interrupts here rather than outside the loop to avoid
+                 holding the lock for too long. We assume that there are many threads
+                 waiting and that most of them do not need to be woken. */
+              old_level = intr_disable ();
+              list_push_back (&ready_list, &t->elem);
+              intr_set_level (old_level);
+            }
+          else
+            e = e->next;
+        }
+      lock_release (&sleeping_list_lock);
+    }
+}
+
 /* Function used as the basis for a kernel thread. */
 static void
 kernel_thread (thread_func *function, void *aux) 
@@ -462,6 +551,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->wake_me_at = 0;
   t->magic = THREAD_MAGIC;
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

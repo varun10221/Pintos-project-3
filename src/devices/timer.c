@@ -89,11 +89,41 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
+  /* Possible interruption here. */
   int64_t start = timer_ticks ();
+  /* Now we have current time and for how many ticks to sleep. */
+
+  /* Nothing to do. */
+  if (ticks <= 0)
+    return;
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+
+  /* Determine wake-up time for thread. */
+  struct thread *cur = thread_current ();
+  cur->wake_me_at = ticks + start;
+
+  /* Add this thread to sleeping_list.
+     Note that its current state is THREAD_RUNNING,
+     and will remain so until thread_block is called. */
+  lock_acquire (&sleeping_list_lock);
+  list_push_back (&sleeping_list, &cur->elem);
+  lock_release (&sleeping_list_lock);
+
+  /* Disable interrupts and then block. */
+  enum intr_level old_level = intr_disable ();
+  /* thread_block will mark thread as THREAD_BLOCKED. */
+  thread_block();
+  intr_set_level (old_level);
+
+  /* We are awake again, so sufficient time must have elapsed. */
+
+  /* We could be interrupt before timer_ticks returns, yielding a larger 
+     end than true. It's the best we can do. */
+  int64_t end = timer_ticks ();
+  int64_t elapsed = end - start;
+  ASSERT ( ticks <= elapsed );
+
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -171,6 +201,12 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  timer_interrupt_ticks = ticks;
+  /* To reduce unneeeded runs by waker, we only
+     Up if the sleeper list is non-empty. The emptiness test
+     is cheap. */
+  if (! list_empty (&sleeping_list))
+    sema_up (&timer_interrupt_occurred);
   thread_tick ();
 }
 

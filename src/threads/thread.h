@@ -98,6 +98,9 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+    /* Owned by devices/timer.c. */
+    int64_t wake_me_at; /* Wake a thread in thread_status THREAD_BLOCKED when 0 < wake_me_at <= current timer tick */
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

@@ -26,4 +26,17 @@ void timer_ndelay (int64_t nanoseconds);
 
 void timer_print_stats (void);
 
+/* Variables from thread.c */
+
+/* List of sleeping processes, i.e. those waiting for enough time to pass 
+   before they should be scheduled. */
+extern struct list sleeping_list;
+/* Lock to control access to sleeping_list. */
+extern struct lock sleeping_list_lock;
+/* Semaphore to signal that the timer interrupt handler ran. 
+   Used by timer_interrupt and the waker thread. */
+extern struct semaphore timer_interrupt_occurred;
+/* What time was it when the timer interrupt handler went off? */
+extern int64_t timer_interrupt_ticks;
+
 #endif /* devices/timer.h */
