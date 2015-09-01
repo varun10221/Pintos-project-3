@@ -42,8 +42,26 @@ Mai Dahshan <mdahshan@vt.edu>
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
 
+timer_sleep() appends the running thread to the sleeping_list.
+This update to the sleeping_list is kept atomic through the use of a lock.
+
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
+
+The situation here is that a thread is running timer_sleep and a timer
+interrupt occurs. 
+
+CASE: The timer interrupt handler traverses and potentially removes elements from the sleeping_list.
+It does not hold a lock. I don't see a good way around this race condition besides disabling interrupts
+in timer_sleep while we modify sleeping_list.
+
+CASE: The timer interrupt handler just Ups a semaphore. This (eventually) wakes waker_thread, who
+waits for the lock on the sleeping_list before modifying it. No race condition since we revert to
+well-defined lock semantics.
+
+HOWEVER: if the timer interrupt handler interrupts a call to timer_sleep while we are computing
+when to wake us up, and it uses X ticks, then we potentially sleep X + ticks_to_sleep ticks.
+If X >> ticks_to_sleep, this could be bad.
 
 ---- RATIONALE ----
 
@@ -64,34 +82,38 @@ Jamie's proposed design
   Proposal 1: Complete accuracy, at the expense (perhaps) of system responsiveness
   
   - Introduce a new list of sleeping threads in thread.c: static struct list sleeping_list
-  - Add a THREAD_SLEEPING category to enum thread_status
-  - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken
+  - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken (this could also be done with a struct tracking a thread and a wake_me_at field, but this seems like a needless use of memory)
   - When a thread calls timer_sleep, it adds itself to this list and yields
   - In the timer interrupt handler, traverse the sleeping_list and add to ready_list any threads list that have finished their sleep
 
   Problem: If the system has a lot of threads that call timer_sleep, traversing the sleeping_list to find threads that should be woken can be expensive.
     The interrupt handler must run as fast as possible to improve system responsiveness. We don't want to spend ticks iterating over a list.
 
-  Variation: keep the sleeping_list sorted by soonest-to-wake, minimizing the time spent traversing it in the timer interrupt handler
+  Variation: keep the sleeping_list sorted by soonest-to-wake, minimizing the time spent traversing it in the timer interrupt handler. This makes insertion more expensive, which in turn makes the timer interrupt handler take longer.
     
-  Proposal 2: System responsiveness, at the expense of accuracy
+  Proposal 2: System responsiveness, at the expense of timer accuracy
 
   (The first three are the same as Proposal 1)
   - Introduce a new list of sleeping threads in thread.c: static struct list sleeping_list
-  - Add a THREAD_SLEEPING category to enum thread_status
   - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken
   Differences:
-  - Introduce another "system" thread (joining the elite club of idle_thread and initial_thread). Call it waker_thread
+  - Introduce another "system" thread (joining the elite club of idle_thread and initial_thread). Call it waker_thread.
      waker_thread is always on the ready list and when scheduled, it:
       - iterates over the sleeping_list
       - adds any ready-to-wake threads to the ready_list
       - yields
 
-  Here we're still burning CPU cycles, but in a high-sleeper scenario only one thread is being scheduled to burn cycles
-    instead of multiple threads.
+  Here we're still burning CPU cycles busy-waiting, but in a high-sleeper-count scenario only *one* thread (the waker_thread) is being scheduled to burn cycles instead of multiple threads. In a low-sleeper-count scenario this is roughly the same as what we have now anyway.
 
-  Proposal 3:
-    Instead of introducing a waker_thread, have the idle_thread check the sleeper_list instead. It's not doing anything else anyway...
+  Variation 1: Instead of introducing a waker_thread, have the idle_thread check the sleeper_list instead. It's not doing anything else anyway. However, this could starve sleepers. The idle_thread only runs when the ready_list is empty, so if there are always ready threads, idle would never run and thus sleepers would never be woken. Failure!
+
+  Variation 2: Have waker_thread wait on a semaphore (monitor?) and have the timer interrupt "Up" the semaphore. This does not require busy waiting. waker_thread is therefore only ever scheduled to run by the timer interrupt, instead of at the same rate as every other thread in the ready list.
+
+  Variation 3: Just stick sleeping threads in the ready_list, mark them as SLEEPING, and don't schedule them until enough time has passed. This has minimal complexity but makes the scheduling activity pricey! I think the list traversal could become unpleasantly expensive.
+
+  Files to modify:
+    - thread.h: thread_status
+    - thread.h: struct thread
 
 Mai's proposed design
   TODO
