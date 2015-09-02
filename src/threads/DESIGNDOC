@@ -111,6 +111,8 @@ Jamie's proposed design
 
   Variation 3: Just stick sleeping threads in the ready_list, mark them as SLEEPING, and don't schedule them until enough time has passed. This has minimal complexity but makes the scheduling activity pricey! I think the list traversal could become unpleasantly expensive.
 
+  - Note from Mai: The current implementation could wake a thread sleeping for 10 ticks BEFORE(?) a thread sleeping for 12 ticks (well not quite because it's FIFO but they could be woken at the same time. Strange.)
+
   Files to modify:
     - thread.h: thread_status
     - thread.h: struct thread
@@ -192,10 +194,14 @@ Design components:
       > Introduce (1 + PRI_MAX - PRI_MIN) ready_lists. Iterate from high priority to low priority. We remove the first element from the
         first non-empty list we find. Scheduling cost is now O(1), since we scan a constant number of lists and identifying the thread
         to run is done with a FIFO.
+
+        This costs 32bytes-per-list * 64 lists == idk bytes. Relatively small overhead considering the size and quantity of TCBs we'll be allocating.
+
       > Introduce the same number of sleeping_lists, in the same fashion. This allows waker to wake threads in the order of appropriate priority.
 
 
 2. Similarly, when threads are waiting for a lock, semaphore, or condition variable, the highest priority waiting thread should be awakened first. 
+
   > Introduce a function called by next_thread_to_run that looks through an array or list of lists for the highest-priority thread.
     Then call the same function in next_thread_to_run and a new function next_thread_to_wake.
     There is no need to use this function in the waker thread because he is going to iterate over all priorities every time he runs.
@@ -218,43 +224,59 @@ You must implement priority donation for locks. You need not implement priority 
     However, in most (all?) cases I would hope that such access is controlled by use of synchronization primitives, such that
     supporting it in the context of synchronization primitives gives us priority donation in a wide variety of cases.
 
-  Concept:
-    > Threads maintain a list of the lock resources they hold and the highest priority waiter for each lock.
-      Lock resources know their owner.
-      When a thread blocks on a lock resource, it determines the current owner, finds the lock resource
-        in the owner's list of resources, and raises the value for the "highest priority waiter" if it finds one.
+  Concepts:
+    > Threads maintain a list of the lock resources they hold.
+    > Threads track both a priority and an effective priority (same idea as uid/effective uid)
+    > Lock resources know their holder.
+    > When a thread blocks on a lock resource, it determines the current holder of the resource and promotes it if the blocking thread has a higher priority.
+    > When a thread releases a lock resource, it has to correct its priority.
 
   Design:
 
+  Struct changes:
     Add to the TCB a list of currently-held resources.
-    Add to the TCB the resource for which we are waiting.
+    Add to the TCB the resource for which we are waiting (allows nested donation).
 
   1. When a thread goes to lock a resource and has to block: 
-  - in its TCB it must update the resource for which it is waiting
-  - it must update the current owner's priority
+  - in its TCB it sets the resource it is waiting for
+  - it may update the current holder's priority
+
+  Code from sema_down:
   
-  old_level = intr_disable ();
-  while (sema->value == 0) 
-    {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
-      /* NEW CODE */
-      update_waiting_resource ();
-      scheduler_donate_priority (holder_of_waiting_resource);
-      /* END OF NEW CODE */
-      thread_block ();
-    }
-  intr_set_level (old_level);
+    old_level = intr_disable ();
+    while (sema->value == 0) 
+      {
+        list_push_back (&sema->waiters, &thread_current ()->elem);
+        /* NEW CODE */
+        update_waiting_resource ();
+        scheduler_donate_priority (holder_of_waiting_resource);
+        /* END OF NEW CODE */
+        thread_block ();
+      }
+    intr_set_level (old_level);
+
+  (We can keep the sema->waiters as a simple linked list. If this list is extremely long I think that implies
+    a design flaw or a very overloaded system anyway.)
 
   update_waiting_resource identifies the current thread and sets the resource-for-which-we-are-waiting field.
 
   scheduler_donate_priority will move the holder to the run queue of the appropriate priority, based on the priority
-    of the current thread and the current run queue of the holder.
-    If the holder is waiting, it will recurse on the holder, thus allowing nested donation. 
+    of the current thread and the effective priority of the holder.
+    - We can assert that the thread is found in the run queue of its effective priority
+    - Finding the holder thread in its run list may be expensive.
+    - If the holder itself is waiting, recurse on the holder, thus allowing nested donation. 
+
+    ** Either cap max donation at, say, 8, or remember all of the threads we encounter in order
+        to detect a deadlock (which would otherwise cause us to go into infinite recursion).
+        Note that we should NOT make this an assert: user-level processes are allowed to deadlock if they want to.
+        We could, however, kill the threads involved in the deadlock (if we had a function for that).
+        At the moment a thread has to voluntarily exit.
 
   Note that a semaphore does not know the holder, since there is no holder for a semaphore.
     sema_down will be modified to accept an optional *resource (defaulting to NULL but provided in the call from lock_acquire) for this purpose.
+    Other synchronization primitives build on semaphores may also track their holder, so this allows some generalization. 
 
-  This causes a given holder to track only its highest priority waiter, which brings us to...
+  Note that this scheme causes a given holder to track only its *highest* priority waiter, which brings us to...
 
   2. After a thread unlocks a resource, any increase in its priority due to other threads 
   waiting on the resource should be revoked. However, it may still be donated higher priority
@@ -262,7 +284,8 @@ You must implement priority donation for locks. You need not implement priority 
 
   Consequently, after unlocking a resource a thread should call scheduler_revoke_priority,
     which will determine the appropriate priority for this thread based on the current priorities of the waiters of the locks that it holds.
-    Since scheduler_donate_priority is recursive, we don't need to worry about recursing "backwards" here.
+    Since scheduler_donate_priority is recursive, we don't need to worry about recursing "backwards" here: the highest effective
+    priority of its waiters will be the maximum priority the thread can take on.
           
   Both of these operations require a lock on the ready_list information.
     Before blocking on a lock (in sema_down) we have disabled interrupts, effectively giving us a lock on every global data structure.
@@ -300,9 +323,6 @@ You must implement priority donation for locks. You need not implement priority 
     Proposal:
       Threads track the holder of the resource for which they are waiting, updating it before thread_block in the synchronization code.
       scheduler_donate_priority can work recursively on this field.
-
-Mai's proposed design
-  TODO
 
         ADVANCED SCHEDULER
         ==================
