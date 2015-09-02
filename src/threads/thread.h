@@ -141,4 +141,12 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
+/* Functions to expose the variables used to support alarm clock functionality to devices/timer.c. */
+void lock_sleeping_list_lock (void);
+void unlock_sleeping_list_lock (void);
+bool is_sleeping_list_empty (void);
+void push_sleeping_list (struct list_elem *);
+void up_timer_interrupt_occurred (void);
+void set_timer_interrupt_ticks (int64_t ticks);
+
 #endif /* threads/thread.h */

@@ -106,9 +106,9 @@ timer_sleep (int64_t ticks)
   /* Add this thread to sleeping_list.
      Note that its current state is THREAD_RUNNING,
      and will remain so until thread_block is called. */
-  lock_acquire (&sleeping_list_lock);
-  list_push_back (&sleeping_list, &cur->elem);
-  lock_release (&sleeping_list_lock);
+  lock_sleeping_list_lock ();
+  push_sleeping_list (&cur->elem);
+  unlock_sleeping_list_lock ();
 
   /* Disable interrupts and then block. */
   enum intr_level old_level = intr_disable ();
@@ -201,12 +201,12 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-  timer_interrupt_ticks = ticks;
+  set_timer_interrupt_ticks (ticks);
   /* To reduce unneeeded runs by waker, we only
      Up if the sleeper list is non-empty. The emptiness test
      is cheap. */
-  if (! list_empty (&sleeping_list))
-    sema_up (&timer_interrupt_occurred);
+  if (! is_sleeping_list_empty ())
+    up_timer_interrupt_occurred ();
   thread_tick ();
 }
 

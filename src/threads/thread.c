@@ -26,14 +26,14 @@ static struct list ready_list;
 
 /* List of sleeping processes, i.e. those waiting for enough time to pass 
    before they should be scheduled. */
-struct list sleeping_list;
+static struct list sleeping_list;
 /* Lock to control access to sleeping_list. */
-struct lock sleeping_list_lock;
+static struct lock sleeping_list_lock;
 /* Semaphore to signal that the timer interrupt handler ran. 
    Used by timer_interrupt and the waker thread. */
-struct semaphore timer_interrupt_occurred;
+static struct semaphore timer_interrupt_occurred;
 /* What time was it when the timer interrupt handler went off? */
-int64_t timer_interrupt_ticks;
+static int64_t timer_interrupt_ticks;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -408,8 +408,53 @@ thread_get_load_avg (void)
   return 0;
 }
 
+/* API to allow timer.c to lock the sleeping_list_lock. */
+void
+lock_sleeping_list_lock (void)
 {
+  lock_acquire (&sleeping_list_lock);
 }
+
+/* API to allow timer.c to unlock the sleeping_list_lock. */
+void
+unlock_sleeping_list_lock (void)
+{
+  lock_release (&sleeping_list_lock);
+}
+
+/* API to allow timer.c to check whether or not the sleeping_list is empty. */
+bool
+is_sleeping_list_empty (void)
+{
+  return list_empty (&sleeping_list);
+}
+
+/* API to allow timer.c to add threads to the sleeping_list. */
+void
+push_sleeping_list (struct list_elem *elem)
+{
+  ASSERT(elem != NULL);
+  list_push_back (&sleeping_list, elem);
+}
+
+/* API to allow timer.c to access the timer_interrupt_occurred sema to 
+   signal the waker thread. */
+void
+up_timer_interrupt_occurred (void)
+{
+  sema_up (&timer_interrupt_occurred);
+}
+
+/* API to allow timer.c to tell waker how many ticks had occurred
+   at the time of up'ing the timer_interrupt_occurred semaphore. */
+void
+set_timer_interrupt_ticks (int64_t ticks)
+{
+  ASSERT(0 <= ticks);
+  timer_interrupt_ticks = ticks;
+}
+
+
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
