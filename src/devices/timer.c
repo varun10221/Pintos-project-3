@@ -201,12 +201,16 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-  set_timer_interrupt_ticks (ticks);
+
   /* To reduce unneeeded runs by waker, we only
      Up if the sleeper list is non-empty. The emptiness test
      is cheap. */
   if (! is_sleeping_list_empty ())
+  {
+    set_timer_interrupt_ticks (ticks);
     up_timer_interrupt_occurred ();
+  }
+
   thread_tick ();
 }
 
