@@ -330,6 +330,21 @@ You must implement priority donation for locks. You need not implement priority 
         ADVANCED SCHEDULER
         ==================
 
+Design:
+
+Quoting from the design doc: http://courses.cs.vt.edu/~cs5204/fall15-gback/pintos/doc/pintos_7.html#SEC131
+    Multiple facets of the scheduler require data to be updated after a certain number of timer ticks. In every case, these updates should occur before any ordinary kernel thread has a chance to run, so that there is no chance that a kernel thread could see a newly increased timer_ticks() value but old scheduler data values. 
+
+    Thread priority is calculated initially at thread initialization. It is also recalculated once every fourth clock tick, for every thread.
+
+The only way to ensure that no kernel thread can see an increased timer_ticks() value but no 
+scheduler data value is if the ticks and the updates are done atomically. The timer interrupt handler
+is a logical place to put this computation.
+
+This (hopefully) results in a system more responsive and fair to its applications.
+The cost is that every X ticks we have a O(N) (where N is the number of threads) operation that is
+pure system overhead. 
+
 ---- DATA STRUCTURES ----
 
 >> C1: Copy here the declaration of each new or changed `struct' or
@@ -377,6 +392,15 @@ ticks   A   B   C   A   B   C   to run
 >> abstraction layer for fixed-point math, that is, an abstract data
 >> type and/or a set of functions or macros to manipulate fixed-point
 >> numbers, why did you do so?  If not, why not?
+
+I implemented it with a thin layer of abstraction:
+I defined a type 'fp' that it just an int32_t. This makes the cost
+of my fixed-point arithmetic low (e.g. no need to allocate a struct that
+tracks integral and fractional portions of a number), while still 
+allowing me to change the implementation later if I need to.
+
+I did not use macros because I find they tend to be "write only" -- hard
+for someone else to understand later.
 
          SURVEY QUESTIONS
          ================

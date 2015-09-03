@@ -12,8 +12,8 @@ typedef int32_t fp;
 #define POINT 14
 
 enum round_mode {
-  TO_ZERO,
-  TO_NEAREST
+  ROUND_TO_ZERO,
+  ROUND_TO_NEAREST
 };
 
 fp int_to_fp (int n);

@@ -13,7 +13,7 @@ int_to_fp (int n)
 int
 fp_to_int (fp x, enum round_mode mode)
 {
-  if(mode == TO_ZERO)
+  if(mode == ROUND_TO_ZERO)
     return x/ONE;
   else
     return (0 <= x ? (x+(ONE/2))/ONE : (x-(ONE/2))/ONE ); 
