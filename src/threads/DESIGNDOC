@@ -255,6 +255,9 @@ You must implement priority donation for locks. You need not implement priority 
       }
     intr_set_level (old_level);
 
+  TODO We could also disable interrupts in lock/unlock itself (including the call to sema_down?) 
+    and put this logic into the lock instead of the semaphore?
+
   (We can keep the sema->waiters as a simple linked list. If this list is extremely long I think that implies
     a design flaw or a very overloaded system anyway.)
 
