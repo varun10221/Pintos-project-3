@@ -197,6 +197,10 @@ Design components:
 
         This costs 32bytes-per-list * 64 lists == idk bytes. Relatively small overhead considering the size and quantity of TCBs we'll be allocating.
 
+      ** Could consider defining an "abstract type" for this 64-element array with functions to insert, search, remove
+      This would let us change the implementation later as desired, and would probably be cleaner than hardcoding
+      the 64-element array everywhere.
+
       > Introduce the same number of sleeping_lists, in the same fashion. This allows waker to wake threads in the order of appropriate priority.
 
 
@@ -205,6 +209,12 @@ Design components:
   > Introduce a function called by next_thread_to_run that looks through an array or list of lists for the highest-priority thread.
     Then call the same function in next_thread_to_run and a new function next_thread_to_wake.
     There is no need to use this function in the waker thread because he is going to iterate over all priorities every time he runs.
+
+  Note that we may actually need two functions here. Not anticipating really long lists of waiters on a resource,
+  so we can just leave a linked list for the waiters and find the longest-waiting-highest-priority guy on it.
+  (search back to front and track the highest priority found and a pointer to that element)
+
+  This should simplify implementation a bit, and save space in the synchronization primitive.
 
 3. A thread may raise or lower its own priority at any time, but lowering its priority such that it no longer has the highest priority must cause it to immediately yield the CPU.
 
@@ -296,6 +306,8 @@ You must implement priority donation for locks. You need not implement priority 
 
       If thread A releases the lock *without* lowering its priority as needed, it risks cascading bad priority values to other threads
       due to an interrupt and another thread blocking on a resource that thread A holds.
+
+  We also wake a thread on the waiter list. We should wake the 
 
   Drawbacks:
     scheduler_donate_priority and scheduler_revoke_priority will require locating the thread in the list for its current priority level.
