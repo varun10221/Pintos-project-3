@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "lib/kernel/fpra.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -140,6 +141,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+fp thread_calc_load_avg (void);
 
 /* Functions to expose the variables used to support alarm clock functionality to devices/timer.c. */
 void lock_sleeping_list_lock (void);

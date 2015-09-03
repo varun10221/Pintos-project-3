@@ -66,6 +66,8 @@ static long long user_ticks;    /* # of timer ticks in user programs. */
 /* Scheduling. */
 #define TIME_SLICE 4            /* # of timer ticks to give each thread. */
 static unsigned thread_ticks;   /* # of timer ticks since last yield. */
+/* System load average: est. of # threads ready to run over the past minute. */
+static fp load_avg;
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -111,6 +113,8 @@ thread_init (void)
   list_init (&sleeping_list);
   sema_init (&timer_interrupt_occurred, 0);
   list_init (&all_list);
+
+  load_avg = int_to_fp (0);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -399,12 +403,26 @@ thread_get_recent_cpu (void)
   return 0;
 }
 
-/* Returns 100 times the system load average. */
+/* Returns 100 times the last computed system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return 100*fp_to_int( load_avg, ROUND_TO_NEAREST );
+}
+
+/* Calculate the system load average, and update thread.::load_avg.
+   Must be called on a TIMER_FREQ boundary.
+   Intended for use by devices/timer.c. */
+fp
+thread_calc_load_avg (void)
+{
+  ASSERT( timer_ticks () % TIMER_FREQ == 0 );
+  /* Compute coefficients. */
+  fp A = fp_fp_div (int_to_fp (59), int_to_fp (60)); /* 59/60 */
+  fp B = fp_fp_div (int_to_fp (1), int_to_fp (60)); /* 1/60 */
+  /* load_avg = A*load_avg + B*ready_threads */
+  load_avg = fp_fp_add (fp_fp_mult (A, load_avg), fp_fp_mult (B, load_avg));
+  return load_avg;
 }
 
 /* API to allow timer.c to lock the sleeping_list_lock. */
