@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -32,8 +33,6 @@ static struct lock sleeping_list_lock;
 /* Semaphore to signal that the timer interrupt handler ran. 
    Used by timer_interrupt and the waker thread. */
 static struct semaphore timer_interrupt_occurred;
-/* What time was it when the timer interrupt handler went off? */
-static int64_t timer_interrupt_ticks;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -445,16 +444,6 @@ up_timer_interrupt_occurred (void)
   sema_up (&timer_interrupt_occurred);
 }
 
-/* API to allow timer.c to tell waker how many ticks had occurred
-   at the time of up'ing the timer_interrupt_occurred semaphore. */
-void
-set_timer_interrupt_ticks (int64_t ticks)
-{
-  ASSERT(0 <= ticks);
-  timer_interrupt_ticks = ticks;
-}
-
-
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
@@ -516,6 +505,7 @@ waker (void *waker_started_ UNUSED)
     {
       /* Wait to be woken by the timer interrupt handler. */
       sema_down (&timer_interrupt_occurred);
+      int64_t now = timer_ticks ();
 
       lock_acquire (&sleeping_list_lock);
 
@@ -529,7 +519,7 @@ waker (void *waker_started_ UNUSED)
              status THREAD_RUNNING until thread_block() is called. 
              Until thread status is THREAD_BLOCKED, we cannot safely 
              move the thread to the ready list. */
-          if (t->status == THREAD_BLOCKED && t->wake_me_at <= timer_interrupt_ticks)
+          if (t->status == THREAD_BLOCKED && t->wake_me_at <= now)
             {
               /* Wake up the thread. */
               t->status = THREAD_READY;

@@ -147,6 +147,5 @@ void unlock_sleeping_list_lock (void);
 bool is_sleeping_list_empty (void);
 void push_sleeping_list (struct list_elem *);
 void up_timer_interrupt_occurred (void);
-void set_timer_interrupt_ticks (int64_t ticks);
 
 #endif /* threads/thread.h */

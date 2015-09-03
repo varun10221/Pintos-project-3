@@ -206,10 +206,7 @@ timer_interrupt (struct intr_frame *args UNUSED)
      Up if the sleeper list is non-empty. The emptiness test
      is cheap. */
   if (! is_sleeping_list_empty ())
-  {
-    set_timer_interrupt_ticks (ticks);
     up_timer_interrupt_occurred ();
-  }
 
   thread_tick ();
 }
