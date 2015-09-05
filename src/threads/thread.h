@@ -135,6 +135,9 @@ struct priority_queue
   {
     struct list queue[PRI_QUEUE_NLISTS];
     size_t size; /* Total number of elements in all lists. */
+    /* Useful for the sleeping_list. Could be handy in other places.
+       In the sleeping list we track the minimum wake_me_at value. */  
+    int64_t val; 
   };
 
 /* TODO Could return list_elem and accept pairs of list_elem and priority.
@@ -145,6 +148,7 @@ bool priority_queue_empty (struct priority_queue *);
 size_t priority_queue_size (struct priority_queue *);
 struct thread * priority_queue_pop_front (struct priority_queue *);
 void priority_queue_push_back (struct priority_queue *, struct thread *);
+void priority_queue_insert_ordered (struct priority_queue *, struct thread *, list_less_func *, void *aux);
 struct thread * priority_queue_max (struct priority_queue *);
 
 /* If false (default), use round-robin scheduler.
@@ -192,7 +196,12 @@ fp thread_calc_load_avg (void);
 void lock_sleeping_list_lock (void);
 void unlock_sleeping_list_lock (void);
 bool is_sleeping_list_empty (void);
+bool is_sleeping_list_ready (int64_t now);
 void push_sleeping_list (struct thread*);
-void up_timer_interrupt_occurred (void);
+void up_waker_should_run (void);
+bool sleeping_list_less(const struct list_elem *a,
+                        const struct list_elem *b,
+                        void *aux UNUSED);
+bool is_waker_signaled (void);
 
 #endif /* threads/thread.h */

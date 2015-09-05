@@ -26,13 +26,18 @@
 static struct priority_queue ready_list;
 
 /* Priority queue of sleeping processes, i.e. those waiting for enough time to pass 
-   before they should be scheduled. */
+   before they should be scheduled.
+   Each list in the queue is sorted by wake_me_at, soonest to latest.
+     Interpretation of sleeping_list.val: 
+       -1 means there are no sleeping threads.
+        Else, val is the minimum wake_me_at value over all the lists
+          (i.e. the time at which the next thread should be woken). */
 static struct priority_queue sleeping_list;
 /* Lock to control access to sleeping_list. */
 static struct lock sleeping_list_lock;
 /* Semaphore to signal that the timer interrupt handler ran. 
    Used by timer_interrupt and the waker thread. */
-static struct semaphore timer_interrupt_occurred;
+static struct semaphore waker_should_run;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -99,6 +104,7 @@ priority_queue_init(struct priority_queue *pq)
     list_init (&pq->queue[i]);
   }
   pq->size = 0;
+  pq->val = -1;
 }
 
 /* Returns true if empty, false else. */
@@ -158,6 +164,21 @@ priority_queue_push_back(struct priority_queue *pq, struct thread *t)
   list_push_back (&pq->queue[p], &t->elem);
 }
 
+/* Insert into this priority queue. */
+void
+priority_queue_insert_ordered (struct priority_queue *pq, struct thread *t, list_less_func *f, void *aux UNUSED)
+{
+  ASSERT (pq != NULL);
+  ASSERT (t != NULL);
+  ASSERT (is_thread (t));
+  ASSERT (f != NULL);
+
+  priority p = t->effective_priority;
+  ASSERT (PRI_MIN <= p && p <= PRI_MAX);
+  pq->size++;  
+  list_insert_ordered (&pq->queue[p], &t->elem, f, NULL);
+}
+
 /* Identify the maximum priority thread in the priority_queue. 
    Returns NULL if queue is empty. 
    Does not remove the thread, just returns a pointer to it. */
@@ -202,7 +223,7 @@ thread_init (void)
 
   lock_init (&sleeping_list_lock);
   priority_queue_init (&sleeping_list);
-  sema_init (&timer_interrupt_occurred, 0);
+  sema_init (&waker_should_run, 0);
 
   list_init (&all_list);
 
@@ -634,20 +655,61 @@ is_sleeping_list_empty (void)
   return priority_queue_empty (&sleeping_list);
 }
 
-/* API to allow timer.c to add threads to the sleeping_list. */
+/* Returns true if there is at least one thread in the sleeping list
+   that is ready to be woken. */
+bool
+is_sleeping_list_ready (int64_t now)
+{
+  return (sleeping_list.val != -1 && sleeping_list.val <= now);
+}
+
+/* API to allow timer.c to add threads to the sleeping_list. 
+   Threads are inserted into the list of the appropriate priority.
+   Lists are kept sorted by wake_me_at. */
 void
 push_sleeping_list (struct thread *t)
 {
   ASSERT (t != NULL);
-  priority_queue_push_back (&sleeping_list, t);
+  priority_queue_insert_ordered (&sleeping_list, t, sleeping_list_less, NULL);
+  /* Check if we are now the soonest-to-wake. */
+  if(t->wake_me_at <= sleeping_list.val || sleeping_list.val == -1)
+    sleeping_list.val = t->wake_me_at;
 }
 
-/* API to allow timer.c to access the timer_interrupt_occurred sema to 
+/* Input: two list elements belonging to threads.
+   Output: true if A < B, false if A >= B
+   Uses the wake_me_at value for comparison. */
+bool
+sleeping_list_less(const struct list_elem *a,
+                        const struct list_elem *b,
+                        void *aux UNUSED)
+{
+  ASSERT (a != NULL);
+  ASSERT (b != NULL);
+
+  struct thread *a_thr = list_entry(a, struct thread, elem);
+  struct thread *b_thr = list_entry(b, struct thread, elem);
+  ASSERT (is_thread (a_thr));
+  ASSERT (is_thread (b_thr));
+
+  return (a_thr->wake_me_at <= b_thr->wake_me_at);
+}
+
+/* API for timer.c.
+   Returns true if the waker thread has been signaled already, 
+   about the presence of wake-able sleeping threads, and false else. */
+bool
+is_waker_signaled (void)
+{
+  return (1 <= waker_should_run.value);
+}
+
+/* API to allow timer.c to access the waker_should_run sema to 
    signal the waker thread. */
 void
-up_timer_interrupt_occurred (void)
+up_waker_should_run (void)
 {
-  sema_up (&timer_interrupt_occurred);
+  sema_up (&waker_should_run);
 }
 
 
@@ -702,6 +764,15 @@ static void
 waker (void *waker_started_ UNUSED) 
 {
   enum intr_level old_level;
+  int pri_lvl = -1;
+  struct list *cur = NULL;
+  struct list_elem *e = NULL;
+  struct thread *t = NULL;
+  int64_t now;
+  /* Every iteration we should always find at least one thread 
+     with wake_me_at such that it should be woken. 
+     We will not wake it if it is not in THREAD_BLOCKED state. */
+  bool found_wakeable_thread = false;
 
   struct semaphore *waker_started = waker_started_;
   waker_thread = thread_current ();
@@ -710,46 +781,89 @@ waker (void *waker_started_ UNUSED)
   for (;;) 
     {
       /* Wait to be woken by the timer interrupt handler. */
-      sema_down (&timer_interrupt_occurred);
-      int64_t now = timer_ticks ();
+      sema_down (&waker_should_run);
 
+      /* Atomic access to sleeping_list to avoid race
+         with thread_sleep(). */
       lock_acquire (&sleeping_list_lock);
 
-      /* Any threads ready to be woken? 
-         Wake highest priority first. */
-      int pri_lvl;
+      /* If there are no threads sleeping at all, there is nothing to do.
+         This can happen if timer_interrupt Up's the semaphore more than
+         once before waker gets a chance to run. */
+      if (sleeping_list.val == -1)
+      {
+        lock_release (&sleeping_list_lock);
+        continue;
+      }
+
+      now = timer_ticks ();
+      /* We should only have been woken and gotten here if there is at least 
+         one thread to wake, or if there are no threads sleeping at all. */
+      ASSERT (0 <= sleeping_list.val && sleeping_list.val <= now);
+      /* As we are about to make sleeping_list.val (aka time_for_next_wake) 
+         invalid, track the next soonest to wake thread out of those we 
+         do not wake here. */
+      int64_t next_soonest_to_wake = -1;
+
+      /* Did we find a wakeable thread this iter? */
+      found_wakeable_thread = false;
+
+      /* Design choice: make sure no other threads are scheduled until we 
+         wake all of them. */
+      old_level = intr_disable ();
+      /* Wake threads in priority order. */
       for (pri_lvl = PRI_MAX-1; pri_lvl >= 0; pri_lvl--)
         {
-          struct list *cur = &sleeping_list.queue[pri_lvl];
+          /* Each list is sorted by wake_me_at time, smallest to largest. */
+          cur = &sleeping_list.queue[pri_lvl];
 
-          struct list_elem *e = list_begin (cur);
+          e = list_begin (cur);
           while (e != list_end (cur))
             {
-              struct thread *t = list_entry (e, struct thread, elem);
-              ASSERT (0 < t->wake_me_at);
-              /* See timer_sleep: threads in cur may have 
-                 status THREAD_RUNNING until thread_block() is called. 
-                 Until thread status is THREAD_BLOCKED, we cannot safely 
-                 move the thread to the ready list. */
-              if (t->status == THREAD_BLOCKED && t->wake_me_at <= now)
+              t = list_entry (e, struct thread, elem);
+              ASSERT (0 <= t->wake_me_at);
+              /* Is this thread ready to be woken? */
+              if (t->wake_me_at <= now)
                 {
-                  /* Wake up the thread. */
-                  t->status = THREAD_READY;
-                  t->wake_me_at = 0;
-                  e = list_remove (e);
+                  found_wakeable_thread = true;
+                /* See timer_sleep: threads in cur may have 
+                   status THREAD_RUNNING until thread_block() is called. 
+                   Until thread status is THREAD_BLOCKED, we cannot safely 
+                   move the thread to the ready list. */
+                  if (t->status == THREAD_BLOCKED)
+                    {
+                      /* Wake up the thread. */
+                      t->status = THREAD_READY;
+                      t->wake_me_at = 0;
+                      e = list_remove (e);
 
-                  /* Atomically add to ready_list.
-                     We disable interrupts here rather than outside the loop to avoid
-                     holding the lock for too long. We assume that there are many threads
-                     waiting and that most of them do not need to be woken. */
-                  old_level = intr_disable ();
-                  priority_queue_push_back (&ready_list, t);
-                  intr_set_level (old_level);
-                }
-              else
-                e = e->next;
-            }
-        }
+                      /* Atomically add to ready_list.
+                         We disable interrupts here rather than outside the loop to avoid
+                         keeping interrupts disabled for too long. We assume that there are many threads
+                         waiting and that most of them do not need to be woken. */
+                      priority_queue_push_back (&ready_list, t);
+                    } /* End of status == THREAD_BLOCKED. */
+                  else
+                    {
+                      e = e->next;
+                    }
+                } /* End of wake_me_at <= now */
+                else
+                  {
+                    /* This is the first element in the list that should not be woken. Check if it is the soonest to wake of the unwoken threads. */
+                    if(next_soonest_to_wake == -1 || t->wake_me_at < next_soonest_to_wake)
+                      next_soonest_to_wake = t->wake_me_at;
+                    break;
+                  }
+            } /* Loop over threads at THIS priority level. */
+        } /* Loop over priority levels. */
+
+        ASSERT (found_wakeable_thread == true);
+
+        /* Set when we will next need to be woken by timer_interrupt. */
+        sleeping_list.val = next_soonest_to_wake;
+
+        intr_set_level (old_level);
         lock_release (&sleeping_list_lock);
     }
 }
