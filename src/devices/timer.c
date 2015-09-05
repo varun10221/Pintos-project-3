@@ -89,25 +89,25 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  /* Possible interruption here. */
-  int64_t start = timer_ticks ();
-  /* Now we have current time and for how many ticks to sleep. */
-
   /* Nothing to do. */
   if (ticks <= 0)
     return;
 
   ASSERT (intr_get_level () == INTR_ON);
+  /* Get time as early as possible. */
+  int64_t curr_ticks = timer_ticks ();
+  /* Now we have current time and for how many ticks to sleep. */
 
   /* Determine wake-up time for thread. */
   struct thread *cur = thread_current ();
-  cur->wake_me_at = ticks + start;
+  int64_t wake_me_at = ticks + curr_ticks;
+  cur->wake_me_at = wake_me_at;
 
   /* Add this thread to sleeping_list.
      Note that its current state is THREAD_RUNNING,
      and will remain so until thread_block is called. */
   lock_sleeping_list_lock ();
-  push_sleeping_list (&cur->elem);
+  push_sleeping_list (cur);
   unlock_sleeping_list_lock ();
 
   /* Disable interrupts and then block. */
@@ -116,14 +116,13 @@ timer_sleep (int64_t ticks)
   thread_block();
   intr_set_level (old_level);
 
-  /* We are awake again, so sufficient time must have elapsed. */
+  /* We are awake again, make sure sufficient time elapsed. */
 
-  /* We could be interrupt before timer_ticks returns, yielding a larger 
-     end than true. It's the best we can do. */
-  int64_t end = timer_ticks ();
-  int64_t elapsed = end - start;
-  ASSERT ( ticks <= elapsed );
-
+  /* We could be interrupted before timer_ticks returns here, yielding a 
+     larger sleep time than actually experienced by the thread. 
+     But, this is the best we can do. */
+  curr_ticks = timer_ticks ();
+  ASSERT ( wake_me_at <= curr_ticks );
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be

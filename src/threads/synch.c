@@ -45,9 +45,10 @@ void
 sema_init (struct semaphore *sema, unsigned value) 
 {
   ASSERT (sema != NULL);
+  memset (sema, 0, sizeof *sema);
 
   sema->value = value;
-  list_init (&sema->waiters);
+  priority_queue_init (&sema->waiters);
 }
 
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
@@ -68,7 +69,7 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      priority_queue_push_back (&sema->waiters, thread_current ());
       thread_block ();
     }
   sema->value--;
@@ -113,10 +114,99 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  if (!priority_queue_empty (&sema->waiters)) 
+  {
+    thread_unblock (priority_queue_pop_front (&sema->waiters));
+  }
   sema->value++;
+  intr_set_level (old_level);
+}
+
+/* Same as sema_down, but updates the fields of resource
+   in the same atomic step that we down the semaphore. 
+   Only use if there is at most one owner of the semaphore (e.g. via Lock). */
+void
+sema_down_prio (struct semaphore *sema, struct resource *res) 
+{
+  enum intr_level old_level;
+
+  ASSERT (sema != NULL);
+  ASSERT (res != NULL);
+  ASSERT (!intr_context ());
+
+  old_level = intr_disable ();
+  struct thread *t = NULL;
+  while (sema->value == 0) 
+    {
+      t = thread_current ();
+      priority_queue_push_back (&sema->waiters, t);
+      t->pending_resource = res;
+      thread_donate_priority (res);
+      thread_block ();
+    }
+  sema->value--;
+  if(t == NULL)
+    t = thread_current ();
+  /* Resource notes owner. Thread notes ownership. */
+  res->holder = t;
+  list_push_back (&t->resource_list, &res->elem);
+  t->pending_resource = NULL;
+  /* "Return" any priority gains we were donated while we waited. */
+  thread_return_priority ();
+
+  intr_set_level (old_level);
+}
+
+/* Same as sema_try_down, but updates the fields of resource
+   in the same atomic step that we down the semaphore (if it can be down'd).
+   Only use if there is at most one owner of the semaphore (e.g. via Lock). */
+bool
+sema_try_down_prio (struct semaphore *sema, struct resource *res) 
+{
+  enum intr_level old_level;
+  bool success;
+
+  ASSERT (sema != NULL);
+
+  old_level = intr_disable ();
+  if (sema->value > 0) 
+    {
+      sema->value--;
+      /* Resource notes owner. Thread notes ownership. */
+      struct thread *t = thread_current ();
+      res->holder = t;
+      list_push_back (&t->resource_list, &res->elem);
+      success = true; 
+    }
+  else
+    success = false;
+  intr_set_level (old_level);
+
+  return success;
+}
+
+/* Same as sema_up, but updates the fields of resource
+   in the same atomic step that we up the semaphore.
+   Only use if there is at most one owner of the semaphore (e.g. via Lock). */
+void
+sema_up_prio (struct semaphore *sema, struct resource *res) 
+{
+  enum intr_level old_level;
+
+  ASSERT (sema != NULL);
+  ASSERT (res != NULL);
+
+  old_level = intr_disable ();
+  if (!priority_queue_empty (&sema->waiters)) 
+  {
+    thread_unblock (priority_queue_pop_front (&sema->waiters));
+  }
+  sema->value++;
+  /* Resource notes owner. Thread removes ownership. */
+  res->holder = NULL;
+  list_remove (&res->elem);
+  /* "Return" any priority gains we were donated. */
+  thread_return_priority ();
   intr_set_level (old_level);
 }
 
@@ -176,9 +266,11 @@ void
 lock_init (struct lock *lock)
 {
   ASSERT (lock != NULL);
+  memset (lock, 0, sizeof *lock);
 
   lock->holder = NULL;
   sema_init (&lock->semaphore, 1);
+  lock->waiters = &lock->semaphore.waiters;
 }
 
 /* Acquires LOCK, sleeping until it becomes available if
@@ -196,8 +288,7 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  sema_down_prio (&lock->semaphore, (struct resource *) lock);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -209,15 +300,10 @@ lock_acquire (struct lock *lock)
 bool
 lock_try_acquire (struct lock *lock)
 {
-  bool success;
-
   ASSERT (lock != NULL);
   ASSERT (!lock_held_by_current_thread (lock));
 
-  success = sema_try_down (&lock->semaphore);
-  if (success)
-    lock->holder = thread_current ();
-  return success;
+  return sema_try_down_prio (&lock->semaphore, (struct resource *) lock);
 }
 
 /* Releases LOCK, which must be owned by the current thread.
@@ -231,8 +317,7 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
-  lock->holder = NULL;
-  sema_up (&lock->semaphore);
+  sema_up_prio (&lock->semaphore, (struct resource *) lock);
 }
 
 /* Returns true if the current thread holds LOCK, false
@@ -260,6 +345,7 @@ void
 cond_init (struct condition *cond)
 {
   ASSERT (cond != NULL);
+  memset (cond, 0, sizeof *cond);
 
   list_init (&cond->waiters);
 }

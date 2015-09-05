@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "lib/kernel/fpra.h"
+#include "threads/resource.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -24,6 +25,9 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+
+#define MAX_DONATION_DEPTH 8 /* Don't donate priority more than 8 levels. */
+typedef int priority;
 
 /* A kernel thread or user process.
 
@@ -75,6 +79,13 @@ typedef int tid_t;
    the `magic' member of the running thread's `struct thread' is
    set to THREAD_MAGIC.  Stack overflow will normally change this
    value, triggering the assertion. */
+/* A thread is assigned a priority at creation time. 
+   When using the priority scheduler (this is the default scheduling policy), 
+   the thread's priority may be temporarily raised due to a donation
+   from a higher-priority thread waiting on a resource held by the 
+   thread. We track this using the 'priority' member (thread's base priority)
+   and the 'effective_priority' member (thread's current priority).
+   For scheduling decisions, always use the effective_priority value. */
 /* The `elem' member has a dual purpose.  It can be an element in
    the run queue (thread.c), or it can be an element in a
    semaphore wait list (synch.c).  It can be used these two ways
@@ -88,11 +99,22 @@ struct thread
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
+    priority base_priority;                  /* Base priority. */
+    priority effective_priority;        /* Effective priority (donated?). */
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+
+    /* Tracks resources owned by this thread, enabling this thread to correctly 
+       update its effective priority after yielding a resource (and any donated
+       priority resulting therefrom). 
+       This list should only be used for resources that can have at most one 
+       owner, e.g. synch.h::lock */
+    struct list resource_list; /* One-owner resources we hold. */
+    /* Tracks resource for which this thread is waiting, enabling
+       nested priority donation. */
+    struct resource *pending_resource; /* Resource we are waiting for. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -105,6 +127,25 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+/* A priority_queue is an abstract data type masking the implementation of 
+   a queue of threads used for priority scheduling. */ 
+#define PRI_QUEUE_NLISTS (1 + PRI_MAX - PRI_MIN)
+struct priority_queue
+  {
+    struct list queue[PRI_QUEUE_NLISTS];
+    size_t size; /* Total number of elements in all lists. */
+  };
+
+/* TODO Could return list_elem and accept pairs of list_elem and priority.
+   More completely, we would define an ADT in list.h for list_of_lists.
+   Seems cleaner, but is it just abstraction for abstraction's sake? */
+void priority_queue_init (struct priority_queue *);
+bool priority_queue_empty (struct priority_queue *);
+size_t priority_queue_size (struct priority_queue *);
+struct thread * priority_queue_pop_front (struct priority_queue *);
+void priority_queue_push_back (struct priority_queue *, struct thread *);
+struct thread * priority_queue_max (struct priority_queue *);
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -135,7 +176,11 @@ typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
-void thread_set_priority (int);
+void thread_set_priority (priority);
+bool thread_offer_priority (struct thread *recipient, struct thread *donor);
+
+void thread_donate_priority (struct resource *);
+void thread_return_priority (void);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
@@ -147,7 +192,7 @@ fp thread_calc_load_avg (void);
 void lock_sleeping_list_lock (void);
 void unlock_sleeping_list_lock (void);
 bool is_sleeping_list_empty (void);
-void push_sleeping_list (struct list_elem *);
+void push_sleeping_list (struct thread*);
 void up_timer_interrupt_occurred (void);
 
 #endif /* threads/thread.h */
