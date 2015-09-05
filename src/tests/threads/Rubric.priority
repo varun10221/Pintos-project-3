@@ -1,4 +1,5 @@
 Functionality of priority scheduler:
+1 priority-queue-UT
 3	priority-change
 3	priority-preempt
 
