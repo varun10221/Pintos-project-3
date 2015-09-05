@@ -126,16 +126,22 @@ priority_queue_pop_front(struct priority_queue *pq)
   ASSERT (pq != NULL);
 
   int i;
+  struct thread *ret = NULL;
   for (i = PRI_QUEUE_NLISTS-1; i >= 0; i--)
   {
     struct list *l = &pq->queue[i];
     if (!list_empty (l))
     {
       pq->size--;  
-      return list_entry (list_pop_front (l), struct thread, elem);
+      ret = list_entry (list_pop_front (l), struct thread, elem);
+      break;
     }
   }
-  return NULL;
+  if(ret != NULL)
+  {
+    ASSERT (is_thread (ret));
+  }
+  return ret;
 }
 
 /* Add this thread to the priority queue based on its effective priority. */
@@ -144,6 +150,7 @@ priority_queue_push_back(struct priority_queue *pq, struct thread *t)
 {
   ASSERT (pq != NULL);
   ASSERT (t != NULL);
+  ASSERT (is_thread (t));
 
   priority p = t->effective_priority;
   ASSERT (PRI_MIN <= p && p <= PRI_MAX);
