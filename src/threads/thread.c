@@ -31,7 +31,11 @@ static struct priority_queue ready_list;
      Interpretation of sleeping_list.val: 
        -1 means there are no sleeping threads.
         Else, val is the minimum wake_me_at value over all the lists
-          (i.e. the time at which the next thread should be woken). */
+          (i.e. the time at which the next thread should be woken). 
+          
+  This list is shared by devices/timer.c and the waker thread.
+  It should only be added to using push_sleeping_list, which pushes in
+  a wake_me_at-aware fashion. */
 static struct priority_queue sleeping_list;
 /* Lock to control access to sleeping_list. */
 static struct lock sleeping_list_lock;
