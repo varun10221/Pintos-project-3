@@ -202,6 +202,5 @@ void up_waker_should_run (void);
 bool sleeping_list_less(const struct list_elem *a,
                         const struct list_elem *b,
                         void *aux UNUSED);
-bool is_waker_signaled (void);
 
 #endif /* threads/thread.h */

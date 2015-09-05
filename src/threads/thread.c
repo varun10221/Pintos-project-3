@@ -695,21 +695,14 @@ sleeping_list_less(const struct list_elem *a,
   return (a_thr->wake_me_at <= b_thr->wake_me_at);
 }
 
-/* API for timer.c.
-   Returns true if the waker thread has been signaled already, 
-   about the presence of wake-able sleeping threads, and false else. */
-bool
-is_waker_signaled (void)
-{
-  return (1 <= waker_should_run.value);
-}
-
 /* API to allow timer.c to access the waker_should_run sema to 
-   signal the waker thread. */
+   signal the waker thread. Only Up's the semaphore if it is
+   currently 0. */
 void
 up_waker_should_run (void)
 {
-  sema_up (&waker_should_run);
+  if(waker_should_run.value == 0)
+    sema_up (&waker_should_run);
 }
 
 

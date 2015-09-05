@@ -202,10 +202,8 @@ timer_interrupt (struct intr_frame *args UNUSED)
   ticks++;
 
   /* To reduce unneeded runs by waker, we only
-     Up if the sleeper list has someone ready to wake.
-     Due to race condition this may result in multiple up'ings,
-     but overall should reduce unnecessary Up'ing. */
-  if (is_sleeping_list_ready (ticks) && !is_waker_signaled ())
+     Up if the sleeper list has someone ready to wake. */
+  if (is_sleeping_list_ready (ticks))
     up_waker_should_run ();
 
   thread_tick ();
