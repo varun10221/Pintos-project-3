@@ -9,16 +9,19 @@
 >> Fill in the names and email addresses of your group members.
 
 Jamie Davis <davisjam@vt.edu>
-Mai Dahshan <mdahshan@vt.edu>
 
 ---- PRELIMINARIES ----
 
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
+No preliminary comments.
+
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
+
+No other sources were consulted.
 
            ALARM CLOCK
            ===========
@@ -111,14 +114,9 @@ Jamie's proposed design
 
   Variation 3: Just stick sleeping threads in the ready_list, mark them as SLEEPING, and don't schedule them until enough time has passed. This has minimal complexity but makes the scheduling activity pricey! I think the list traversal could become unpleasantly expensive.
 
-  - Note from Mai: The current implementation could wake a thread sleeping for 10 ticks BEFORE(?) a thread sleeping for 12 ticks (well not quite because it's FIFO but they could be woken at the same time. Strange.)
-
   Files to modify:
     - thread.h: thread_status
     - thread.h: struct thread
-
-Mai's proposed design
-  TODO
 
        PRIORITY SCHEDULING
        ===================
@@ -235,13 +233,16 @@ You must implement priority donation for locks. You need not implement priority 
     supporting it in the context of synchronization primitives gives us priority donation in a wide variety of cases.
 
   Concepts:
-    > Threads maintain a list of the lock resources they hold.
-    > Threads track both a priority and an effective priority (same idea as uid/effective uid)
-    > Lock resources know their holder.
-    > When a thread blocks on a lock resource, it determines the current holder of the resource and promotes it if the blocking thread has a higher priority.
-    > When a thread releases a lock resource, it has to correct its priority.
+DONE    > Threads maintain a list of the (lock) resources they hold
+DONE    > Threads track both a priority and an effective priority (same idea as uid/effective uid)
+DONE    > Lock resources know their holder.
+DONE    > When a thread blocks on a lock resource, it determines the current holder of the resource and promotes it if the blocking thread has a higher priority.
+DONE    > When a thread releases a lock resource, it has to correct its priority.
 
   Design:
+
+  Alternative design for consideration:
+    Track a global list of locks and identify the holders that way.
 
   Struct changes:
     Add to the TCB a list of currently-held resources.
