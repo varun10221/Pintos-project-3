@@ -144,6 +144,8 @@ priority_queue_pop_front(struct priority_queue *pq)
     {
       pq->size--;  
       ret = list_entry (list_pop_front (l), struct thread, elem);
+      /* Threads must be in the list matching their effective priority. */
+      ASSERT (ret->effective_priority == i);
       break;
     }
   }
@@ -314,9 +316,8 @@ thread_print_stats (void)
    scheduled.  Use a semaphore or some other form of
    synchronization if you need to ensure ordering.
 
-   The code provided sets the new thread's `priority' member to
-   PRIORITY, but no actual priority scheduling is implemented.
-   Priority scheduling is the goal of Problem 1-3. */
+   The new thread may be scheduled immediately if it has a higher
+   priority than this thread. */
 tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux) 
@@ -326,6 +327,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
+  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -353,8 +355,18 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  /* Add to run queue. */
+  /* Add to run queue.
+     If new thread has a higher priority than we do, yield.
+
+     We do this with interrupts disabled to prevent yielding for no reason
+     in the event of a timer interrupt that causes the newly-unblocked thread
+     to run to completion before we go again.
+     */
+  old_level = intr_disable ();
   thread_unblock (t);
+  if (thread_current ()->effective_priority < priority)
+    thread_yield ();
+  intr_set_level (old_level);
 
   return tid;
 }
@@ -388,6 +400,7 @@ thread_unblock (struct thread *t)
 {
   enum intr_level old_level;
 
+  ASSERT (t != NULL);
   ASSERT (is_thread (t));
 
   old_level = intr_disable ();
@@ -486,7 +499,11 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-/* Returns the current thread's priority. */
+/* ***************
+   Functions for the priority scheduler. 
+   *************** */
+
+/* Returns the current thread's (effective) priority. */
 int
 thread_get_priority (void) 
 {
@@ -501,26 +518,46 @@ thread_set_priority (priority new_priority)
   enum intr_level old_level;
 
   struct thread *t = thread_current ();
+  priority orig_priority = t->effective_priority;
+
   /* Atomic operation so that no thread ever sees me with an inconsistent priority/effective priority. */
   old_level = intr_disable ();
   t->base_priority = new_priority;
-  /* Update my effective priority based on locks I hold. */
+  t->effective_priority = new_priority;
+
+  /* Update my effective priority based on resources I hold. */
   thread_return_priority ();
+
+  /* If I just lowered my priority, yield. */
+  if(orig_priority != t->effective_priority)
+    thread_yield ();
   intr_set_level (old_level);
 }
 
-/* Offers current thread's priority to the specified thread.
+/* Offers donor thread's priority to the recipient thread.
    Returns true if the priority is accepted, false if not
    needed. This function only modifies recipient's effective
-   priority, and does not perform nested priority donation. */
-bool thread_offer_priority (struct thread *recipient, struct thread *donor)
+   priority, and does not perform nested priority donation. 
+
+   If recipient accepts the priority, updates the location of recipient
+   in its priority queue.
+  
+   This function must be called with interrupts turned off.
+   */
+bool
+thread_offer_priority (struct thread *recipient, struct thread *donor, struct priority_queue *pq)
 {
   ASSERT (recipient != NULL);
   ASSERT (donor != NULL);
+  ASSERT (pq != NULL);
+  ASSERT (intr_get_level () == INTR_OFF);
 
   if(recipient->effective_priority < donor->effective_priority)
   {
     recipient->effective_priority = donor->effective_priority;
+    /* Relocate recipient in its priority queue. */
+    list_remove(&recipient->elem);
+    priority_queue_push_back(pq, recipient);
     return true;
   }
   return false;
@@ -538,16 +575,28 @@ thread_donate_priority (struct resource *res)
   ASSERT (res != NULL);
 
   old_level = intr_disable ();
+
+  /* Verify that this thread is waiting on res. */
   struct thread *t = thread_current ();
   ASSERT ( t->pending_resource == res );
+
+  /* Who holds res? */
   struct thread *holder = res->holder;
+  ASSERT (holder != NULL);
+
+  /* Where is the holder thread being scheduled? */
+  struct priority_queue *holder_priority_queue = NULL;
+  if (holder->pending_resource == NULL)
+    holder_priority_queue = &ready_list;
+  else
+    holder_priority_queue = holder->pending_resource->waiters;
 
   /* Nested donation required?
      In the event of a deadlock, we don't want to donate forever, so
      donate up to MAX_DONATION_DEPTH times. */
   for(donation_depth = 0; donation_depth < MAX_DONATION_DEPTH; donation_depth++)
   {
-    if( thread_offer_priority (holder, t) )
+    if( thread_offer_priority (holder, t, holder_priority_queue) )
     {
       /* Holder accepted our priority. See if we need to pass it on. */
       if( holder->pending_resource != NULL )
@@ -568,33 +617,50 @@ thread_donate_priority (struct resource *res)
    may need to "return" the increase in effective priority 
    it gained as a result of holding the resource. 
    Thread sets its effective priority to be MAX( base priority,
-    effective priority of each thread waiting on the resources it holds ). */
+    effective priority of each thread waiting on the resources it holds ). 
+    */
 void
 thread_return_priority (void)
 {
   enum intr_level old_level;
 
+  /* Disable interrupts so that we aren't surprised by other threads
+     changing their priorities. */
   old_level = intr_disable ();
   struct thread *t = thread_current ();
+
   /* Restore to original priority level. */
   t->effective_priority = t->base_priority;
+
+  /* Track priority level we should use. */
+  priority max_available_priority = t->effective_priority;
+
+  /* For each resource we hold, determine the maximum priority waiter. */
   struct list_elem *e = NULL;
-  /* For each resource we hold, receive donation from the waiter with
-     the maximum priority. */
   for (e = list_begin (&t->resource_list); e != list_end (&t->resource_list);
        e = list_next (e))
     {
+      /* If we are at the maximum level possible, no need to look further. */
+      if (max_available_priority == PRI_MAX)
+        break;
+
       struct resource *res = list_entry (e, struct resource, elem);
       struct thread *max = priority_queue_max (res->waiters);
-      if(max != NULL)
-        thread_offer_priority (t, max);
-      /* If we are at the maximum level possible, no more donation is possible. */
-      if (t->effective_priority == PRI_MAX)
-        break;
-  }
+      if(max != NULL && max_available_priority < max->effective_priority )
+        max_available_priority = max->effective_priority;
+    }
+
+  /* If we found a higher priority waiter, raise our priority. */
+  if (t->effective_priority < max_available_priority)
+    t->effective_priority = max_available_priority;
+
   intr_set_level (old_level);
   return;
 }
+
+/* ***************
+   Functions for the BSD scheduler. 
+   *************** */
 
 /* Returns the current thread's nice value. */
 int

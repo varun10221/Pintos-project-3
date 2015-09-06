@@ -181,7 +181,7 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (priority);
-bool thread_offer_priority (struct thread *recipient, struct thread *donor);
+bool thread_offer_priority (struct thread *recipient, struct thread *donor, struct priority_queue *);
 
 void thread_donate_priority (struct resource *);
 void thread_return_priority (void);
