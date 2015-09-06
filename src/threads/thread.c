@@ -257,6 +257,9 @@ thread_start (void)
   struct semaphore waker_started;
   sema_init (&waker_started, 0);
   new_tid = thread_create ("waker", PRI_MAX, waker, &waker_started);
+  /* This way I almost pass alarm-simultaneous
+  new_tid = thread_create ("waker", PRI_DEFAULT, waker, &waker_started);
+  */
   ASSERT (new_tid != TID_ERROR);
 
   /* Start preemptive thread scheduling. */
