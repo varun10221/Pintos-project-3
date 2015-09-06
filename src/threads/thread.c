@@ -784,16 +784,18 @@ waker (void *waker_started_ UNUSED)
          with thread_sleep(). */
       lock_acquire (&sleeping_list_lock);
 
-      /* If there are no threads sleeping at all, there is nothing to do.
+      now = timer_ticks ();
+
+      /* If there are no threads sleeping at all, or if no sleepers
+         are ready to wake, then there is nothing to do.
          This can happen if timer_interrupt Up's the semaphore more than
          once before waker gets a chance to run. */
-      if (sleeping_list.val == -1)
+      if (sleeping_list.val == -1 || now < sleeping_list.val)
       {
         lock_release (&sleeping_list_lock);
         continue;
       }
 
-      now = timer_ticks ();
       /* We should only have been woken and gotten here if there is at least 
          one thread to wake, or if there are no threads sleeping at all. */
       ASSERT (0 <= sleeping_list.val && sleeping_list.val <= now);
