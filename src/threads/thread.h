@@ -193,12 +193,8 @@ int thread_get_load_avg (void);
 fp thread_calc_load_avg (void);
 
 /* Functions to expose the variables used to support alarm clock functionality to devices/timer.c. */
-void lock_sleeping_list_lock (void);
-void unlock_sleeping_list_lock (void);
-bool is_sleeping_list_empty (void);
-bool is_sleeping_list_ready (int64_t now);
+void wake_sleeping_threads (int64_t);
 void push_sleeping_list (struct thread*);
-void up_waker_should_run (void);
 bool sleeping_list_less(const struct list_elem *a,
                         const struct list_elem *b,
                         void *aux UNUSED);

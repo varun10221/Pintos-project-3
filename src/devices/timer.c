@@ -84,8 +84,7 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
-/* Sleeps for approximately TICKS timer ticks.  Interrupts must
-   be turned on. */
+/* Sleeps for approximately TICKS timer ticks. */
 void
 timer_sleep (int64_t ticks) 
 {
@@ -103,15 +102,13 @@ timer_sleep (int64_t ticks)
   int64_t wake_me_at = ticks + curr_ticks;
   cur->wake_me_at = wake_me_at;
 
-  /* Add this thread to sleeping_list.
+  /* Disable interrupts, then atomically
+     add this thread to sleeping_list and block. 
+     
      Note that its current state is THREAD_RUNNING,
-     and will remain so until thread_block is called. */
-  lock_sleeping_list_lock ();
-  push_sleeping_list (cur);
-  unlock_sleeping_list_lock ();
-
-  /* Disable interrupts and then block. */
+     and will remain so until thread_block executes. */
   enum intr_level old_level = intr_disable ();
+  push_sleeping_list (cur);
   /* thread_block will mark thread as THREAD_BLOCKED. */
   thread_block();
   intr_set_level (old_level);
@@ -200,12 +197,8 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-
-  /* To reduce unneeded runs by waker, we only
-     Up if the sleeper list has someone ready to wake. */
-  if (is_sleeping_list_ready (ticks))
-    up_waker_should_run ();
-
+  /* Alarm clock: wake any sleeping threads. */
+  wake_sleeping_threads (ticks);
   thread_tick ();
 }
 
