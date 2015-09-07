@@ -144,6 +144,7 @@ struct priority_queue
    More completely, we would define an ADT in list.h for list_of_lists.
    Seems cleaner, but is it just abstraction for abstraction's sake? */
 void priority_queue_init (struct priority_queue *);
+void priority_queue_verify (struct priority_queue *);
 bool priority_queue_empty (struct priority_queue *);
 size_t priority_queue_size (struct priority_queue *);
 struct thread * priority_queue_pop_front (struct priority_queue *);
@@ -184,7 +185,7 @@ void thread_set_priority (priority);
 bool thread_offer_priority (struct thread *recipient, struct thread *donor, struct priority_queue *);
 
 void thread_donate_priority (struct resource *);
-void thread_return_priority (void);
+bool thread_return_priority (void);
 
 int thread_get_nice (void);
 void thread_set_nice (int);

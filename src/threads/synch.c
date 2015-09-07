@@ -164,7 +164,7 @@ bool
 sema_try_down_prio (struct semaphore *sema, struct resource *res) 
 {
   enum intr_level old_level;
-  bool success;
+  bool success = false;
 
   ASSERT (sema != NULL);
 
@@ -202,12 +202,16 @@ sema_up_prio (struct semaphore *sema, struct resource *res)
     thread_unblock (priority_queue_pop_front (&sema->waiters));
   }
   sema->value++;
-  /* Resource notes owner. Thread removes ownership. */
+  /* Resource updates owner. 
+     Thread removes it from its list of owned resources. */
   res->holder = NULL;
   list_remove (&res->elem);
   /* "Return" any priority gains we were donated. */
-  thread_return_priority ();
+  bool lowered_priority = thread_return_priority ();
   intr_set_level (old_level);
+
+  if (lowered_priority)
+    thread_yield ();
 }
 
 static void sema_test_helper (void *sema_);
