@@ -69,7 +69,7 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      priority_queue_push_back (&sema->waiters, thread_current ());
+      priority_queue_push_back (&sema->waiters, &thread_current ()->elem);
       thread_block ();
     }
   sema->value--;
@@ -114,11 +114,20 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
+
+  struct thread *woken = NULL;
   if (!priority_queue_empty (&sema->waiters)) 
   {
-    thread_unblock (priority_queue_pop_front (&sema->waiters));
+    woken = (priority_queue_entry (priority_queue_pop_front (&sema->waiters), 
+                                          struct thread, elem ));
+    thread_unblock(woken);
   }
   sema->value++;
+
+  /* Yield if we just woke someone with a higher priority. */
+  if (HAS_LOWER_PRIORITY (thread_current(), woken))
+    thread_yield ();
+
   intr_set_level (old_level);
 }
 
@@ -136,22 +145,23 @@ sema_down_prio (struct semaphore *sema, struct resource *res)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  struct thread *t = NULL;
+  /* TODO I think we can set cur once out here... */
+  struct thread *cur = NULL;
   while (sema->value == 0) 
     {
-      t = thread_current ();
-      priority_queue_push_back (&sema->waiters, t);
-      t->pending_resource = res;
+      cur = thread_current ();
+      priority_queue_push_back (&sema->waiters, &cur->elem);
+      cur->pending_resource = res;
       thread_donate_priority (res);
       thread_block ();
     }
   sema->value--;
-  if(t == NULL)
-    t = thread_current ();
+  if(cur == NULL)
+    cur = thread_current ();
   /* Resource notes owner. Thread notes ownership. */
-  res->holder = t;
-  list_push_back (&t->resource_list, &res->elem);
-  t->pending_resource = NULL;
+  res->holder = cur;
+  list_push_back (&cur->resource_list, &res->l_elem);
+  cur->pending_resource = NULL;
   /* "Return" any priority gains we were donated while we waited. */
   thread_return_priority ();
 
@@ -169,15 +179,17 @@ sema_try_down_prio (struct semaphore *sema, struct resource *res)
   bool success = false;
 
   ASSERT (sema != NULL);
+  ASSERT (res != NULL);
 
   old_level = intr_disable ();
   if (sema->value > 0) 
     {
       sema->value--;
       /* Resource notes owner. Thread notes ownership. */
-      struct thread *t = thread_current ();
-      res->holder = t;
-      list_push_back (&t->resource_list, &res->elem);
+      struct thread *cur = thread_current ();
+      res->holder = cur;
+      cur->pending_resource = NULL;
+      list_push_back (&cur->resource_list, &res->l_elem);
       success = true; 
     }
   else
@@ -200,21 +212,25 @@ sema_up_prio (struct semaphore *sema, struct resource *res)
   ASSERT (res != NULL);
 
   old_level = intr_disable ();
+
   if (!priority_queue_empty (&sema->waiters)) 
   {
-    thread_unblock (priority_queue_pop_front (&sema->waiters));
+    thread_unblock (priority_queue_entry (priority_queue_pop_front (&sema->waiters), 
+                                          struct thread, elem ));
   }
   sema->value++;
   /* Resource updates owner. 
      Thread removes it from its list of owned resources. */
   res->holder = NULL;
-  list_remove (&res->elem);
+  list_remove (&res->l_elem);
   /* "Return" any priority gains we were donated. */
   bool lowered_priority = thread_return_priority ();
-  intr_set_level (old_level);
 
+  /* Yield if we just reduced our priority: immediate preemption by a higher priority thread */
   if (lowered_priority)
     thread_yield ();
+
+  intr_set_level (old_level);
 }
 
 static void sema_test_helper (void *sema_);

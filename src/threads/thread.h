@@ -3,9 +3,11 @@
 
 #include <debug.h>
 #include <list.h>
+#include <priority_queue.h>
 #include <stdint.h>
 #include "lib/kernel/fpra.h"
 #include "threads/resource.h"
+#include "threads/thread_priorities.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -21,13 +23,7 @@ enum thread_status
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
-/* Thread priorities. */
-#define PRI_MIN 0                       /* Lowest priority. */
-#define PRI_DEFAULT 31                  /* Default priority. */
-#define PRI_MAX 63                      /* Highest priority. */
-
-#define MAX_DONATION_DEPTH 8 /* Don't donate priority more than 8 levels. */
-typedef int priority;
+#define MAX_DONATION_DEPTH 16 /* Don't donate priority more than 16 levels. */
 
 /* A kernel thread or user process.
 
@@ -104,7 +100,7 @@ struct thread
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+    struct priority_queue_elem elem;    /* Priority queue element. */
 
     /* Tracks resources owned by this thread, enabling this thread to correctly 
        update its effective priority after yielding a resource (and any donated
@@ -127,32 +123,6 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
-
-/* A priority_queue is an abstract data type masking the implementation of 
-   a queue of threads used for priority scheduling. */ 
-#define PRI_QUEUE_NLISTS (1 + PRI_MAX - PRI_MIN)
-struct priority_queue
-  {
-    struct list queue[PRI_QUEUE_NLISTS];
-    size_t size; /* Total number of elements in all lists. */
-    /* Useful for the sleeping_list. Could be handy in other places.
-       In the sleeping list we track the minimum wake_me_at value. */  
-    int64_t val; 
-  };
-
-/* TODO Rewrite in the style of list: Work with list_elem's and only track list_elem and priority.
-   This is necessary to allow priority wakeup with cond's without writing horribly hack-y code. 
-
-   TODO Write a priority_queue_remove function to
-    eliminate the pq->size-- bug. */
-void priority_queue_init (struct priority_queue *);
-void priority_queue_verify (struct priority_queue *);
-bool priority_queue_empty (struct priority_queue *);
-size_t priority_queue_size (struct priority_queue *);
-struct thread * priority_queue_pop_front (struct priority_queue *);
-void priority_queue_push_back (struct priority_queue *, struct thread *);
-void priority_queue_insert_ordered (struct priority_queue *, struct thread *, list_less_func *, void *aux);
-struct thread * priority_queue_max (struct priority_queue *);
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -201,5 +171,8 @@ void push_sleeping_list (struct thread*);
 bool sleeping_list_less(const struct list_elem *a,
                         const struct list_elem *b,
                         void *aux UNUSED);
+bool sleeping_list_eq (const struct list_elem *a,
+                       const struct list_elem *b,
+                       void *aux UNUSED);
 
 #endif /* threads/thread.h */

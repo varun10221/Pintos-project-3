@@ -33,11 +33,14 @@ struct lock
   {
     /* Begin with the elements of a resource, allowing us to use 
        a Lock as a more abstract resource. */
-    struct thread *holder;      /* Thread holding lock. */
-    struct list_elem elem;      /* List element for priority donation. */
-    struct priority_queue *waiters;       /* List of waiting threads. */
+    struct thread *holder;           /* Thread holding lock. */
+    /* TODO union? */
+    struct priority_queue_elem pq_elem;
+    struct list_elem l_elem;
+    struct priority_queue *waiters;  /* List of waiting threads. */
 
-    struct semaphore semaphore; /* Binary semaphore controlling access. */
+    /* Elements for Lock implementation. */
+    struct semaphore semaphore;      /* Binary semaphore controlling access. */
   };
 
 void lock_init (struct lock *);

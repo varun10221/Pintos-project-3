@@ -166,6 +166,13 @@ typedef bool list_less_func (const struct list_elem *a,
                              const struct list_elem *b,
                              void *aux);
 
+/* Compares the value of two list elements A and B, given
+   auxiliary data AUX.  Returns true if A == B, or
+   false if A != B. */
+typedef bool list_eq_func (const struct list_elem *a,
+                           const struct list_elem *b,
+                           void *aux);
+
 /* Operations on lists with ordered elements. */
 void list_sort (struct list *,
                 list_less_func *, void *aux);
