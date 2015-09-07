@@ -142,7 +142,10 @@ struct priority_queue
 
 /* TODO Could return list_elem and accept pairs of list_elem and priority.
    More completely, we would define an ADT in list.h for list_of_lists.
-   Seems cleaner, but is it just abstraction for abstraction's sake? */
+   Seems cleaner, but is it just abstraction for abstraction's sake? 
+
+   TODO Write a priority_queue_remove function to
+    eliminate the pq->size-- bug. */
 void priority_queue_init (struct priority_queue *);
 void priority_queue_verify (struct priority_queue *);
 bool priority_queue_empty (struct priority_queue *);
