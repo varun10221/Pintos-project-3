@@ -124,7 +124,8 @@ sema_up (struct semaphore *sema)
 
 /* Same as sema_down, but updates the fields of resource
    in the same atomic step that we down the semaphore. 
-   Only use if there is at most one owner of the semaphore (e.g. via Lock). */
+   Only use if there is at most one owner of the semaphore (e.g. via Lock).
+   This allows priority donation. */
 void
 sema_down_prio (struct semaphore *sema, struct resource *res) 
 {
@@ -159,7 +160,8 @@ sema_down_prio (struct semaphore *sema, struct resource *res)
 
 /* Same as sema_try_down, but updates the fields of resource
    in the same atomic step that we down the semaphore (if it can be down'd).
-   Only use if there is at most one owner of the semaphore (e.g. via Lock). */
+   Only use if there is at most one owner of the semaphore (e.g. via Lock).
+   This allows priority donation. */
 bool
 sema_try_down_prio (struct semaphore *sema, struct resource *res) 
 {
@@ -187,7 +189,8 @@ sema_try_down_prio (struct semaphore *sema, struct resource *res)
 
 /* Same as sema_up, but updates the fields of resource
    in the same atomic step that we up the semaphore.
-   Only use if there is at most one owner of the semaphore (e.g. via Lock). */
+   Only use if there is at most one owner of the semaphore (e.g. via Lock). 
+   This allows priority donation. */
 void
 sema_up_prio (struct semaphore *sema, struct resource *res) 
 {
