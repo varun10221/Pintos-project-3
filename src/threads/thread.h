@@ -140,9 +140,8 @@ struct priority_queue
     int64_t val; 
   };
 
-/* TODO Could return list_elem and accept pairs of list_elem and priority.
-   More completely, we would define an ADT in list.h for list_of_lists.
-   Seems cleaner, but is it just abstraction for abstraction's sake? 
+/* TODO Rewrite in the style of list: Work with list_elem's and only track list_elem and priority.
+   This is necessary to allow priority wakeup with cond's without writing horribly hack-y code. 
 
    TODO Write a priority_queue_remove function to
     eliminate the pq->size-- bug. */
