@@ -99,8 +99,8 @@ struct thread
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
-    priority base_priority;                  /* Base priority. */
-    priority effective_priority;        /* Effective priority (donated?). */
+    priority base_priority;             /* Base priority. */
+    priority effective_priority;        /* Effective priority. */
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* The following variables are shared between thread.c and synch.c. */

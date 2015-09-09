@@ -350,7 +350,7 @@ struct semaphore_elem
   {
     struct list_elem elem;              /* List element. */
     struct semaphore semaphore;         /* This semaphore. */
-    int64_t *sort_val;                   /* Value on which to sort. */
+    int64_t *sort_val;                  /* Value on which to sort. */
   };
 
 /* Initializes condition variable COND.  A condition variable
