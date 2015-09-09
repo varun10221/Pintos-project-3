@@ -2,8 +2,8 @@
 #define THREADS_SYNCH_H
 
 #include <list.h>
+#include <priority_queue.h>
 #include <stdbool.h>
-#include "threads/resource.h"
 #include "threads/thread.h"
 
 struct priority_queue;
@@ -12,35 +12,24 @@ struct priority_queue;
 struct semaphore 
   {
     unsigned value;             /* Current value. */
-    struct priority_queue waiters;        /* List of waiting threads. */
+    /* list_elem from the priority_queue_elem of a waiting thread. */
+    struct list waiters;        /* List of waiting threads. */
   };
 
 void sema_init (struct semaphore *, unsigned value);
-/* Functions for vanilla semaphore usage. */
 void sema_down (struct semaphore *);
 bool sema_try_down (struct semaphore *);
 void sema_up (struct semaphore *);
-/* Functions for higher-level synchronization tools
-   with one-at-at-time semantics built on top of semaphores. */
-void sema_down_prio (struct semaphore *, struct resource *);
-bool sema_try_down_prio (struct semaphore *, struct resource *);
-void sema_up_prio (struct semaphore *, struct resource *);
+struct list_elem *sema_max_waiter (struct semaphore *);
 
 void sema_self_test (void);
 
 /* Lock. */
 struct lock 
   {
-    /* Begin with the elements of a resource, allowing us to use 
-       a Lock as a more abstract resource. */
-    struct thread *holder;           /* Thread holding lock. */
-    /* TODO union? */
-    struct priority_queue_elem pq_elem;
-    struct list_elem l_elem;
-    struct priority_queue *waiters;  /* List of waiting threads. */
-
-    /* Elements for Lock implementation. */
-    struct semaphore semaphore;      /* Binary semaphore controlling access. */
+    struct thread *holder;      /* Thread holding lock (prio donation). */
+    struct list_elem elem;      /* For tracking in a thread's list of locks. */
+    struct semaphore semaphore; /* Binary semaphore controlling access. */
   };
 
 void lock_init (struct lock *);
@@ -52,6 +41,7 @@ bool lock_held_by_current_thread (const struct lock *);
 /* Condition variable. */
 struct condition 
   {
+    /* List of semaphore_elem's on which the waiting threads are waiting. */
     struct list waiters; /* List of waiting threads. */
   };
 

@@ -103,12 +103,13 @@ timer_sleep (int64_t ticks)
   cur->wake_me_at = wake_me_at;
 
   /* Disable interrupts, then atomically
-     add this thread to sleeping_list and block. 
+     add this thread to sleeping_queue and block. 
      
      Note that its current state is THREAD_RUNNING,
      and will remain so until thread_block executes. */
   enum intr_level old_level = intr_disable ();
-  push_sleeping_list (cur);
+  cur->elem.sort_val = &cur->wake_me_at;
+  push_sleeping_queue (cur);
   /* thread_block will mark thread as THREAD_BLOCKED. */
   thread_block();
   intr_set_level (old_level);

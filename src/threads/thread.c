@@ -23,20 +23,20 @@
 
 /* Priority queue of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
-static struct priority_queue ready_list;
+static struct priority_queue ready_queue;
 
 /* Priority queue of sleeping processes, i.e. those waiting for enough time to pass 
    before they should be scheduled.
    Each list in the queue is sorted by wake_me_at, soonest to latest.
-     Interpretation of sleeping_list.val: 
+     Interpretation of sleeping_queue.val: 
        -1 means there are no sleeping threads.
         Else, val is the minimum wake_me_at value over all the lists
           (i.e. the time at which the next thread should be woken). 
           
   This list is shared by devices/timer.c and the waker_sleeping_threads.
-  It should only be added to using push_sleeping_list, which pushes in
+  It should only be added to using push_sleeping_queue, which pushes in
   a wake_me_at-aware fashion. */
-static struct priority_queue sleeping_list;
+static struct priority_queue sleeping_queue;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -93,7 +93,7 @@ static tid_t allocate_tid (void);
    was careful to put the bottom of the stack at a page boundary.
 
    Also initializes the run queue and the tid lock.
-   Also initializes the sleeping_list and the associated 
+   Also initializes the sleeping_queue and the associated 
      synchronization variables.
 
    After calling this function, be sure to initialize the page
@@ -109,8 +109,8 @@ thread_init (void)
 
   lock_init (&tid_lock);
 
-  priority_queue_init (&ready_list);
-  priority_queue_init (&sleeping_list);
+  priority_queue_init (&ready_queue);
+  priority_queue_init (&sleeping_queue);
 
   list_init (&all_list);
 
@@ -274,7 +274,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  priority_queue_push_back (&ready_list, &t->elem);
+  priority_queue_push_back (&ready_queue, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -284,6 +284,25 @@ const char *
 thread_name (void) 
 {
   return thread_current ()->name;
+}
+
+/* Returns the status of the specified thread. */
+enum thread_status
+thread_get_status (struct thread *thr)
+{
+  ASSERT (thr != NULL);
+  return thr->status;
+}
+
+/* Returns whether or not the specified thread is sleeping. */
+bool
+thread_is_sleeping (struct thread *thr)
+{
+  ASSERT (thr != NULL);
+  /* No thread can request to be woken at time 0.
+     No thread is started until after timer.c::ticks > 0, and timer_sleep
+     returns on negative sleep requests. */
+  return (0 < thr->wake_me_at);
 }
 
 /* Returns the running thread.
@@ -345,7 +364,7 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread) 
-    priority_queue_push_back (&ready_list, &cur->elem);
+    priority_queue_push_back (&ready_queue, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -387,116 +406,124 @@ thread_set_priority (priority new_priority)
   ASSERT (PRI_MIN <= new_priority && new_priority <= PRI_MAX);
 
   enum intr_level old_level;
+  priority orig_priority;
 
-  struct thread *t = thread_current ();
-  priority orig_priority = t->effective_priority;
+  struct thread *cur = thread_current ();
 
   /* Atomic operation so that no thread ever sees me with an inconsistent priority/effective priority. */
   old_level = intr_disable ();
-  t->base_priority = new_priority;
-  t->effective_priority = new_priority;
 
-  /* Update my effective priority based on resources I hold. */
+  orig_priority = cur->effective_priority; 
+  cur->base_priority = new_priority;
+  cur->effective_priority = new_priority;
+
+  /* Update my effective priority based on the locks I currently hold. */
   thread_return_priority ();
 
-  /* If I just lowered my priority, yield. */
-  if(orig_priority != t->effective_priority)
+  /* If I have lowered my priority, yield. */
+  if (cur->effective_priority < orig_priority)
     thread_yield ();
+
   intr_set_level (old_level);
 }
 
 /* Offers donor thread's priority to the recipient thread.
    Returns true if the priority is accepted, false if not
-   needed. This function only modifies recipient's effective
-   priority, and does not perform nested priority donation. 
+   needed. 
+   This function only modifies recipient's effective
+   priority, and does not modify the location of the recipient
+   in its waiter list or priority queue.
 
-   If recipient accepts the priority, updates the location of recipient
-   in its priority queue.
-  
-   This function must be called with interrupts turned off.
-   */
+   If recipient is in a priority queue, its location should be updated
+   after this function returns. synch.c does not care about the order 
+   of elements in its waiter lists.
+
+   This function is intended to be called from thread_donate_priority.
+   It must be called with interrupts turned off. */
 bool
-thread_offer_priority (struct thread *recipient, struct thread *donor, struct priority_queue *pq)
+thread_offer_priority (struct thread *recipient, struct thread *donor)
 {
   ASSERT (recipient != NULL);
   ASSERT (donor != NULL);
-  ASSERT (pq != NULL);
   ASSERT (intr_get_level () == INTR_OFF);
 
-  if (HAS_LOWER_PRIORITY (recipient, donor))
+  if (has_lower_priority (recipient, donor))
   {
     recipient->effective_priority = donor->effective_priority;
-    /* Relocate recipient in its priority queue. */
-    priority_queue_remove (pq, &recipient->elem);
-    priority_queue_push_back (pq, &recipient->elem);
-#ifdef DEBUG
-    /* TODO DEBUG CODE */
-    /* We don't know whether or not the pq is sorted. */
-    priority_queue_verify (pq, false, NULL, NULL);
-#endif
     return true;
   }
   return false;
 }
 
-/* Thread donates its priority to the holder of the specified resource, and 
-   to anyone that holder is waiting on. This function does up to 
-   MAX_DONATION_DEPTH levels of donation.
+/* Thread donates its priority to the specified thread,
+   and to anyone holding a lock that that thread is waiting on. 
+   
+   This function does up to MAX_DONATION_DEPTH levels of nested donation.
    
    TODO This function can detect trivial deadlocks if we want it to. That would be cool. */
 void
-thread_donate_priority (struct resource *res)
+thread_donate_priority (struct thread *recipient)
 {
   int donation_depth;
   enum intr_level old_level;
 
-  ASSERT (res != NULL);
+  ASSERT (recipient != NULL);
+  ASSERT (is_thread (recipient));
 
+  /* Atomically modify priority levels of all affected threads. */
   old_level = intr_disable ();
 
-  /* Verify that this thread is waiting on res. */
-  struct thread *t = thread_current ();
-  ASSERT ( t->pending_resource == res );
-
-  /* Who holds res? */
-  struct thread *holder = res->holder;
-  ASSERT (holder != NULL);
-
-  /* Where is the holder thread? */
-  struct priority_queue *holder_priority_queue = NULL;
-  if (holder->pending_resource == NULL)
-    holder_priority_queue = &ready_list;
-  else
-    holder_priority_queue = holder->pending_resource->waiters;
+  /* Who are we? */
+  struct thread *cur = thread_current ();
+  /* Who holds the lock we need? */
+  struct thread *holder = recipient;
 
   /* Nested donation required?
      In the event of a deadlock, we don't want to donate forever, so
      donate up to MAX_DONATION_DEPTH times. */
-  for(donation_depth = 0; donation_depth < MAX_DONATION_DEPTH; donation_depth++)
+  for (donation_depth = 0; donation_depth < MAX_DONATION_DEPTH; donation_depth++)
   {
-    if( thread_offer_priority (holder, t, holder_priority_queue) )
+    /* Figure out where the holder resides. One of several places:
+        is_holder_ready == true                ==> ready_list
+        is_holder_sleeping == true             ==> sleeping_list
+        is_holder_otherwise_engaged == true    ==> on the waiters list of a sema or a cond */
+    bool is_holder_ready = (thread_get_status (holder) == THREAD_READY);
+    bool is_holder_sleeping = thread_is_sleeping (holder);
+    bool is_holder_otherwise_engaged = ( ! (is_holder_ready || is_holder_sleeping) );
+    ASSERT (is_holder_ready ^ is_holder_sleeping ^ is_holder_otherwise_engaged);
+
+    if (thread_offer_priority (holder, cur))
     {
-      /* Holder accepted our priority. See if we need to pass it on. */
-      if( holder->pending_resource != NULL )
+      /* Holder accepted our priority donation.
+         If in ready or sleeping queue, we need to relocate it.
+
+         If otherwise_engaged, simply changing its effective priority
+         will make synch.c do the right thing: synch.c does not maintain
+         sorted waiters lists. */
+
+      /* Relocate holder in its current list or priority queue. */
+      if (is_holder_ready || is_holder_sleeping)
       {
-        holder = holder->pending_resource->holder;
-        /* Where is the holder thread? */
-        if (holder->pending_resource == NULL)
-          holder_priority_queue = &ready_list;
-        else
-          holder_priority_queue = holder->pending_resource->waiters;
+        struct priority_queue *pq = (is_holder_ready ? &ready_queue : &sleeping_queue);
+        priority_queue_remove (pq, &holder->elem);
+        priority_queue_push_back (pq, &holder->elem);
       }
+
+      /* See if we need to offer our priority further. */
+      if( holder->pending_lock != NULL )
+        holder = holder->pending_lock->holder;
       else
-        /* Holder is not waiting on anything, no nested donation. */
+        /* Holder is not waiting on anything, no more nested donation. */
         break;
     }
     else
       /* Holder rejects our offer (i.e. we are lower priority than holder), 
          nothing more to do. */
       break;
-  }
+
+  } /* Up to MAX_DONATION_DEPTH donations. */
+
   intr_set_level (old_level);
-  return;
 }
 
 /* Thread no longer holds a resource, and
@@ -505,60 +532,82 @@ thread_donate_priority (struct resource *res)
    Thread sets its effective priority to be MAX( base priority,
     effective priority of each thread waiting on the resources it holds). 
 
-   In English, "Return" is the inverse of "Donate", but unlike 
+   In English, "return" is the inverse of "donate", but unlike 
    thread_donate_priority, here we are not modifying any threads 
    but ourselves.
 
    Returns true if the caller lowers its priority.
-   
    If the caller lowers its priority, the caller should
    immediately yield to allow a potential higher-priority thread to run. */
 bool
 thread_return_priority (void)
 {
-  bool lowered_priority = false;
-  priority entry_priority = PRI_MAX;
+  bool did_lower_priority = false;
+  priority entry_priority, max_available_priority;
   enum intr_level old_level;
 
-  /* Disable interrupts so that we aren't surprised by other threads
-     changing their priorities. */
-  old_level = intr_disable ();
-  struct thread *t = thread_current ();
+  struct thread *cur = thread_current ();
 
+  /* Disable interrupts so that this operation is atomic. */
+  old_level = intr_disable ();
+
+  /* Where did we start? */
+  entry_priority = cur->effective_priority;
   /* Restore to original priority level. */
-  ASSERT (PRI_MIN <= t->base_priority && t->base_priority <= PRI_MAX);
-  entry_priority = t->effective_priority;
-  t->effective_priority = t->base_priority;
+  ASSERT (PRI_MIN <= cur->base_priority && cur->base_priority <= PRI_MAX);
+
+  cur->effective_priority = cur->base_priority;
 
   /* Track priority level we should use. */
-  priority max_available_priority = t->effective_priority;
+  max_available_priority = cur->effective_priority;
 
-  /* For each resource we hold, determine the maximum priority waiter. */
+  /* For each lock we hold, determine the maximum priority waiter. */
   struct list_elem *e = NULL;
-  for (e = list_begin (&t->resource_list); e != list_end (&t->resource_list);
+  for (e = list_begin (&cur->lock_list); e != list_end (&cur->lock_list);
        e = list_next (e))
     {
       /* If we are at the maximum level possible, no need to look further. */
       if (max_available_priority == PRI_MAX)
         break;
 
-      struct resource *res = list_entry (e, struct resource, l_elem);
-      struct priority_queue_elem *max = priority_queue_max (res->waiters);
-      if(max != NULL && max_available_priority < *max->p)
-        max_available_priority = *max->p;
+      struct lock *lock = list_entry (e, struct lock, elem);
+      struct list_elem *max_prio_waiter = sema_max_waiter (&lock->semaphore);
+      if (max_prio_waiter != NULL)
+      {
+        struct thread *waiter_thr = priority_queue_entry (list_entry (max_prio_waiter, struct priority_queue_elem, elem),
+                                                          struct thread, elem);
+        ASSERT (waiter_thr != NULL);
+        ASSERT (is_thread (waiter_thr));
+        if (max_available_priority < waiter_thr->effective_priority)
+          max_available_priority = waiter_thr->effective_priority;
+      }
     }
 
-  /* If we found a higher priority waiter, raise our priority. */
-  if (t->effective_priority < max_available_priority)
-    t->effective_priority = max_available_priority;
-  ASSERT (PRI_MIN <= t->effective_priority && t->effective_priority <= PRI_MAX);
+  ASSERT (PRI_MIN <= max_available_priority && max_available_priority <= PRI_MAX);
 
-  if (t->effective_priority < entry_priority)
-    lowered_priority = true;
+  /* Set our priority to the maximum priority we found. */
+  cur->effective_priority = max_available_priority;
+
+  if (cur->effective_priority < entry_priority)
+    did_lower_priority = true;
 
   intr_set_level (old_level);
-  return lowered_priority;
+  return did_lower_priority;
 }
+
+/* Returns true if a has lower effective priority than b, and false else. */
+bool
+has_lower_priority (struct thread *a, struct thread *b)
+{
+  ASSERT (a != NULL);
+  ASSERT (is_thread (a));
+  ASSERT (b != NULL);
+  ASSERT (is_thread (b));
+
+  return (a->effective_priority < b->effective_priority);
+}
+
+
 
 /* ***************
    Functions for the BSD scheduler. 
@@ -613,26 +662,27 @@ thread_calc_load_avg (void)
    Functions for the alarm clock. 
    *************** */
 
-/* API to allow timer.c::timer_sleep to add threads to the sleeping_list.
+/* API to allow timer.c::timer_sleep to add threads to the sleeping_queue.
    Threads are inserted into the list of the appropriate priority.
    Lists are kept sorted by wake_me_at. */
 void
-push_sleeping_list (struct thread *t)
+push_sleeping_queue (struct thread *t)
 {
   ASSERT (t != NULL);
-  priority_queue_insert_ordered (&sleeping_list, &t->elem, sleeping_list_less, NULL);
+  priority_queue_insert_ordered (&sleeping_queue, &t->elem, sleeping_queue_less, NULL);
   /* Check if we are now the soonest-to-wake. */
-  if(t->wake_me_at <= sleeping_list.val || sleeping_list.val == -1)
-    sleeping_list.val = t->wake_me_at;
+  if(t->wake_me_at <= sleeping_queue.val || sleeping_queue.val == -1)
+    sleeping_queue.val = t->wake_me_at;
 }
 
-/* Input: The list_elem of two priority queue elements, with
-   sort_val set appropriately.
-   Output: true if A < B, false if A >= B */
+/* Input: The list_elem of two priority queue elements
+   in the sleeping_queue, with sort_val set to the wake_me_at 
+   value of the threads.
+   Returns true if a < b (a should wake before b), false if a >= b. */
 bool
-sleeping_list_less (const struct list_elem *a,
-                         const struct list_elem *b,
-                         void *aux UNUSED)
+sleeping_queue_less (const struct list_elem *a,
+                     const struct list_elem *b,
+                     void *aux UNUSED)
 {
   ASSERT (a != NULL);
   ASSERT (b != NULL);
@@ -643,11 +693,13 @@ sleeping_list_less (const struct list_elem *a,
   return (*a_elem->sort_val < *b_elem->sort_val);
 }
 
-/* Input: The list_elem of two priority queue elements, with
-   sort_val set appropriately.
+/* Input: The list_elem of two priority queue elements
+   in the sleeping_queue, with sort_val set to the wake_me_at 
+   value of the threads.
+
    Output: true if A == B, false if A != B */
 bool
-sleeping_list_eq (const struct list_elem *a,
+sleeping_queue_eq (const struct list_elem *a,
                   const struct list_elem *b,
                   void *aux UNUSED)
 {
@@ -707,16 +759,17 @@ idle (void *idle_started_ UNUSED)
 void
 wake_sleeping_threads (int64_t now)
 {
+  ASSERT (intr_context() || intr_get_level () == INTR_OFF);
   ASSERT (0 <= now);
   /* If there are no threads sleeping at all, or if no sleepers
      are ready to wake, then there is nothing to do. */
-  if (sleeping_list.val == -1 || now < sleeping_list.val)
+  if (sleeping_queue.val == -1 || now < sleeping_queue.val)
     return;
 
   /* We should only have been woken and gotten here if there is at least 
      one thread to wake. */
-  ASSERT (0 <= sleeping_list.val && sleeping_list.val <= now);
-  /* As we are about to make sleeping_list.val (aka time_for_next_wake) 
+  ASSERT (0 <= sleeping_queue.val && sleeping_queue.val <= now);
+  /* As we are about to make sleeping_queue.val (aka time_for_next_wake) 
      invalid, track the next soonest to wake thread out of those we 
      do not wake here. */
   int64_t next_soonest_to_wake = -1;
@@ -732,7 +785,7 @@ wake_sleeping_threads (int64_t now)
   for (pri_lvl = PRI_MAX-1; pri_lvl >= 0; pri_lvl--)
     {
       /* Each list is sorted by wake_me_at time, smallest to largest. */
-      l = &sleeping_list.queue[pri_lvl];
+      l = &sleeping_queue.queue[pri_lvl];
 
       e = list_begin (l);
       while (e != list_end (l))
@@ -754,22 +807,20 @@ wake_sleeping_threads (int64_t now)
                   t->status = THREAD_READY;
                   t->wake_me_at = 0;
                   /* Remove and advance to next element. */
-                  e = priority_queue_remove (&sleeping_list, list_entry (e, struct priority_queue_elem, elem));
+                  e = priority_queue_remove (&sleeping_queue, list_entry (e, struct priority_queue_elem, elem));
 
-#ifdef DEBUG
-                  /* TODO DEBUG CODE */
-                  priority_queue_verify (&ready_list, false, NULL, NULL);
+#ifndef NDEBUG
+                  priority_queue_verify (&ready_queue, false, NULL, NULL);
 #endif
 
-                  /* Atomically add to ready_list.
+                  /* Atomically add to ready_queue.
                      We disable interrupts here rather than outside the loop to avoid
                      keeping interrupts disabled for too long. We assume that there are many threads
                      waiting and that most of them do not need to be woken. */
-                  priority_queue_push_back (&ready_list, &t->elem);
+                  priority_queue_push_back (&ready_queue, &t->elem);
 
-#ifdef DEBUG
-                  /* TODO DEBUG CODE */
-                  priority_queue_verify (&sleeping_list, true, sleeping_list_less, sleeping_list_eq);
+#ifndef NDEBUG
+                  priority_queue_verify (&sleeping_queue, true, sleeping_queue_less, sleeping_queue_eq);
 #endif
 
                 } /* End of status == THREAD_BLOCKED. */
@@ -791,7 +842,7 @@ wake_sleeping_threads (int64_t now)
     ASSERT (found_wakeable_thread == true);
 
     /* Set when we will next need to be woken by timer_interrupt. */
-    sleeping_list.val = next_soonest_to_wake;
+    sleeping_queue.val = next_soonest_to_wake;
 }
 
 /* Function used as the basis for a kernel thread. */
@@ -844,10 +895,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->base_priority = priority;
   t->effective_priority = priority;
   t->elem.p = &t->effective_priority;
-  list_init (&t->resource_list);
-  t->pending_resource = NULL;
+  list_init (&t->lock_list);
+  t->pending_lock = NULL;
   t->wake_me_at = 0;
-  t->elem.sort_val = &t->wake_me_at;
+  t->elem.sort_val = NULL;
   t->magic = THREAD_MAGIC;
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -877,30 +928,28 @@ next_thread_to_run (void)
 {
   struct thread *thr = NULL;
 
-#ifdef DEBUG
-  /* TODO DEBUG CODE */
-  priority_queue_verify (&ready_list, false, NULL, NULL);
+#ifndef NDEBUG
+  priority_queue_verify (&ready_queue, false, NULL, NULL);
 #endif
 
-  if (priority_queue_empty (&ready_list))
+  if (priority_queue_empty (&ready_queue))
     thr = idle_thread;
   else
-    thr = priority_queue_entry (priority_queue_pop_front (&ready_list), 
+    thr = priority_queue_entry (priority_queue_pop_front (&ready_queue), 
                            struct thread, elem);
   ASSERT (is_thread (thr));
 
-#ifdef DEBUG
-  /* TODO DEBUG CODE */
-  priority_queue_verify (&ready_list, false, NULL, NULL);
+#ifndef NDEBUG
+  priority_queue_verify (&ready_queue, false, NULL, NULL);
 #endif
 
   return thr;
 
   /* TODO restore this
-  if (priority_queue_empty (&ready_list))
+  if (priority_queue_empty (&ready_queue))
     return idle_thread;
   else
-    return priority_queue_pop_front (&ready_list);
+    return priority_queue_pop_front (&ready_queue);
     */
 }
 

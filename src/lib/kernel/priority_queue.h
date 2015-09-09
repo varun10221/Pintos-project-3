@@ -22,7 +22,8 @@
 
 #define PRI_QUEUE_NLISTS (1 + PRI_MAX - PRI_MIN)
 
-typedef int priority;
+/* Mask what a priority is. */
+typedef int64_t priority;
 
 struct priority_queue_elem
   {

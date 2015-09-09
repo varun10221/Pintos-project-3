@@ -82,6 +82,7 @@ struct list_elem *
 priority_queue_remove (struct priority_queue *pq, struct priority_queue_elem *elem)
 {
   ASSERT (pq != NULL);
+  ASSERT (elem != NULL);
 
   pq->size--;
   return list_remove (&elem->elem);

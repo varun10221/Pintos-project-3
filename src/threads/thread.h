@@ -6,8 +6,10 @@
 #include <priority_queue.h>
 #include <stdint.h>
 #include "lib/kernel/fpra.h"
-#include "threads/resource.h"
 #include "threads/thread_priorities.h"
+
+/* Forward declarations. */
+struct lock;
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -78,10 +80,12 @@ typedef int tid_t;
 /* A thread is assigned a priority at creation time. 
    When using the priority scheduler (this is the default scheduling policy), 
    the thread's priority may be temporarily raised due to a donation
-   from a higher-priority thread waiting on a resource held by the 
+   from a higher-priority thread waiting on a lock held by the 
    thread. We track this using the 'priority' member (thread's base priority)
    and the 'effective_priority' member (thread's current priority).
-   For scheduling decisions, always use the effective_priority value. */
+   For scheduling decisions, always use the effective_priority value. 
+   thread_set_priority modifies the base priority and potentially the effective
+   priority.  */
 /* The `elem' member has a dual purpose.  It can be an element in
    the run queue (thread.c), or it can be an element in a
    semaphore wait list (synch.c).  It can be used these two ways
@@ -99,18 +103,20 @@ struct thread
     priority effective_priority;        /* Effective priority (donated?). */
     struct list_elem allelem;           /* List element for all threads list. */
 
-    /* Shared between thread.c and synch.c. */
+    /* The following variables are shared between thread.c and synch.c. */
     struct priority_queue_elem elem;    /* Priority queue element. */
 
-    /* Tracks resources owned by this thread, enabling this thread to correctly 
-       update its effective priority after yielding a resource (and any donated
-       priority resulting therefrom). 
+    /* Tracks locks held by this thread.
+       Enables this thread to correctly update its effective priority after 
+       yielding a resource (and any donated priority resulting therefrom). 
+
        This list should only be used for resources that can have at most one 
        owner, e.g. synch.h::lock */
-    struct list resource_list; /* One-owner resources we hold. */
-    /* Tracks resource for which this thread is waiting, enabling
+    struct list lock_list; /* List of locks we hold. */
+
+    /* Tracks the lock for which this thread is waiting, enabling
        nested priority donation. */
-    struct resource *pending_resource; /* Resource we are waiting for. */
+    struct lock *pending_lock; /* Lock we are blocked on. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -141,9 +147,12 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
+/* Functions to query info about a thread. */
 struct thread *thread_current (void);
 tid_t thread_tid (void);
 const char *thread_name (void);
+enum thread_status thread_get_status (struct thread *);
+bool thread_is_sleeping (struct thread *);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
@@ -152,13 +161,23 @@ void thread_yield (void);
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
+/* Priority-themed functions. */
 int thread_get_priority (void);
 void thread_set_priority (priority);
-bool thread_offer_priority (struct thread *recipient, struct thread *donor, struct priority_queue *);
 
-void thread_donate_priority (struct resource *);
+bool thread_offer_priority (struct thread *recipient, struct thread *donor);
+void thread_donate_priority (struct thread *);
 bool thread_return_priority (void);
 
+/* Returns true if THREAD_A_P (pointer to a struct thread)
+    has a lower priority than THREAD_B_P (pointer to a struct thread). */ 
+bool has_lower_priority (struct thread *a, struct thread *b);
+
+bool waiter_list_less(const struct list_elem *a,
+                      const struct list_elem *b,
+                      void *aux UNUSED);
+
+/* Functions for mlfqs. */
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
@@ -167,11 +186,11 @@ fp thread_calc_load_avg (void);
 
 /* Functions to expose the variables used to support alarm clock functionality to devices/timer.c. */
 void wake_sleeping_threads (int64_t);
-void push_sleeping_list (struct thread*);
-bool sleeping_list_less(const struct list_elem *a,
+void push_sleeping_queue (struct thread*);
+bool sleeping_queue_less(const struct list_elem *a,
                         const struct list_elem *b,
                         void *aux UNUSED);
-bool sleeping_list_eq (const struct list_elem *a,
+bool sleeping_queue_eq (const struct list_elem *a,
                        const struct list_elem *b,
                        void *aux UNUSED);
 
