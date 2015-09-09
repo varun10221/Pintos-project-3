@@ -49,7 +49,7 @@ test_priority_queue_UT (void)
          This way thread 0 should be popped first, thread 1 second, and so on. */
       thr->base_priority = PRI_MAX - i; 
       thr->effective_priority = thr->base_priority;
-      list_init (&thr->resource_list);
+      list_init (&thr->lock_list);
       thr->elem.p = &thr->effective_priority;
 
       /* Set wake_me_at values in inverse insertion order within a queue. */
@@ -69,7 +69,7 @@ test_priority_queue_UT (void)
     thr = &threads[i];
 
 #ifdef DEBUG
-    printf("Inserting thread <%s>: priority %i wake_me_at %lli\n",
+    printf("Inserting thread <%s>: priority %lli wake_me_at %lli\n",
       thr->name, *thr->elem.p, *thr->elem.sort_val);
 #endif
     priority_queue_push_back(&pq, &thr->elem);
@@ -95,7 +95,7 @@ test_priority_queue_UT (void)
   {
     thr = priority_queue_entry (priority_queue_max (&pq), struct thread, elem);
 #ifdef DEBUG
-    printf("Removing thread <%s>: priority %i wake_me_at %lli\n",
+    printf("Removing thread <%s>: priority %lli wake_me_at %lli\n",
       thr->name, *thr->elem.p, *thr->elem.sort_val);
 #endif
     if(thr->tid != i)
@@ -128,15 +128,15 @@ test_priority_queue_UT (void)
     thr = &threads[i];
 
 #ifdef DEBUG
-    printf("Inserting thread <%s>: priority %i wake_me_at %lli\n",
+    printf("Inserting thread <%s>: priority %lli wake_me_at %lli\n",
       thr->name, *thr->elem.p, *thr->elem.sort_val);
 #endif
-    priority_queue_insert_ordered(&pq, &thr->elem, sleeping_list_less, NULL);
+    priority_queue_insert_ordered(&pq, &thr->elem, sleeping_queue_less, NULL);
     expected_size = i + 1;
     if(pq.size != expected_size)
       fail("Error, pq size is %i != %i\n", pq.size, expected_size);
 
-    priority_queue_verify (&pq, true, sleeping_list_less, sleeping_list_eq);
+    priority_queue_verify (&pq, true, sleeping_queue_less, sleeping_queue_eq);
   }
 
   if(N_THREADS != thr_ix)
@@ -159,7 +159,7 @@ test_priority_queue_UT (void)
 
       thr = priority_queue_entry (priority_queue_max (&pq), struct thread, elem);
 #ifdef DEBUG
-      printf("Removing thread <%s>: priority %i wake_me_at %lli\n",
+      printf("Removing thread <%s>: priority %lli wake_me_at %lli\n",
         thr->name, *thr->elem.p, *thr->elem.sort_val);
 #endif
       expected_tid = (THR_PER_PRI - j) + THR_PER_PRI*i - 1;
@@ -177,7 +177,7 @@ test_priority_queue_UT (void)
       if(s != expected_size)
         fail("Error, priority queue size reported as %i != %i\n", s, expected_size);
 
-      priority_queue_verify (&pq, true, sleeping_list_less, sleeping_list_eq);
+      priority_queue_verify (&pq, true, sleeping_queue_less, sleeping_queue_eq);
     }
   }
 
@@ -186,7 +186,7 @@ test_priority_queue_UT (void)
 
   /* List is empty, so both verification methods should work. */
   priority_queue_verify (&pq, false, NULL, NULL);
-  priority_queue_verify (&pq, true, sleeping_list_less, sleeping_list_eq);
+  priority_queue_verify (&pq, true, sleeping_queue_less, sleeping_queue_eq);
 
   pass ();
 }
