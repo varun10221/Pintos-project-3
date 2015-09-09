@@ -37,7 +37,7 @@ struct priority_queue
   {
     struct list queue[PRI_QUEUE_NLISTS];
     size_t size; /* Total number of elements in all lists. */
-    /* Useful for the sleeping_list. Could be handy in other places.
+    /* Useful for the sleeping_queue. Could be handy in other places.
        In the sleeping list we track the minimum wake_me_at value. */  
     int64_t val; 
   };
