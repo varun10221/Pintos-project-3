@@ -134,10 +134,8 @@ sema_up (struct semaphore *sema)
   if(max_prio != NULL)
   {
     list_remove (max_prio);
-    /* TODO condense into one line here. */
-    struct priority_queue_elem *pq_elem = list_entry (max_prio, struct priority_queue_elem, elem);
-    ASSERT (pq_elem != NULL);
-    woken = priority_queue_entry (pq_elem, struct thread, elem);
+    woken = priority_queue_entry (list_entry (max_prio, struct priority_queue_elem, elem),
+                                  struct thread, elem);
     ASSERT (woken != NULL);
     thread_unblock (woken);
   }
@@ -251,12 +249,13 @@ lock_acquire (struct lock *lock)
      to outside observers. */
   old_level = intr_disable ();
 
-  /* If we are about to wait, donate priority to the current holder. */
-  if (lock->holder != NULL)
+  /* Prio sched: if we are about to wait, donate priority to 
+     the current holder. */
+  if (!thread_mlfqs && lock->holder != NULL)
   {
     thread_donate_priority (lock->holder);
-    cur->pending_lock = lock;
   }
+  cur->pending_lock = lock;
 
   sema_down (&lock->semaphore);
 
@@ -323,8 +322,9 @@ lock_release (struct lock *lock)
   list_remove (&lock->elem);
   lock->holder = NULL;
 
-  /* If our priority was donated by a thread we just unblocked, yield to him. */
-  if (woke_someone)
+  /* Prio sched: if our priority was donated by a thread we just unblocked, 
+     yield to him. */
+  if (!thread_mlfqs && woke_someone)
   {
     bool did_lower_priority = thread_return_priority ();
     if (did_lower_priority)

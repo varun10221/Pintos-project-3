@@ -111,7 +111,7 @@ struct list
 
 /* List initialization.
 
-   A list may be initialized by calling list_init():
+   A list may be initialized or emptied by calling list_init():
 
        struct list my_list;
        list_init (&my_list);

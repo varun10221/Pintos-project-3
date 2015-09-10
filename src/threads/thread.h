@@ -100,8 +100,15 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     priority base_priority;             /* Base priority. */
-    priority effective_priority;        /* Effective priority. */
-    struct list_elem allelem;           /* List element for all threads list. */
+    /* effective_priority should be used for any scheduling decisions. 
+       It may differ from base_priority in the event of priority donation.
+       When using the mlfqs, base_priority is ignored. */
+    priority effective_priority;        /* Effective priority */
+    int nice; /* The 'nice' value in the mlfqs. */
+    fp recent_cpu; /* The 'recent cpu' value in the mlfqs. */
+    struct list_elem allelem;    /* List element for all threads list. */
+    bool in_time_slice_list;     /* Whether or not we are in the time_slice_threads list. */
+    struct list_elem ts_elem;    /* List element for time_slice_threads list. */
 
     /* The following variables are shared between thread.c and synch.c. */
     struct priority_queue_elem elem;    /* Priority queue element. */
@@ -182,7 +189,15 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-fp thread_calc_load_avg (void);
+void thread_calc_load_avg (void);
+
+void update_threads_priority (void);
+void thread_update_priority (struct thread *, void *);
+void update_threads_recent_cpu (void);
+void thread_update_recent_cpu (struct thread *, void *);
+
+void update_recent_threads_priority (void);
+void empty_recent_threads_list (void);
 
 /* Functions to expose the variables used to support alarm clock functionality to devices/timer.c. */
 void wake_sleeping_threads (int64_t);

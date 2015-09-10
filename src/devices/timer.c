@@ -198,6 +198,37 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+
+  /* mlfqs: Thread priority is re-calculated every fourth clock tick. */
+  if (thread_mlfqs && ticks % 4 == 0)
+  {
+    /* If this changes, need different logic. */
+    ASSERT (TIMER_FREQ % 4 == 0);
+
+    if (ticks % TIMER_FREQ == 0)
+    {
+      /* Once per second, calculate load_avg and update every thread's recent_cpu. */
+      thread_calc_load_avg ();
+      update_threads_recent_cpu (); 
+      update_threads_priority (); 
+    }
+    /* DEBUGGING */
+    else
+    {
+      /* Every 4 ticks, update priority (*for affected threads*)
+         priority is a function of recent_cpu and load_avg.
+         recent_cpu changes in thread_tick() for the running thread, and 
+         in timer_interrupt() right above this.
+         load_avg changes in timer_interrupt() right above this.
+
+         Therefore, only those threads whose recent_cpu has changed in the past 4 ticks 
+         need to be updated. */
+      update_recent_threads_priority ();
+    }
+    /* Either way these recent threads have had their priority updated. */
+    empty_recent_threads_list ();
+  }
+
   /* Alarm clock: wake any sleeping threads. */
   wake_sleeping_threads (ticks);
   thread_tick ();
