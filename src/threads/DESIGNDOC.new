@@ -1,0 +1,120 @@
+     +--------------------+
+     |        CS 5204     |
+     | PROJECT 1: THREADS |
+     |   DESIGN DOCUMENT  |
+     +--------------------+
+          
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Jamie Davis <davisjam@vt.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+I consulted "the Internet" (stackoverflow, RMS's gdb guide, etc.) 
+to learn how to use cscope and gdb.
+
+Related to the actual content of my code, I did not consult 
+any sources other than those named above.
+
+While answering the linux questions, I referred to the following:
+
+L1:
+  http://www.ibm.com/developerworks/library/l-timers-list/
+
+          ALARM CLOCK
+          ===========
+
+---- DATA STRUCTURES ----
+
+>> A1. Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+---- COMPARISON TO LINUX ----
+
+>> L1. What data structure does Linux's 4.2 use to implement 
+>> its timer facility?  See https://github.com/torvalds/linux/blob/master/kernel/time/timer.c
+
+Via schedule_timeout -> __mod_timer -> internal_add_timer,
+sleeping threads are added to a list of sleepers, binned
+so that "soon" threads are in the first bin, and later threads
+are in subsequent bins covering (increasingly large?) ranges.
+
+The function __next_timer_interrupt is used to identify the 
+next-soonest timer that will go off.
+
+When a sleeper's time to wake up occurs, a timer interrupt
+is triggered (?) and moves the thread back into a ready state.
+It looks like this can also be done via __run_timers?
+
+The function cascade re-locates each timer in the appropriate
+bin of a 'struct tvec_base'.
+
+      PRIORITY SCHEDULING
+      ===================
+
+---- DATA STRUCTURES ----
+
+>> B1. Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+---- COMPARISON TO LINUX ----
+
+>> L2. Compare your ready queue design to Linux's design for how it maintains
+>> its "real-time" tasks.
+>> Look at pick_next_rt_entity in https://github.com/torvalds/linux/blob/master/kernel/sched/rt.c
+>> How does your design differ?
+
+       ADVANCED SCHEDULER
+       ==================
+
+---- DATA STRUCTURES ----
+
+>> C1. Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+
+---- COMPARISON TO LINUX ----
+
+>> L3. Compare your ready queue design to Linux's design for how it maintains
+>> its ready queue for general purpose tasks.
+>> See __enqueue_entity in https://github.com/torvalds/linux/blob/master/kernel/sched/fair.c
+
+>> L4. How many bits does Linux's fixed-point arithmetic (used to compute loadavg) 
+>> use for each fixed-point's fractional part?
+>> Read: https://github.com/torvalds/linux/blob/master/include/linux/sched.h
+
+        SURVEY QUESTIONS
+        ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
