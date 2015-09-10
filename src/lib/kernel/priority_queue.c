@@ -92,7 +92,7 @@ priority_queue_remove (struct priority_queue *pq, struct priority_queue_elem *el
    Returns NULL if queue is empty. 
    Does not remove the element, just returns a pointer to it. */
 struct priority_queue_elem *
-priority_queue_max(struct priority_queue *pq)
+priority_queue_max (struct priority_queue *pq)
 {
   ASSERT (pq != NULL);
 
@@ -147,7 +147,7 @@ priority_queue_verify (struct priority_queue *pq, bool is_sorted, list_less_func
         /* If sorted, prev <= cur */
         if(is_sorted && l_cur != NULL && l_prev != NULL)
         {
-          ASSERT ( less(l_prev, l_cur, NULL) || eq(l_prev, l_cur, NULL) );
+          ASSERT ( less (l_prev, l_cur, NULL) || eq (l_prev, l_cur, NULL) );
         }
 
         n_elts++;
