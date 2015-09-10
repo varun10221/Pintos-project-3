@@ -39,6 +39,46 @@ L1:
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+lib/kernel/priority_queue.h:
+
+/* A priority_queue is an abstract data type consisting of an array of lists,
+optionally sorted. */
+
+  struct priority_queue_elem
+    {
+      struct list_elem elem; /* List element. */
+      priority *p;           /* Priority of the element. */
+      int64_t *sort_val;     /* Sort by this value if desired. */
+    };
+
+#define PRI_QUEUE_NLISTS (1 + PRI_MAX - PRI_MIN)
+  struct priority_queue
+    {
+      struct list queue[PRI_QUEUE_NLISTS];
+      size_t size; /* Total number of elements in all lists. */
+      /* Useful for the sleeping_queue. Could be handy in other places.
+         In the sleeping list we track the minimum wake_me_at value. */  
+      int64_t val; 
+    };
+
+thread.h:
+  struct thread:
+    /* Wake a thread in thread_status THREAD_BLOCKED when 0 < wake_me_at <= current timer tick */
+    int64_t wake_me_at; 
+
+
+thread.c
+  /* Priority queue of sleeping processes. Each priority list is sorted by wake_me_at, soonest to latest. */
+  static struct priority_queue sleeping_queue;
+
+devices/timer.c::timer_sleep: threads add themselves to sleeping_queue
+devices/timer.c::timer_interrupt: interrupt handler calls wake_sleeping_threads
+  which checks if the soonest-to-wake waiter in each list should be woken.
+  sleeping_queue.val tracks minimum wake_me_at value across the entire list,
+  which lets us quickly decide whether or not to scan the 64 lists in the priority queue.
+  By starting at the high-priority end of the queue, we wake a higher-priority thread
+  first.
+
 ---- COMPARISON TO LINUX ----
 
 >> L1. What data structure does Linux's 4.2 use to implement 
@@ -58,6 +98,14 @@ It looks like this can also be done via __run_timers?
 
 The function cascade re-locates each timer in the appropriate
 bin of a 'struct tvec_base'.
+
+Comparison:
+  Bucketing by wakeup time allows linux to add new timers more quickly
+than my solution, which has to traverse an entire list (the priority list
+in the PQ) looking for the right place to go.
+Buckets reduce the potential traversal length.
+  When waking threads, the two solutions are comparable, since both maintain 
+sorted lists.
 
       PRIORITY SCHEDULING
       ===================
