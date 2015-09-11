@@ -473,8 +473,6 @@ empty_recent_threads_list (void)
   {
     thr = list_entry (e, struct thread, ts_elem);
     thr->in_time_slice_list = false;
-    /* DEBUGGING */
-    list_remove (&thr->ts_elem);
   }
   /* Wipes the list without having to delete each element. */
   list_init (&time_slice_threads);
