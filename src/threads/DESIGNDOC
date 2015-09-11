@@ -1,9 +1,9 @@
-      +--------------------+
-      |        CS 140      |
-      | PROJECT 1: THREADS |
-      |   DESIGN DOCUMENT  |
-      +--------------------+
-           
+     +--------------------+
+     |        CS 5204     |
+     | PROJECT 1: THREADS |
+     |   DESIGN DOCUMENT  |
+     +--------------------+
+          
 ---- GROUP ----
 
 >> Fill in the names and email addresses of your group members.
@@ -15,481 +15,327 @@ Jamie Davis <davisjam@vt.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
-No preliminary comments.
-
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
 
-No other sources were consulted.
+I consulted "the Internet" (stackoverflow, RMS's gdb guide, etc.) 
+to learn how to use cscope and gdb.
 
-           ALARM CLOCK
-           ===========
+Related to the actual content of my code, I did not consult 
+any sources other than those named above.
 
-============================
-TODO REWRITE THE ALARM CLOCK STUFF
-============================
+While answering the linux questions, I referred to the following
+high-level descriptions.
 
+L1:
+  http://www.ibm.com/developerworks/library/l-timers-list/
+L2:
+  http://www.linuxjournal.com/magazine/real-time-linux-kernel-scheduler?
+L3:
+  https://en.wikipedia.org/wiki/Completely_Fair_Scheduler
+  linux/Documentation/scheduler/sched-design-CFS.txt
 
----- DATA STRUCTURES ----
-
->> A1: Copy here the declaration of each new or changed `struct' or
->> `struct' member, global or static variable, `typedef', or
->> enumeration.  Identify the purpose of each in 25 words or less.
-
----- ALGORITHMS ----
-
->> A2: Briefly describe what happens in a call to timer_sleep(),
->> including the effects of the timer interrupt handler.
-
->> A3: What steps are taken to minimize the amount of time spent in
->> the timer interrupt handler?
-
----- SYNCHRONIZATION ----
-
->> A4: How are race conditions avoided when multiple threads call
->> timer_sleep() simultaneously?
-
-timer_sleep() appends the running thread to the sleeping_queue.
-This update to the sleeping_queue is kept atomic through the use of a lock.
-
->> A5: How are race conditions avoided when a timer interrupt occurs
->> during a call to timer_sleep()?
-
-The situation here is that a thread is running timer_sleep and a timer
-interrupt occurs. 
-
-CASE: The timer interrupt handler traverses and potentially removes elements from the sleeping_queue.
-It does not hold a lock. I don't see a good way around this race condition besides disabling interrupts
-in timer_sleep while we modify sleeping_queue.
-
-CASE: The timer interrupt handler just Ups a semaphore. This (eventually) wakes waker_thread, who
-waits for the lock on the sleeping_queue before modifying it. No race condition since we revert to
-well-defined lock semantics.
-
-HOWEVER: if the timer interrupt handler interrupts a call to timer_sleep while we are computing
-when to wake us up, and it uses X ticks, then we potentially sleep X + ticks_to_sleep ticks.
-If X >> ticks_to_sleep, this could be bad.
-
----- RATIONALE ----
-
->> A6: Why did you choose this design?  In what ways is it superior to
->> another design you considered?
-
-For Monday 31 Aug:
-Jamie's proposed design
-
-  As provided, timer_sleep calls thread_yield until ticks <= timer_elapsed.
-  thread_yield puts the caller at the end of the ready list, leaves its state as THREAD_READY, and then schedules a thread to run
-    (could be the caller). This can result in busy looping, using up CPU cycles scheduling and unscheduling the sleeping thread
-    until enough ticks have passed. For short sleeps this is OK, but for long sleeps this wastes a lot of CPU.
-
-  It would be preferable if the sleeping thread were not considered for scheduling until its requested number of ticks have passed.
-  There is no requirement that the thread be woken up after exactly x ticks (unless the system is otherwise idle).
-
-  Proposal 1: Complete accuracy, at the expense (perhaps) of system responsiveness
-  
-  - Introduce a new list of sleeping threads in thread.c: static struct list sleeping_queue
-  - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken (this could also be done with a struct tracking a thread and a wake_me_at field, but this seems like a needless use of memory)
-  - When a thread calls timer_sleep, it adds itself to this list and yields
-  - In the timer interrupt handler, traverse the sleeping_queue and add to ready_queue any threads list that have finished their sleep
-
-  Problem: If the system has a lot of threads that call timer_sleep, traversing the sleeping_queue to find threads that should be woken can be expensive.
-    The interrupt handler must run as fast as possible to improve system responsiveness. We don't want to spend ticks iterating over a list.
-
-  Variation: keep the sleeping_queue sorted by soonest-to-wake, minimizing the time spent traversing it in the timer interrupt handler. This makes insertion more expensive, which in turn makes the timer interrupt handler take longer.
-    
-  Proposal 2: System responsiveness, at the expense of timer accuracy
-
-  (The first three are the same as Proposal 1)
-  - Introduce a new list of sleeping threads in thread.c: static struct list sleeping_queue
-  - Add a wake_me_at field to struct thread, used to track the minimum value of ticks in 'ticks' before which we can be woken
-  Differences:
-  - Introduce another "system" thread (joining the elite club of idle_thread and initial_thread). Call it waker_thread.
-     waker_thread is always on the ready list and when scheduled, it:
-      - iterates over the sleeping_queue
-      - adds any ready-to-wake threads to the ready_queue
-      - yields
-
-  Here we're still burning CPU cycles busy-waiting, but in a high-sleeper-count scenario only *one* thread (the waker_thread) is being scheduled to burn cycles instead of multiple threads. In a low-sleeper-count scenario this is roughly the same as what we have now anyway.
-
-  Variation 1: Instead of introducing a waker_thread, have the idle_thread check the sleeper_list instead. It's not doing anything else anyway. However, this could starve sleepers. The idle_thread only runs when the ready_queue is empty, so if there are always ready threads, idle would never run and thus sleepers would never be woken. Failure!
-
-  Variation 2: Have waker_thread wait on a semaphore (monitor?) and have the timer interrupt "Up" the semaphore. This does not require busy waiting. waker_thread is therefore only ever scheduled to run by the timer interrupt, instead of at the same rate as every other thread in the ready list.
-
-  Variation 3: Just stick sleeping threads in the ready_queue, mark them as SLEEPING, and don't schedule them until enough time has passed. This has minimal complexity but makes the scheduling activity pricey! I think the list traversal could become unpleasantly expensive.
-
-  Files to modify:
-    - thread.h: thread_status
-    - thread.h: struct thread
-
-
-Design update during priority queue testing:
-  Using a raw priority_queue for the sleeping_queue seems to be too expensive to scan
-  (at least to pass the alarm-multiple test).
-
-  This may be due to the waste of timer cycles running the waker_thread unnecessarily.
-  At the moment we run it any time there is a sleeper and timer_interrupt goes off.
-
-Proposal 1:
-  To reduce waste in running waker, we choose to keep the sleeping_queue sorted by wake time.
-  T1 comes before T2 if
-    T1.wake_me_at < T2.wake_me_at
-  This causes us to spend extra CPU cycles inserting, but makes it much cheaper to determine whether
-  or not there is a sleeping thread to wake. 
-    > Compute MIN(wake_me_at of the first thread in each list of the priority queue)
-
-  If only one priority level is dominant, the use of a 64-list queue is a mistake, since we
-  don't derive much benefit from splitting it up and we have to spend awhile iterating
-  through the 64 lists each time.
-
-  Competing with Proposal 2, can we track the next time that ANY thread needs to be woken? 
-  This would allow timer_interrupt to decide very quickly whether or not there is anything 
-    for waker to do.
-
-  - Add an int64_t field to the priority_queue struct, for general use
-  - Any time a thread calls push_sleeping_queue, we update the field
-  - Any time waker actually runs, it knows there is someone to wake up. It wakes the first elements
-    of each list and peeks at the next element of each (if there is someone). It then computes
-    MIN(peek value) and updates the field for timer_interrupt. Since it is doing so
-    atomically w.r.t. sleeping_queue (it holds a lock), we have the invariant "the next time to wake
-    field of sleeping_queue will always be correct" 
-
-  Note that we cannot track the priority queue to start in, since waker may not run in the same tick
-    that timer_interrupt goes off. Consequently there may be other threads at a higher priority
-    level that should be woken first, even if they were supposed to be woken at a later tick
-    than the min in the sleeping_queue.
-
-Proposal 2:
-  We could revert to using a list rather than a priority_queue for the sleeping_queue.
-  We would keep it sorted by both priority AND wake_time, giving precedence to wake_time.
-  T1 comes before T2 if
-    T1.wake_me_at < T2.wake_me_at
-      or
-    T1.wake_me_at == T2.wake_me_at && T1.effective_priority < T2.effective_priority
-       
-  This would make it extremely cheap to determine whether or not there was someone to wake.
-    > Check the wake_me_at time of the first element in the queue
-  However, insertion would become expensive if there is a high thread count and there are multiple
-  priority levels with high thread counts.
-
-  If only one priority level is dominant, the cost of insertion would be comparable to the 
-  prioritized list.
-
-Both proposals rely on the fact that a thread cannot change its wake_me_at time until it is woken up,
-  since re-sorting a list would be expensive.
-
--------------------
-
-Final alarm clock design:
-  After experiencing "surprising" thread behavior due to the interplay of the scheduler, the waker thread, and other threads
-  doing sleeping, and after consultation with Dr. Back, I decided to change the design to look like the original Proposal 1,
-  with a few tweaks.
-
-1. Put the waker logic directly into timer_interrupt. Signaling the waker thread puts us at the mercy of the 
-OS scheduler, an undesirable situation given the critical nature of the alarm clock.
-2. Keep the sleeping_queue, but make it directly available to timer.h (no longer static). 
-3. Keep this sleeping_queue a priority queue (for priority waking), and keep each list sorted by wake time.
-  This allows us to quickly find and wake the relevant threads.
-  
-       PRIORITY SCHEDULING
-       ===================
+          ALARM CLOCK
+          ===========
 
 ---- DATA STRUCTURES ----
 
->> B1: Copy here the declaration of each new or changed `struct' or
+>> A1. Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-struct thread:
-    priority base_priority;             /* Base priority. */
-    priority effective_priority;        /* Effective priority. */
-    struct priority_queue_elem elem;    /* Priority queue element. */
-    /* Tracks locks held by this thread. */
-    struct list lock_list; /* Locks we hold. */
-    /* Tracks the lock for which this thread is waiting, enabling
-       nested priority donation. */
-    struct lock *pending_lock; /* Lock we want. */
+lib/kernel/priority_queue.h:
 
-struct semaphore_elem:
-    This new field allows us to identify the "largest" element
-    in a list of semaphore_elem's. It allows priority wakeup.
-    int64_t *sort_val;                   /* Value on which to sort. */
+/* A priority_queue is an abstract data type consisting of an array of lists,
+optionally sorted. */
 
-New files:
-  priority_queue.h, priority_queue.c
+  struct priority_queue_elem
+    {
+      struct list_elem elem; /* List element. */
+      priority *p;           /* Priority of the element. */
+      int64_t *sort_val;     /* Sort by this value if desired. */
+    };
 
-  Define interface to and implementation of data structure 'struct priority_queue'
-
-/* Mask what a priority is. */
-typedef int64_t priority;
-
-/* Like a list_elem, but for a priority queue. */
-struct priority_queue_elem
-  {
-    struct list_elem elem; /* List element. */
-    priority *p;           /* Priority of the element. */
-    int64_t *sort_val;     /* Sort by this value if desired. */
-  };
-
-/* Priority queue, an ADT modeled after the list implementation. */
 #define PRI_QUEUE_NLISTS (1 + PRI_MAX - PRI_MIN)
-struct priority_queue
-  {
-    struct list queue[PRI_QUEUE_NLISTS];
-    size_t size; /* Total number of elements in all lists. */
-    /* Useful for the sleeping_queue. Could be handy in other places.
-       In the sleeping list we track the minimum wake_me_at value. */  
-    int64_t val; 
-  };
+  struct priority_queue
+    {
+      struct list queue[PRI_QUEUE_NLISTS];
+      size_t size; /* Total number of elements in all lists. */
+      /* Useful for the sleeping_queue. Could be handy in other places.
+         In the sleeping list we track the minimum wake_me_at value. */  
+      int64_t val; 
+    };
 
-These two were changed to be 'struct priority_queues' rather than 'struct lists'. 
-This allows faster look-up time in the event of thousands or more threads.
-I changed the names, too. They are declared as static structs invisible outside
-of thread.c, so there is no risk of breaking existing applications.
+thread.h:
+  struct thread:
+    /* Wake a thread in thread_status THREAD_BLOCKED when 0 < wake_me_at <= current timer tick */
+    int64_t wake_me_at; 
+    struct priority_queue_elem elem;    /* Priority queue element. */
+                                           (used to be a struct list_elem elem)
 
-  static struct priority_queue ready_queue;
+thread.c
+  /* Priority queue of sleeping processes. Each priority list is sorted by wake_me_at, soonest to latest. */
   static struct priority_queue sleeping_queue;
 
-synch.h:
-  The waiters lists of condition variables will remain unsorted lists.
+Implementation details: 
+devices/timer.c::timer_sleep: 
+  threads add themselves to sleeping_queue
+devices/timer.c::timer_interrupt: 
+  interrupt handler calls wake_sleeping_threads,
+  which checks if the soonest-to-wake waiter in each list should be woken.
+  sleeping_queue.val tracks minimum wake_me_at value across the entire list,
+  which lets us quickly decide whether or not to scan the 64 lists in the priority queue.
+  By starting at the high-priority end of the queue, we wake a higher-priority thread
+  first.
+
+---- COMPARISON TO LINUX ----
+
+>> L1. What data structure does Linux's 4.2 use to implement 
+>> its timer facility?  See https://github.com/torvalds/linux/blob/master/kernel/time/timer.c
+
+Via schedule_timeout -> __mod_timer -> internal_add_timer,
+sleeping threads are added to a list of sleepers, binned
+so that "soon" threads are in the first bin, and later threads
+are in subsequent bins covering (increasingly large?) ranges.
+
+The function __next_timer_interrupt is used to identify the 
+next-soonest timer that will go off.
+
+When a sleeper's time to wake up occurs, a timer interrupt
+is triggered (?) and moves the thread back into a ready state.
+It looks like this can also be done via __run_timers?
+
+The function cascade re-locates each timer in the appropriate
+bin of a 'struct tvec_base'.
+
+Comparison:
+  Bucketing by wakeup time allows linux to add new timers more quickly
+than my solution, which has to traverse an entire list (the priority list
+in the PQ) looking for the right place to go.
+Buckets reduce the potential traversal length.
+  When waking threads, the two solutions are comparable, since both maintain 
+sorted lists.
+
+      PRIORITY SCHEDULING
+      ===================
+
+---- DATA STRUCTURES ----
+
+>> B1. Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+thread.h:
+  struct thread:
+      priority base_priority;             /* Base priority. */
+      priority effective_priority;        /* Effective priority. */
+      struct priority_queue_elem elem;    /* Priority queue element. */
+      /* Tracks locks held by this thread. 
+         Allows us to determine the appropriate (potentially lower) priority level to set
+         after releasing a lock, for "priority return." */
+      struct list lock_list; 
+      /* Tracks the lock for which this thread is waiting, enabling
+         nested priority donation. */
+      struct lock *pending_lock; /* Lock we want. */
+
+synch.c:
+  struct semaphore_elem:
+    /* This new field allows us to identify the "largest" element
+    in a list of semaphore_elem's. It allows priority wakeup for
+    condition variables. It is set to &thr->effective_priority. */
+
+    int64_t *sort_val;                   /* Value on which to sort. */
+
+priority_queue.h, priority_queue.c:
+  These files define the interface to and implementation of data structure 'struct priority_queue',
+  described above in the alarm clock section.
+
+  /* Mask what a priority is. */
+  typedef int64_t priority;
+
+thread.c:
+  The ready_list declaration was changed to: 
+    static struct priority_queue ready_queue;
+
+Implementation details:
+  We maintain sleeping_queue and ready_queue as 64-way priority lists,
+  with equal-priority threads scheduled in FIFO fashion.
+  Any changes to the priority of a thread in 
+  either the ready queue or the sleeping queue requires changing the priority list 
+  in which the thread resides.
+
+  In synch.h, the waiters lists of condition variables remain unsorted lists.
   The list elements (priority_queue_elem or semaphore_elem) both have
   a sort_val which is set to the address of the effective priority
   of the relevant thread, allowing us to determine the
-  highest priority waiter just-in-time.
+  highest priority waiter just-in-time as long as the effective_priority
+  of the affected thread(s) is set properly.
 
-  Using lists rather than priority queues keeps the size of a 'struct lock' relatively small.
-  Applications (e.g. priority-donate-chain.c) might declare enough locks
-  to clobber the stack if priority queues were used instead of lists 
-  in this setting. I started out using priority queues, and switched back
-  when I ran priority-donate-chain and encountered stack corruption.
+---- COMPARISON TO LINUX ----
 
->> B2: Explain the data structure used to track priority donation.
->> Use ASCII art to diagram a nested donation.  (Alternately, submit a
->> .png file.)
+>> L2. Compare your ready queue design to Linux's design for how it maintains
+>> its "real-time" tasks.
+>> Look at pick_next_rt_entity in https://github.com/torvalds/linux/blob/master/kernel/sched/rt.c
+>> How does your design differ?
 
-TODO
+In my design, there is a "queue" consisting of 64 lists, one for each possible priority level.
+I do not differentiate between "real-time" tasks and "normal" tasks.
 
----- ALGORITHMS ----
+Linux has 140 possible priority levels, with the 40 highest levels only available to kernel
+threads. Real time priorities range from 0 to 99.
 
->> B3: How do you ensure that the highest priority thread waiting for
->> a lock, semaphore, or condition variable wakes up first?
+In pick_next_rt_entity, the highest-priority entry in the 'struct rq' (run-queue?) is selected.
+A 'struct rq' includes a 'struct rt_prio_array' which tracks MAX_RT_PRIO (i.e. 100) possible
+priority levels.
 
-The waiters list for each synchronization primitive has elements that
-know their priority. With appropriately defined list_less_func's
-(one for sema's and one for cond's), list_max can be used to find
-the highest-priority waiter.
+The design for selection of a task is therefore largely the same:
+Linux and my designs both involve an array of lists, one for each priority level.
 
-This takes O(N) time but we expect that synchronization primitives
-will not have a large number of waiters at any given time.
+Some differences:
+  Linux offers a wider variety of priority levels.
 
-For the sleeping_queue and the ready_queue, priority_queue_pop_front
-finds the highest-priority waiter in O(1) time. These lists are
-expected to be larger, and consequently O(1) time is a design requirement.
+  Linux uses a bitmap to more quickly locate the highest-priority non-empty list from
+  which to extract an element, which allows it to avoid iterating over each list
+  checking it. I did not use a bitmap so I have to iterate.
 
->> B4: Describe the sequence of events when a call to lock_acquire()
->> causes a priority donation. How is nested donation handled?
+  The Linux design gives some weight to *where* to schedule the process (which CPU).
+  There seems to be an rq for each CPU, so that tasks can be pushed to and from each other's CPU
+    to fill idle cycles. 
+  As Pintos is a uni-processor design I had no need to consider this.
 
-A thread determines that the lock is already held.
-It determines whether or not the holder would accept a donation of
-priority (i.e. does the thread have higher priority than the holder?).
+  Linux uses locks to protect its rq information, rather than disabling interrupts
+  like I do.
 
-If the holder would accept the donation:
-  Since it is not running, the holder must be in either "ready" or "blocked" state.
-    In "ready" state it is on the ready_queue.
-    In "blocked" state it is on the sleeping_queue (if sleeping)
-      or on the list of waiters associated with a synchronization primitive
-      (sema, lock, or cond).
-  The thread determines the state and location of the holder and promotes
-    him (raises his effective priority)
-    If on the ready queue or the sleeping queue, the holder must be relocated within
-    the queue.
-    If on the waiting list of a synchronization primitive, just changing the 
-    effective priority is sufficient: the highest priority waiter is calculated "just in time" 
-    in the synchronization primitives.
+  Linux priorities are "inverted": 0 is highest priority, and 139 is lowest priority.
+  In my pintos, larger priority values are stronger, up to PRI_MAX of 63.
 
-  If the holder is blocked waiting on a lock (as determined by the 
-    'struct lock *lock_we_want' field in a 'struct thread'), the caller
-    looks up the holder and repeats the operation up to MAX_DONATION_DEPTH times. 
+With respect to the maintenance of a 'struct rq'...
+  enqueue_pushable_task: Whenever a new, higher-priority task is pushed to an rq,
+    the rt_rq.highest_prio.next value is updated.
+  dequeue_pushable_task: Whenever a task is removed from the rq, the highest_prio.next field
+    is updated.
+  __enqueue_rt_entity: Add this element to the list of appropriate priority.
+    Set the appropriate bit in the rq's bitmap to indicate the presence of a task at
+    this priority.
+  __dequeue_rt_entity: Delete this element from its rq. If it is the last element
+    in the list, clear the appropriate bit in the rq's bitmap.
 
-  If the holder is blocked on a synchronization primitive other than a lock, there is no
-    particular thread responsible for signaling the primitive. In this case 
-    donation ceases, as there is no one to donate priority to.
+As far as I can tell, the designs are fundamentally the same,
+except that Linux uses a bitmap for performance purposes and has to worry about
+multiple CPUs.
 
->> B5: Describe the sequence of events when lock_release() is called
->> on a lock that a higher-priority thread is waiting for.
-
-A thread releases a lock. If there are waiters, the thread
-wakes the highest priority one using list_max on the list of waiters.
-
-The thread holding the lock might have had priority donated to it.
-Due to priority donation, we know that a thread cannot have a lower
-priority than the thread it just woke. If the thread it woke has an equal 
-priority, it may have had its current priority donated to it DUE TO OWNERSHIP
-OF THIS LOCK. However, if it holds multiple locks then its current priority
-could be due to a thread waiting on another lock that it holds.
-Consequently, the thread checks through the locks it holds for the highest
-waiter on each. 
-  If it finds no waiter with its own priority, it knows that
-the priority donated to it came from the thread it just woke.
-The thread releasing the lock then "returns" its priority by reducing its effective priority
-to the max of (its base priority, highest of those threads waiting for the locks it holds).
-
-If a thread reduces its priority as a result of this calculation, the thread
-releasing the lock yields to allow the higher-priority thread to run.
-
-This gives precedence to the running thread in the event that it holds multiple locks
-and that two or more locks are tied for "highest priority waiter".
-
-Suppose threads A, B, and C, and locks L1, L2.
-Thread    priority
-  A          1
-  B, C       2
-A locks L1 and L2.
-B locks L1, and later on C locks L2.
-B and C both offer priority to A.
-
-Now A runs, releases L1, and sees that B (the thread it just woke) also has priority 2.
-A may or may not need to yield to him. A runs thread_return_priority and sees that C is 
-waiting for L2 with priority 2, so A retains its "promotion" and does not yield.
-
-We justify this by noting that if the running thread holds two locks, it might be holding more.
-As a general rule, we would like it to release more locks to give other threads a chance to run.
-
----- SYNCHRONIZATION ----
-
->> B6: Describe a potential race in thread_set_priority() and explain
->> how your implementation avoids it.  Can you use a lock to avoid
->> this race?
-
-Suppose thread A (priority 2) holds a lock.
-Thread B (priority 2) wants the lock.
-Suppose thread_set_priority is a 2-step operation: 
-  - change the base priority 
-  - update effective priority based on the locks I hold
-
-Suppose thread_donate_priority checks the effective priority but not the
-  base priority.
-
-Suppose thread_set_priority is not done atomically, so that a thread can
-  be interrupted in between changing the base and changing the effective
-  priority.
-
-Thread A calls thread_set_priority(1), lowers its base priority, and is then interrupted.
-  (base 1 effective 2).
-
-Thread B calls lock_acquire, sees that thread A holds it, and "offers" its priority
-to Thread A. Thread B sees that thread A has effective priority 2 and so does not
-modify Thread A's effective priority. Thread B blocks and the scheduler runs.
-
-*The scheduler runs and a thread with priority 1 (not A) is run.
-  This is in defiance of priority scheduling: after Thread B blocks,
-  Thread A should have priority 2 and should have been scheduled.
-
-Thread A is now scheduled and updates its effective priority to 2 because B
-is waiting for it.
-
-The role of the scheduler in this race condition means that the only 
-useful form of synchronization is to disable interrupts during thread_set_priority.
-
----- RATIONALE ----
-
->> B7: Why did you choose this design?  In what ways is it superior to
->> another design you considered?
-
-As noted above, I considered replacing the waiters lists of synchronization
-primitives with priority_queues. 
-
-Changing a thread's priority during priority donation might require moving it within
-its list. This operation would be trivial when using a priority queue.
-However, a priority_queue is too large and can clobber the stack.
-In addition, I consider it unlikely that the list of waiters for a given lock
-would ever grow long enough for element relocation to have a meaningful performance impact.
-
-Replacing the ready_queue and sleeping_queue with priority queues, however, seemed
-like a logical step. These structures can reasonably be expected to hold thousands of elements.
-
-Changing an element's priority in a 64-way array of lists consists of a list_remove operation (changes a few pointers)
-followed by a list_push_back (changes a few more pointers).
-To do so in a single list would be a O(n) operation.
-
-        ADVANCED SCHEDULER
-        ==================
-
-Design:
-
-Quoting from the design doc: http://courses.cs.vt.edu/~cs5204/fall15-gback/pintos/doc/pintos_7.html#SEC131
-    Multiple facets of the scheduler require data to be updated after a certain number of timer ticks. In every case, these updates should occur before any ordinary kernel thread has a chance to run, so that there is no chance that a kernel thread could see a newly increased timer_ticks() value but old scheduler data values. 
-
-    Thread priority is calculated initially at thread initialization. It is also recalculated once every fourth clock tick, for every thread.
-
-The only way to ensure that no kernel thread can see an increased timer_ticks() value but no 
-scheduler data value is if the ticks and the updates are done atomically. The timer interrupt handler
-is a logical place to put this computation.
-
-This (hopefully) results in a system more responsive and fair to its applications.
-The cost is that every X ticks we have a O(N) (where N is the number of threads) operation that is
-pure system overhead. 
+       ADVANCED SCHEDULER
+       ==================
 
 ---- DATA STRUCTURES ----
 
->> C1: Copy here the declaration of each new or changed `struct' or
+>> C1. Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
----- ALGORITHMS ----
+lib/kernel/fpra.c, fpra.h:
+  Implementation of fixed-point real arithmetic with 14 fractional bits.
 
->> C2: Suppose threads A, B, and C have nice values 0, 1, and 2.  Each
->> has a recent_cpu value of 0.  Fill in the table below showing the
->> scheduling decision and the priority and recent_cpu values for each
->> thread after each given number of timer ticks:
+  /* Floating-point number. */
+  typedef int32_t fp;
+  
+  /* fp's are divided into an integral and a fractional portion. 
+     We allot 1 bit for sign, POINT bits for fractional, and the rest of the 
+     bits (32 - 1 - POINT) to integral. */
+  #define POINT 14
+  
+  enum round_mode {
+    ROUND_TO_ZERO,
+    ROUND_TO_NEAREST
+  };
+  
+  static int ONE = 1 << POINT;
 
-timer  recent_cpu    priority   thread
-ticks   A   B   C   A   B   C   to run
------  --  --  --  --  --  --   ------
- 0
- 4
- 8
-12
-16
-20
-24
-28
-32
-36
+thread.h:
+  struct thread:
+    int nice; /* The 'nice' value in the mlfqs. */
+    fp recent_cpu; /* The 'recent cpu' value in the mlfqs. */
+    bool in_time_slice_list;     /* Whether or not we are in the time_slice_threads list. */
+    struct list_elem ts_elem;    /* List element for time_slice_threads list. */
 
->> C3: Did any ambiguities in the scheduler specification make values
->> in the table uncertain?  If so, what rule did you use to resolve
->> them?  Does this match the behavior of your scheduler?
+thread.c:
+  /* List of threads that have run in the last TIME_SLICE ticks. 
+     May contain duplicates. List will never be very large so this is OK. */
+  static struct list time_slice_threads;
 
->> C4: How is the way you divided the cost of scheduling between code
->> inside and outside interrupt context likely to affect performance?
+Implementation notes:
+  Each time thread_tick() runs, a thread increments its recent_cpu by 1 and
+  adds itself to time_slice_threads if(!thr->in_time_slice_list).
 
----- RATIONALE ----
+  Every 4 timer_tick()'s, we update the recent_cpu of the threads that have run since
+  the last time timer_tick() went off (i.e. those in time_slice_threads).
+  We then empty that list.
+  Every TIMER_FREQ timer_ticks()'s, we recalculate load_avg and update the recent_cpu of all
+  threads.
 
->> C5: Briefly critique your design, pointing out advantages and
->> disadvantages in your design choices.  If you were to have extra
->> time to work on this part of the project, how might you choose to
->> refine or improve your design?
+  Although TIME_SLICE == 4, we can't just update recent_cpu of the currently active thread.
+  That thread may not have been the only still-alive thread running in this time slice. Another thread
+  might have blocked or called thread_yield(), and the currently active thread have been scheduled in
+  its place.
 
->> C6: The assignment explains arithmetic for fixed-point math in
->> detail, but it leaves it open to you to implement it.  Why did you
->> decide to implement it the way you did?  If you created an
->> abstraction layer for fixed-point math, that is, an abstract data
->> type and/or a set of functions or macros to manipulate fixed-point
->> numbers, why did you do so?  If not, why not?
+---- COMPARISON TO LINUX ----
 
-I implemented it with a thin layer of abstraction:
-I defined a type 'fp' that it just an int32_t. This makes the cost
-of my fixed-point arithmetic low (e.g. no need to allocate a struct that
-tracks integral and fractional portions of a number), while still 
-allowing me to change the implementation later if I need to.
+>> L3. Compare your ready queue design to Linux's design for how it maintains
+>> its ready queue for general purpose tasks.
+>> See __enqueue_entity in https://github.com/torvalds/linux/blob/master/kernel/sched/fair.c
 
-I did not use macros because I find they tend to be "write only" -- hard
-for someone else to understand later.
+My "advanced scheduler" (4.4 BSD) ready queue design updates the CPU usage of running threads
+every timer tick, and of all threads once per second (100 ticks).
 
-         SURVEY QUESTIONS
-         ================
+A thread's priority is calculated based on its recent CPU usage, the system load (how many
+different threads have been competing for the CPU recently), and how "nice" the thread is.
+The more CPU a thread uses, and the "nicer" it is, the lower its priority.
+
+Threads are stored in a "ready queue" (an array of 64 linked lists, one per priority).
+Threads are run in a FIFO fashion, starting with the highest-priority list.
+
+When a timer interrupt occurs, the running thread yields and is placed at the end of the
+priority list to which it belongs, so that the CPU is shared relatively equally by threads
+in that priority list.
+
+Linux's "Completely Fair Scheduler" does not use a priority mechanism. Instead it uses
+a time-ordered red-black tree, with the "key" being the amount of time that the thread
+has consumed. New processes tend to fall on the left side of the tree; older processes that have run
+a lot tend to get shifted to the right side of the tree.
+
+A thread only yields the CPU if there is a task with a smaller total runtime, but Linux allows
+some overlap to make sure that it doesn't over-schedule dueling tasks and inconvenience both of
+them by eliminating the benefits of caching.
+
+This brings us to one difference between the 4.4 BSD design I implemented and Linux's design.
+In my implementation of the 4.4 BSD design, there are 64 priority lists. If there are multiple threads
+at the maximum priority level (not unlikely given that the floating-point priority computation
+is rounded to the nearest integer), they will always alternate turns every TIMER_SLICE ticks
+due to the FIFO nature of the priority lists.
+  In Linux, the running thread will only yield when it has consumed as much CPU time as the other thread,
+plus a little bit. This means that in a simple 2-thread system, Linux's CFS scheduler will
+allow threads to benefit from any caching the machine performs on their behalf. 
+
+One benefit of using a list for a ready queue vs. an rb tree is that it is trivial to identify the next element
+to run: it is at the front of the list. The Linux cfs_rq struct tracks the leftmost entry so that it can locate 
+the next task to run in O(1) instead of O(log n).
+
+Another difference is the degree of granularity. My recent_cpu calculation is fuzzier than linux's,
+which tracks an exact runtime rather than a weighted moving average.
+
+>> L4. How many bits does Linux's fixed-point arithmetic (used to compute loadavg) 
+>> use for each fixed-point's fractional part?
+>> Read: https://github.com/torvalds/linux/blob/master/include/linux/sched.h
+
+11 bits.
+
+From linux/sched.h:
+  #define FSHIFT    11    /* nr of bits of precision */
+  #define FIXED_1   (1<<FSHIFT) /* 1.0 as fixed-point */
+
+        SURVEY QUESTIONS
+        ================
 
 Answering these questions is optional, but it will help us improve the
 course in future quarters.  Feel free to tell us anything you
@@ -500,15 +346,55 @@ the quarter.
 >> In your opinion, was this assignment, or any one of the three problems
 >> in it, too easy or too hard?  Did it take too long or too little time?
 
+I enjoyed this assignment. None of the parts were too difficult, although
+a hint or two might have been helpful (e.g. don't write a separate
+kernel thread for waking, or "consider carefully how to do priority donation
+for sema's, since the list there is composed of sema_entry's rather than
+(as the comment states) threads...").
+
 >> Did you find that working on a particular part of the assignment gave
 >> you greater insight into some aspect of OS design?
+
+I initially implemented the alarm clock with a semaphore Up'd by
+timer_interrupt and Down'd by a kernel "waker" thread.
+I got it working, but discovered that I couldn't pass all of the alarm
+tests because the waker thread was subject to the idiosyncrasies of the
+scheduler. I had a mostly-working alarm clock that would wake
+threads "within a few ticks" of when they requested.
+
+You suggested that some costs are worth paying in the timer interrupt handler,
+and I rewrote with a somewhat-optimized priority queue that tracked
+the minimum time-to-wake of all of the threads in the queue.
+
+Overall this experience helped me understand the tradeoffs and design decisions
+faced by OS developers, and really helped me see the amount of interplay between
+moving parts -- the bad behavior between the timer interrupt handler, a kernel
+thread, and the scheduler came as a surprise to me.
+
+In fact, this exercise might be a useful assignment for future years: "When is it
+OK to put computation into the timer interrupt handler, and when can you safely
+offload it to another thread?".
 
 >> Is there some particular fact or hint we should give students in
 >> future quarters to help them solve the problems?  Conversely, did you
 >> find any of our guidance to be misleading?
 
+N/A
+
 >> Do you have any suggestions for the TAs to more effectively assist
 >> students, either for future quarters or the remaining projects?
 
+N/A
+
 >> Any other comments?
 
+1. I appreciated that you provided the formulas for fixed-point real arithmetic.
+That saved me a lot of time.
+
+2. I think offering a 10-20 minute demo in using gdb and cscope to debug a problem might be helpful.
+Those tools are really powerful and if people think "Nah, too much work to learn a new
+tool" then they will not reap the benefits thereof.
+
+3. Adding a "follow-up" component where groups review each other's designs or code might be useful.
+Getting experience doing code reviews and design reviews in this complex area would be helpful,
+and I would like to see what solutions other groups came up with.
