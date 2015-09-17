@@ -215,7 +215,7 @@ pagedir_set_accessed (uint32_t *pd, const void *vpage, bool accessed)
 }
 
 /* Loads page directory PD into the CPU's page directory base
-   register. */
+   register. If PD is NULL, loads init_page_dir instead. */
 void
 pagedir_activate (uint32_t *pd) 
 {
@@ -243,7 +243,7 @@ active_pd (void)
   return ptov (pd);
 }
 
-/* Seom page table changes can cause the CPU's translation
+/* Some page table changes can cause the CPU's translation
    lookaside buffer (TLB) to become out-of-sync with the page
    table.  When this happens, we have to "invalidate" the TLB by
    re-activating it.
