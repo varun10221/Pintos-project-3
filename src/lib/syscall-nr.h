@@ -5,7 +5,8 @@
 enum 
   {
     /* Projects 2 and later. */
-    SYS_HALT,                   /* Halt the operating system. */
+    SYS_MIN,                    /* Minimum system call number, for correctness checking. */
+    SYS_HALT = SYS_MIN,         /* Halt the operating system. */
     SYS_EXIT,                   /* Terminate this process. */
     SYS_EXEC,                   /* Start another process. */
     SYS_WAIT,                   /* Wait for a child process to die. */
@@ -28,7 +29,8 @@ enum
     SYS_MKDIR,                  /* Create a directory. */
     SYS_READDIR,                /* Reads a directory entry. */
     SYS_ISDIR,                  /* Tests if a fd represents a directory. */
-    SYS_INUMBER                 /* Returns the inode number for a fd. */
+    SYS_INUMBER,                /* Returns the inode number for a fd. */
+    SYS_MAX = SYS_INUMBER       /* Maximum system call number, for correctness checking. */
   };
 
 #endif /* lib/syscall-nr.h */
