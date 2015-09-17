@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/stack.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -17,40 +18,102 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
+
+/* Structure for command-line args. */
+struct cl_args
+{
+  int argc;   /* Number of args. */
+  char *args; /* Sequence of c-strings: null-delimited args. */
+};
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
-   FILENAME.  The new thread may be scheduled (and may even exit)
+   ARGS.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
-   thread id, or TID_ERROR if the thread cannot be created. */
+   thread id, or TID_ERROR if the thread cannot be created. 
+  
+   ARGS: file_name [arg1 arg2 ...]
+   */
 tid_t
-process_execute (const char *file_name) 
+process_execute (const char *args) 
 {
-  char *fn_copy;
+  char *args_copy;
+  struct cl_args *cl_args;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  /* Arg checking. */
+  ASSERT (args != NULL);
+  /* Make sure the args (formatted as a struct cl_args) will not be 
+     too long to fit into PGSIZE. 
+     
+     TODO This should be handled more cleanly than an ASSERT. */
+  ASSERT (strlen (args) + sizeof(struct cl_args) < PGSIZE);
+
+  /* Make a copy of ARGS so that we can tokenize it. */
+  args_copy = palloc_get_page (0);
+  if (args_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (args_copy, args, PGSIZE);
+
+  /* Prepare a cl_args to pass to start_process. */
+  cl_args = (struct cl_args *) palloc_get_page (0);
+  if (cl_args == NULL)
+    return TID_ERROR;
+  cl_args->argc = 0;
+  /* Args is in a fresh page, so point it to just past itself. */
+  cl_args->args = (char *) cl_args + offsetof(struct cl_args, args) + sizeof(char *);
+
+  /* Iterate over arguments, tokenized by whitespace. */
+  char *token, *args_copy_save_ptr, *cl_args_ptr;
+  cl_args_ptr = cl_args->args;
+  size_t len;
+  for (token = strtok_r (args_copy, " ", &args_copy_save_ptr); token != NULL;
+       token = strtok_r (NULL, " ", &args_copy_save_ptr))
+  {
+    cl_args->argc++;
+    len = strlcpy(cl_args_ptr, token, PGSIZE);
+    /* Skip ahead over the string we just wrote, including null byte. */
+    cl_args_ptr += len + 1;
+  }
+
+  /* TODO This should be handled more cleanly than an ASSERT. */
+  ASSERT (0 < cl_args->argc);
+
+  /* Free our working memory. */
+  palloc_free_page (args_copy);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  const char *file_name = cl_args->args;
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, cl_args);
+  /* start_process will free cl_args if it starts OK. 
+     If not, we have to clean this up ourselves. */
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (cl_args); 
+
   return tid;
 }
 
-/* A thread function that loads a user process and starts it
-   running. */
-static void
-start_process (void *file_name_)
+/* To set up the initial stack, track offsets
+   of args using a list of int64_elem's. */
+struct int64_elem
 {
-  char *file_name = file_name_;
+  int64_t val;
+  struct list_elem elem;
+};
+
+/* A thread function that loads a user process and starts it
+   running with its args. */
+static void
+start_process (void *cl_args_)
+{
+  ASSERT (cl_args_ != NULL);
+
+  int i;
+  struct cl_args *cl_args = cl_args_;
+  char *file_name = cl_args->args;
   struct intr_frame if_;
   bool success;
 
@@ -59,10 +122,75 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  /* TODO I am here, wondering what to do with my cl_args struct! */
   success = load (file_name, &if_.eip, &if_.esp);
 
+  /* Now esp is the stack pointer. Load up the arguments. */
+  struct int64_elem *ie = NULL; 
+
+  /* Calculate the starting offset of each string. */
+  struct list offset_list;
+  list_init (&offset_list);
+  int64_t off = 0;
+  for (i = 0; i < cl_args->argc; i++)
+  {
+    ie = (struct int64_elem *) malloc(sizeof(struct int64_elem));
+    ie->val = off;
+    list_push_back (&offset_list, &ie->elem);
+    /* Skip to the next string. */
+    off += strlen (cl_args->args + off) + 1;
+  }
+
+  char *orig_stack_top = (char *) if_.esp;
+
+  /* Push arguments onto stack in reverse order. */
+  char *curr = NULL;
+  struct list_elem *e = NULL;
+  for (e = list_rbegin (&offset_list); e != list_rend (&offset_list);
+       e = list_prev (e))
+  {
+    /* Calculate offset of the next arg to push. */
+    ie = list_entry (e, struct int64_elem, elem);
+    curr = cl_args->args + ie->val;
+    stack_push_string (&if_.esp, curr);
+  }
+  /* Round down to multiple of 4. */
+  stack_align (&if_.esp, 4);
+  /* Push a null pointer sentinel. */
+  stack_push_ptr (&if_.esp, NULL);
+
+  /* Push the location of each of the args I pushed above. */
+  char *curr_sp = orig_stack_top;
+  for (e = list_rbegin (&offset_list); e != list_rend (&offset_list);
+       e = list_prev (e))
+  {
+    /* Calculate offset of this arg. */
+    ie = list_entry (e, struct int64_elem, elem);
+    curr = cl_args->args + ie->val;
+    curr_sp -= strlen (curr) + 1;
+    stack_push_ptr (&if_.esp, (void *) curr_sp);
+  }
+
+  /* Push the location of argv itself, which is located at
+     the current location of the stack pointer. */
+  curr_sp = (char *) if_.esp;
+  stack_push_ptr (&if_.esp, curr_sp);
+
+  /* Push argc. */
+  stack_push_int (&if_.esp, cl_args->argc);
+  /* Push fake return address. */
+  stack_push_ptr (&if_.esp, NULL);
+
+  /* Clean up memory. */
+  palloc_free_page (cl_args);
+  while (!list_empty (&offset_list))
+  {
+    struct list_elem *e = list_pop_front (&offset_list);
+    ie = list_entry (e, struct int64_elem, elem);
+    free(ie);
+  }
+
   /* If load failed, quit. */
-  palloc_free_page (file_name);
   if (!success) 
     thread_exit ();
 
@@ -88,6 +216,8 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  /* TODO Infinite loop for now. */
+  for(;;) ; 
   return -1;
 }
 
