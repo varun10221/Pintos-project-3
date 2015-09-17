@@ -77,6 +77,7 @@ stack_push_raw (void **sp, void *data, size_t n_bytes)
   /* Make sure sp won't go below zero when we subtract n_bytes. */
   ASSERT ((void *) n_bytes <= *sp);
 
+  /* Decrement, then push. */
   *sp -= n_bytes;
   memcpy (*sp, data, n_bytes);
   return *sp;
@@ -90,6 +91,7 @@ stack_pop (void **sp)
   ASSERT (sp != NULL);
   ASSERT (*sp != NULL);
 
+  /* Grab value, then increment. */
   void *curr = *sp;
   *sp += sizeof(void *);
   return curr;
