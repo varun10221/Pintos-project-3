@@ -124,7 +124,6 @@ start_process (void *cl_args_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  /* TODO I am here, wondering what to do with my cl_args struct! */
   success = load (file_name, &if_.eip, &if_.esp);
 
   /* Now esp is the stack pointer. Load up the arguments. */
