@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "lib/kernel/fpra.h"
 #include "threads/thread_priorities.h"
+#include "threads/file_table.h"
 
 /* Forward declarations. */
 struct lock;
@@ -128,6 +129,10 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    /* Owned by userprog/process.c using APIs provided by thread.h
+       Maps fd's to struct file *s. 
+       Thread APIs are defined for the fd_table. */
+    struct file_table fd_table;
 #endif
 
     /* Owned by devices/timer.c. */
@@ -208,5 +213,10 @@ bool sleeping_queue_less(const struct list_elem *a,
 bool sleeping_queue_eq (const struct list_elem *a,
                        const struct list_elem *b,
                        void *aux UNUSED);
+
+/* Functions for interacting with a thread's open files. */
+int thread_new_file (const char *file);
+struct file * thread_fd_lookup (int fd);
+void thread_fd_delete (int fd);
 
 #endif /* threads/thread.h */

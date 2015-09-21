@@ -1125,6 +1125,15 @@ init_thread (struct thread *t, const char *name, int priority)
   t->pagedir = NULL;
 #endif
   t->wake_me_at = 0;
+
+#ifdef USERPROG
+  /* The fd_table is left uninitialized. 
+     userprog/process.c does all of the management for fd_table. */
+  t->fd_table.n_elts = 0;
+  t->fd_table.max_elts = 0;
+  t->fd_table.file_arr = NULL;
+#endif
+
   t->elem.sort_val = NULL;
   t->magic = THREAD_MAGIC;
 
@@ -1265,3 +1274,31 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+/* Thread interfaces to the file table. */
+
+/* Open a new fd corresponding to this file. 
+   Returns the fd, or -1 on failure. */
+int 
+thread_new_file (const char *file)
+{
+  ASSERT (file != NULL);
+  return file_table_new_fd (&thread_current ()->fd_table, file);
+}
+
+/* Return the 'struct file*' associated with this fd. 
+   Returns NULL if there is no such fd. */ 
+struct file * 
+thread_fd_lookup (int fd)
+{
+  ASSERT (0 <= fd);
+  return file_table_lookup (&thread_current ()->fd_table, fd);
+}
+
+/* Close the file instance associated with this fd. 
+   If there is no such fd, does nothing. */
+void 
+thread_fd_delete (int fd)
+{
+  file_table_delete_fd (&thread_current ()->fd_table, fd);
+}
