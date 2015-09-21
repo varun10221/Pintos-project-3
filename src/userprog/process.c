@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "threads/file_table.h"
 
 /* Structure for command-line args. */
 struct cl_args
@@ -31,7 +32,7 @@ static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
-   ARGS.  The new thread may be scheduled (and may even exit)
+   ARGS. The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. 
   
@@ -79,7 +80,7 @@ process_execute (const char *args)
     cl_args_ptr += len + 1;
   }
 
-  /* TODO This should be handled more cleanly than an ASSERT. */
+  /* TODO This should be handled more cleanly than with an ASSERT. */
   ASSERT (0 < cl_args->argc);
 
   /* Free our working memory. */
@@ -88,6 +89,7 @@ process_execute (const char *args)
   /* Create a new thread to execute FILE_NAME. */
   const char *file_name = cl_args->args;
   tid = thread_create (file_name, PRI_DEFAULT, start_process, cl_args);
+
   /* start_process will free cl_args if it starts OK. 
      If not, we have to clean this up ourselves. */
   if (tid == TID_ERROR)
@@ -105,7 +107,7 @@ struct int64_elem
 };
 
 /* A thread function that loads a user process and starts it
-   running with its args. */
+   running with its args. Does not return. */
 static void
 start_process (void *cl_args_)
 {
@@ -194,6 +196,18 @@ start_process (void *cl_args_)
   if (!success) 
     thread_exit ();
 
+  /* 3.3.5: Lock writes to the executable while we are running. 
+   
+     Closing a file will re-enable writes.
+
+     TODO Verify that we close open files on our way out. 
+     This is done in process_exit; do we go through there
+     when we die? */
+  int fd = thread_new_file (file_name);
+  struct file *file_obj = thread_fd_lookup (fd);
+  ASSERT (file_obj != NULL);
+  file_deny_write (file_obj);
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -227,6 +241,15 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Close all open file handles and free the memory. */
+  file_table_destroy (&cur->fd_table);
+
+  /* TODO Unlock any locks we hold? Or does this only matter
+     for kernel threads? Can a thread hold locks that are unsafe
+     to leave locked? This would require shared memory, or the ability
+     to lock some kernel object... */
+  ASSERT (list_empty (&cur->lock_list));
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
