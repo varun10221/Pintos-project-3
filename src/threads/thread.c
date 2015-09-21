@@ -368,7 +368,7 @@ thread_tid (void)
   return thread_current ()->tid;
 }
 
-/* Deschedules the current thread and destroys it.  Never
+/* Deschedules the current thread and destroys it. Never
    returns to the caller. */
 void
 thread_exit (void) 
