@@ -271,8 +271,12 @@ static pid_t
 syscall_exec (const char *cmd_line)
 {
   ASSERT (cmd_line != NULL);
-  /* TODO */
-  return 0;
+
+  tid_t ret = process_execute (cmd_line);
+  pid_t pid = (pid_t) ret;
+  /* Wait for child to try to load its executable.
+     Return -1 if it fails to load. */
+  return pid;
 }
 
 /* Waits for a child process pid and retrieves the child's exit status.
