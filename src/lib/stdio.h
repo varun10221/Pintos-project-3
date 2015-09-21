@@ -15,6 +15,8 @@
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 
+#define N_RESERVED_FILENOS 2
+
 /* Standard functions. */
 int printf (const char *, ...) PRINTF_FORMAT (1, 2);
 int snprintf (char *, size_t, const char *, ...) PRINTF_FORMAT (3, 4);
