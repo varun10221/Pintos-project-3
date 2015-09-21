@@ -6,11 +6,14 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "threads/synch.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
 
 static void do_format (void);
+
+static struct lock filesys_mutex;
 
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
@@ -28,6 +31,8 @@ filesys_init (bool format)
     do_format ();
 
   free_map_open ();
+
+  lock_init (&filesys_mutex);
 }
 
 /* Shuts down the file system module, writing any unwritten data
@@ -100,4 +105,20 @@ do_format (void)
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");
+}
+
+/* P2: You should use synchronization to ensure that only one process 
+   at a time is executing file system code. */
+void
+filesys_lock ()
+{
+  lock_acquire (&filesys_mutex);
+}
+
+/* P2: You should use synchronization to ensure that only one process 
+   at a time is executing file system code. */
+void
+filesys_unlock ()
+{
+  lock_release (&filesys_mutex);
 }
