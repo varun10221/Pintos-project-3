@@ -5,6 +5,7 @@
 #include <syscall-nr.h>
 #include "userprog/stack.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -258,8 +259,10 @@ syscall_halt ()
 static void 
 syscall_exit (int status)
 {
-  /* TODO */
-  return;
+  /* TODO Do something with status. */
+
+  thread_exit ();
+  NOT_REACHED ();
 }
 
 /* Runs the executable whose name is given in cmd_line, passing any given arguments, 
