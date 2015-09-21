@@ -202,10 +202,19 @@ start_process (void *cl_args_)
      TODO Verify that we close open files on our way out. 
      This is done in process_exit; do we go through there
      when we die? */
+  filesys_lock ();
   int fd = thread_new_file (file_name);
-  struct file *file_obj = thread_fd_lookup (fd);
-  ASSERT (file_obj != NULL);
-  file_deny_write (file_obj);
+  if (0 <= fd)
+  {
+    struct file *file_obj = thread_fd_lookup (fd);
+    ASSERT (file_obj != NULL);
+    file_deny_write (file_obj);
+  }
+  filesys_unlock ();
+  
+  /* If we couldn't open the file, quit. Something is quite wrong. */
+  if(fd < 0)
+    thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
