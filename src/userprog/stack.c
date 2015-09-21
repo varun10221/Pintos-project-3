@@ -54,6 +54,7 @@ stack_push_ptr (void **sp, void *ptr)
 void *
 stack_align (void **sp, size_t align)
 {
+  ASSERT (0 < align);
   uint32_t diff = (uint32_t) *sp % align;
   /* Shift down the appropriate amount and zero out the memory. */
   if (diff)

@@ -9,18 +9,29 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "devices/shutdown.h"
+#include "devices/input.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "lib/user/syscall.h"
-
-/* For masking with syscall_isptr. */
-#define ARG_ONE   (1 << 0)
-#define ARG_TWO   (1 << 1)
-#define ARG_THREE (1 << 2)
 
 /* Size of tables. */
 #define N_SUPPORTED_SYSCALLS 13
 
 /* Read/write buffer size. We do IO in this unit. */
-#define IO_BUFSIZE 512
+#define STDINOUT_BUFSIZE 512
+
+enum io_type 
+  {
+    IO_TYPE_READ, /* IO will read. */
+    IO_TYPE_WRITE /* IO will write. */
+  };
+
+/* For testing user-provided addresses. */
+static bool is_valid_uaddr (uint32_t *pd, const void *uaddr);
+static bool is_valid_ustring (uint32_t *pd, const char *u_str);
+static bool is_valid_ubuf (uint32_t *pd, const void *u_buf, unsigned size, enum io_type io_t);
+static int get_user (const uint8_t *uaddr);
+static bool put_user (uint8_t *udst, uint8_t byte);
 
 /* Number of args for each syscall.
    Table is indexed by SYSCALL_* value from lib/syscall-nr.h */
@@ -35,18 +46,17 @@ static int syscall_nargs[N_SUPPORTED_SYSCALLS] =
 1 /* close */
 };
 
-/* Represent whether a syscall arg is a pointer or not
-   with a mask: is_pointer = (ptr & ARG_{ONE,TWO,THREE}).
+/* Whether or not the syscall has a user-provided address.
    Table is indexed by SYSCALL_* value from lib/syscall-nr.h */
-static int syscall_isptr[N_SUPPORTED_SYSCALLS] =
+static bool syscall_has_pointer[N_SUPPORTED_SYSCALLS] =
 {
-0       /* halt */,       0 /* exit */,
-ARG_ONE /* exec */,       0 /* wait */,
-ARG_ONE /* create */,     ARG_ONE /* remove */,
-ARG_ONE /* open */,       1 /* filesize */,
-ARG_TWO /* read */,       ARG_TWO /*write */,
-0       /* seek */,       0 /* tell */,
-0       /* close */
+false /* halt */,   false /* exit */,
+true /* exec */,    false /* wait */,
+true /* create */,  true /* remove */,
+true /* open */,    false /* filesize */,
+true /* read */,    true /*write */,
+false /* seek */,   false /* tell */,
+false /* close */
 };
 
 static void syscall_handler (struct intr_frame *);
@@ -71,8 +81,6 @@ static void syscall_seek (int fd, unsigned position);
 static unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
 
-static bool is_valid_uaddr (uint32_t *pd, const void *uaddr);
-
 static void
 syscall_handler (struct intr_frame *f) 
 {
@@ -93,28 +101,74 @@ syscall_handler (struct intr_frame *f)
   ASSERT (SYS_MIN <= syscall && syscall <= SYS_MAX);
 
   /* Extract the args. */
-  int32_t args[3]; /* All args on stack are 4 bytes; cast as appropriate. */
-  /* TODO look up in a table. */
 
+  /* No syscall takes more than 3 args. All args on stack are 4 bytes; cast as appropriate. */
+  int32_t args[3]; 
   for(i = 0; i < syscall_nargs[syscall - SYS_MIN]; i++)
-  {
     args[i] = *(int32_t *) stack_pop (&sp);
-    int ptr_bit = (1 << i);
-    if (syscall_isptr[syscall - SYS_MIN] & ptr_bit)
+
+  /* For those syscalls that evaluate a user-provided address,
+     test here for safety. This allows us to centralize the error handling
+     and lets us simply the syscall_* routines. 
+     
+     If an address is invalid, we change the syscall to SYS_EXIT to terminate
+     the program. */
+  if (syscall_has_pointer[syscall - SYS_MIN])
+  {
+    /* Either ustr or ubuf will be set to non-NULL. */
+    char *ustr = NULL, *ubuf = NULL;
+    unsigned length = 0;
+    enum io_type io_t;
+    switch (syscall)
     {
-      void *p = (void *) args[i];
-      /* Verify that pointer points to valid user space. */
-      if (!is_valid_uaddr (pd, p))
-      {
-        /* If invalid, cleanly terminate the caller. */
-        syscall = SYS_EXIT;
+      case SYS_EXEC:                   /* Start another process. */
+        ustr = (char *) args[0];
         break;
+      case SYS_CREATE:                 /* Create a file. */
+        ustr = (char *) args[0];
+        break;
+      case SYS_REMOVE:                 /* Delete a file. */
+        ustr = (char *) args[0];
+        break;
+      case SYS_OPEN:                   /* Open a file. */
+        ustr = (char *) args[0];
+        break;
+      case SYS_READ:                   /* Read from a file. */
+        ubuf = (void *) args[1];
+        length = (unsigned) args[2];
+        io_t = IO_TYPE_READ;
+        break;
+      case SYS_WRITE:                  /* Write to a file. */
+        ubuf = (void *) args[1];
+        length = (unsigned) args[2];
+        io_t = IO_TYPE_WRITE;
+        break;
+      default:
+        NOT_REACHED ();
+    }
+
+    ASSERT (ustr != NULL || ubuf != NULL); 
+    if (ustr != NULL)
+    {
+      if (!is_valid_ustring (pd, ustr))
+      {
+        /* Exit in error. Use -1 to match API of wait(). */
+        syscall = SYS_EXIT;
+        args[0] = -1;
       }
     }
-  }
+    else if (ubuf != NULL)
+    {
+      if (!is_valid_ubuf (pd, ubuf, length, io_t))
+      {
+        /* Exit in error. Use -1 to match API of wait(). */
+        syscall = SYS_EXIT;
+        args[0] = -1;
+      }
+    }
+  } /* End of user-provided address handling. */
 
-  /* Now all of the args have been tested for safety, so
-    we just pass the buck. */
+  /* Ready to handle whatever syscall they requested. */
   switch (syscall)
   {
     case SYS_HALT:                   /* Halt the operating system. */
@@ -184,63 +238,163 @@ syscall_handler (struct intr_frame *f)
   };  
 }
 
-static void syscall_halt ()
+/* Any user-provided addresses given to the syscall_* routines have
+   already been tested for correctness.
+
+   The use of an invalid fd produces undefined behavior. */
+
+/* Terminates Pintos by calling shutdown_power_off(). */
+static void 
+syscall_halt ()
 {
   /* TODO Anything else? */
   shutdown_power_off ();
 }
 
-static void syscall_exit (int status)
+/* Terminates the current user program, returning status to the kernel. 
+   If the process's parent waits for it (see below), this is the status that 
+   will be returned. Conventionally, a status of 0 indicates success and nonzero
+   values indicate errors. */
+static void 
+syscall_exit (int status)
 {
   /* TODO */
   return;
 }
 
-static pid_t syscall_exec (const char *cmd_line)
+/* Runs the executable whose name is given in cmd_line, passing any given arguments, 
+   and returns the new process's program id (pid). Must return pid -1, which 
+   otherwise should not be a valid pid, if the program cannot load or run for any 
+   reason. Thus, the parent process will not return from the exec until it knows 
+   whether the child process successfully loaded its executable. */
+static pid_t 
+syscall_exec (const char *cmd_line)
 {
+  ASSERT (cmd_line != NULL);
   /* TODO */
   return 0;
 }
 
-static int syscall_wait (pid_t pid)
+/* Waits for a child process pid and retrieves the child's exit status.
+   If pid is still alive, waits until it terminates. */
+static int 
+syscall_wait (pid_t pid)
 {
   /* TODO */
   return -1;
 }
 
-static bool syscall_create (const char *file, unsigned initial_size)
+/* Creates a new file called file initially initial_size bytes in size. 
+   Returns true if successful, false otherwise. */
+static bool 
+syscall_create (const char *file, unsigned initial_size)
 {
-  /* TODO */
-  return false;
+  ASSERT (file != NULL);
+
+  bool success = false;
+  filesys_lock ();
+  success = filesys_create (file, initial_size);
+  filesys_unlock ();
+  return success;
 }
 
-static bool syscall_remove (const char *file)
+/* Deletes the file called file. Returns true if successful, false otherwise. */
+static bool 
+syscall_remove (const char *file)
 {
-  /* TODO */
-  return false;
+  ASSERT (file != NULL);
+
+  bool success = false;
+  filesys_lock ();
+  /* Note that this has no effect on outstanding fd's in this process's fd_table. */
+  success = filesys_remove (file);
+  filesys_unlock ();
+  return success;
 }
 
-static int syscall_open (const char *file)
+/* Opens the file called file. 
+   Returns a nonnegative integer handle called a "file descriptor" (fd), 
+   or -1 if the file could not be opened. */
+static int 
+syscall_open (const char *file)
 {
-  /* TODO */
-  return -1;
+  ASSERT (file != NULL);
+
+  filesys_lock ();
+  int fd = thread_new_file (file);
+  filesys_unlock ();
+  return fd;
 }
 
-static int syscall_filesize (int fd)
+/* Returns the size, in bytes, of the file open as fd. */
+static int 
+syscall_filesize (int fd)
 {
-  /* TODO */
-  return -1;
+  int rc = -1;
+  filesys_lock ();
+  struct file *f = thread_fd_lookup (fd);
+  if (f != NULL)
+    rc = file_length (f);
+  filesys_unlock ();
+  return rc;
 }
 
-static int syscall_read (int fd, void *buffer, unsigned size)
+/* Reads size bytes from the file open as fd into buffer. 
+   Returns the number of bytes actually read (0 at end of file), 
+   or -1 if the file could not be read (due to a condition other than end of file). 
+  
+   Fd 0 reads from the keyboard. */
+static int 
+syscall_read (int fd, void *buffer, unsigned size)
 {
-  /* TODO */
-  return -1;
+  bool is_valid_fd = (fd == STDIN_FILENO || N_RESERVED_FILENOS <= fd);
+  if (!is_valid_fd)
+    return -1;
+
+  ASSERT (buffer != NULL);
+
+  unsigned n_left = size;
+  unsigned n_read = 0;
+
+  if (fd == STDOUT_FILENO)
+  {
+    unsigned i;
+    char *buf = (char *) buffer;
+    for (i = 0; i < n_left; i++)
+    {
+      buf[i] = (char) input_getc ();
+    }
+  }
+  else
+  {
+    n_read = 0;
+    filesys_lock ();
+    struct file *f = thread_fd_lookup (fd);
+    if (f == NULL)
+      /* We don't have this fd open. */
+      return -1;
+    else
+      /* Let file_read do any desired buffering. */
+      n_read = file_read (f, buffer, size);
+    filesys_unlock ();
+  }
+
+  return n_read;
 }
 
-static int syscall_write (int fd, const void *buffer, unsigned size)
+/* Writes size bytes from buffer to the open file fd. 
+   Returns the number of bytes actually written,
+   which may be less than size if some bytes could not be written.  
+
+   Fd 1 writes to the console. */
+static int 
+syscall_write (int fd, const void *buffer, unsigned size)
 {
-  ASSERT (STDOUT_FILENO <= fd);
+  bool is_valid_fd = (fd == STDOUT_FILENO || N_RESERVED_FILENOS <= fd);
+  if (! is_valid_fd)
+    return -1;
+
+  ASSERT (buffer != NULL);
 
   unsigned n_to_write;
   unsigned n_left = size;
@@ -250,8 +404,8 @@ static int syscall_write (int fd, const void *buffer, unsigned size)
   {
     while (n_left)
     {
-      /* Write no more than IO_BUFSIZE. */
-      n_to_write = (IO_BUFSIZE <= n_left ? IO_BUFSIZE : n_left);
+      /* Write no more than STDINOUT_BUFSIZE at a time. */
+      n_to_write = (STDINOUT_BUFSIZE <= n_left ? STDINOUT_BUFSIZE : n_left);
       putbuf (buffer + n_written, n_to_write);
       n_written += n_to_write;
       n_left -= n_to_write;
@@ -259,36 +413,152 @@ static int syscall_write (int fd, const void *buffer, unsigned size)
   }
   else
   {
-    /* TODO */
-    n_written = -1;
+    n_written = 0;
+    filesys_lock ();
+    struct file *f = thread_fd_lookup (fd);
+    if (f == NULL)
+      /* We don't have this fd open. */
+      return -1;
+    else
+      /* Let file_write do any desired buffering. */
+      n_written = file_write (f, buffer, size);
+    filesys_unlock ();
   }
 
   return n_written;
 }
 
-static void syscall_seek (int fd, unsigned position)
+/* Changes the next byte to be read or written in open file fd to position, 
+   expressed in bytes from the beginning of the file. */
+static void 
+syscall_seek (int fd, unsigned position)
 {
-  /* TODO */
+  filesys_lock ();
+  struct file *f = thread_fd_lookup (fd);
+  if (f != NULL)
+    file_seek (f, position);
+  filesys_unlock ();
   return;
 }
 
-static unsigned syscall_tell (int fd)
+/* Returns the position of the next byte to be read or written in open file fd,
+   expressed in bytes from the beginning of the file. */
+static unsigned 
+syscall_tell (int fd)
 {
-  /* TODO */
-  return 0;
+  unsigned rc = 0;
+
+  filesys_lock ();
+  struct file *f = thread_fd_lookup (fd);
+  if (f != NULL)
+    rc = file_tell (f);
+  filesys_unlock ();
+  
+  return rc;
 }
 
-static void syscall_close (int fd)
+/* Closes file descriptor fd. */
+static void 
+syscall_close (int fd)
 {
-  /* TODO */
+  filesys_lock ();
+  thread_fd_delete (fd);
+  filesys_unlock ();
   return;
 }
 
-/* Returns true if uaddr is non-null and is valid in this pagedir, and false else. */
-static
-bool is_valid_uaddr (uint32_t *pd, const void *uaddr)
+/* Returns true if uaddr is non-null and points to already-mapped non-kernel address space. */
+static bool 
+is_valid_uaddr (uint32_t *pd, const void *uaddr)
+{
+  /* TODO Inefficient, but need clarification from Dr. Back on the use of get_user. */
+  return (uaddr != NULL && is_user_vaddr (uaddr) && pagedir_get_page (pd, uaddr) != NULL);
+}
+
+/* Returns true if we can read this user-provided c-string 
+   without pagefaulting or leaving the user's legal address space. */
+static bool 
+is_valid_ustring (uint32_t *pd, const char *u_str)
 {
   ASSERT (pd != NULL);
+  ASSERT (u_str != NULL);
 
-  return (uaddr != NULL && is_user_vaddr (uaddr) && pagedir_get_page (pd, uaddr) != NULL);
+  /* Is the first byte safe? */
+  if (!is_valid_uaddr(pd, u_str))
+    return false;
+
+  /* The first byte is safe. Check each byte until we reach the
+     end of the string or encounter an illegal address. */
+  char *p = u_str;
+
+  /* Invariant: *p is a safe address to dereference. */
+  while (*p != '\0')
+  {
+    p++; 
+    /* Read this byte and see if it's OK. */
+    if (!is_valid_uaddr (pd, p))
+      return false;
+  }
+
+  return true;
+}
+
+/* Returns true if we can read or write this user-provided buffer
+   without pagefaulting or leaving the user's legal address space. */
+static bool 
+is_valid_ubuf (uint32_t *pd, const void *u_buf, unsigned size, enum io_type io_t)
+{
+  ASSERT (pd != NULL);
+  ASSERT (u_buf != NULL);
+  ASSERT (io_t == IO_TYPE_READ || IO_TYPE_WRITE);
+
+  /* TODO Speed enhancement: We only need to test the first byte and every subsequent page boundary. */
+
+  /* Test each byte. */
+  unsigned i;
+  for (i = 0; i < size; i++)
+  {
+    if (!is_valid_uaddr(pd, u_buf+i))
+      return false;
+    /* For use with get_char / put_char. */
+    /*
+    if (io_t == IO_TYPE_WRITE)
+    {
+      Try a put_char
+    }
+    else
+    {
+      Try a get_char
+    }
+    */
+  }
+
+  return true;
+}
+
+/* Code to allow faster user address checking. */
+
+/* Reads a byte at user virtual address UADDR.
+   UADDR must be below PHYS_BASE.
+   Returns the byte value if successful, -1 if a segfault
+   occurred. */
+static int
+get_user (const uint8_t *uaddr)
+{
+  int result;
+  asm ("movl $1f, %0; movzbl %1, %0; 1:"
+       : "=&a" (result) : "m" (*uaddr));
+  return result;
+}
+ 
+/* Writes BYTE to user address UDST.
+   UDST must be below PHYS_BASE.
+   Returns true if successful, false if a segfault occurred. */
+static bool
+put_user (uint8_t *udst, uint8_t byte)
+{
+   int error_code;
+   asm ("movl $1f, %0; movb %b2, %1; 1:"
+        : "=&a" (error_code), "=m" (*udst) : "q" (byte));
+   return error_code != -1;
 }

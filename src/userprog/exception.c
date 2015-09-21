@@ -148,6 +148,17 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+  /* Page fault in the kernel: This is caused by an invalid user pointer
+     provided to a system call. Copy eax to eip and set eax to 0xffffffff
+     to communicate to syscall.c::get_user, put_user. */
+  if (!user)
+  {
+    /* TODO Is this right? */
+    f->eip = (void *) f->eax;
+    f->eax = 0xffffffff;
+    return;
+  }
+
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
