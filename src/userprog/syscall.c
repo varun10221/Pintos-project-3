@@ -259,7 +259,12 @@ syscall_halt ()
 static void 
 syscall_exit (int status)
 {
-  /* TODO Do something with status. */
+  /* Mark our exit status in our child_info_self pointer. 
+     This allows process_exit to call process_mark_exiting with
+     the correct exit status. */
+  struct child_process_info *cpi = thread_current ()->child_info_self;
+  ASSERT (cpi != NULL);
+  cpi->child_exit_status = status;
 
   thread_exit ();
   NOT_REACHED ();

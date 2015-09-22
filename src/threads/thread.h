@@ -11,6 +11,7 @@
 
 /* Forward declarations. */
 struct lock;
+struct child_process_info;
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -133,6 +134,10 @@ struct thread
        Maps fd's to struct file *s. 
        Thread APIs are defined for the fd_table. */
     struct file_table fd_table;
+
+    /* Owned by userprog/process.c. */
+    struct list child_list; /* List of direct children. */
+    struct child_process_info *child_info_self; /* Pointer to my entry in my parent's child_list. */
 #endif
 
     /* Owned by devices/timer.c. */
@@ -165,6 +170,7 @@ tid_t thread_tid (void);
 const char *thread_name (void);
 enum thread_status thread_get_status (struct thread *);
 bool thread_is_sleeping (struct thread *);
+struct child_process_info * thread_get_child_info_self (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);

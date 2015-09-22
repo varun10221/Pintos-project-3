@@ -323,6 +323,13 @@ thread_name (void)
   return thread_current ()->name;
 }
 
+/* Returns the child_info_self field associated of the running thread. */
+struct child_process_info * 
+thread_get_child_info_self (void)
+{
+  return thread_current ()->child_info_self;
+}
+
 /* Returns the status of the specified thread. */
 enum thread_status
 thread_get_status (struct thread *thr)

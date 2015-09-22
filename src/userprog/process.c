@@ -31,6 +31,98 @@ struct cl_args
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+/* IPC between parent and child. */
+struct child_process_info * process_parent_prepare_child_info (void);
+struct child_process_info * process_parent_lookup_child (tid_t child);
+
+void process_mark_loaded (bool did_load_successfully);
+bool process_wait_for_child_load (tid_t child);
+
+void process_mark_exiting (int exit_status);
+int process_wait_for_child_exit (tid_t child);
+
+void child_process_info_atomic_inc_refcount (struct child_process_info *cpi);
+bool child_process_info_atomic_dec_refcount (struct child_process_info *cpi);
+
+/* Child marks that it is loaded and sets its load status. */
+void 
+process_mark_loaded (bool did_load_successfully)
+{
+}
+
+/* Child marks that it is exiting and sets its exit status. */
+void 
+process_mark_exiting (int exit_status)
+{
+}
+
+/* Wait until child loads, then return its load status.
+   True if successfully loaded, else false. */
+bool
+process_wait_for_child_load (tid_t child)
+{
+  ASSERT (0 <= child);
+  return false;
+}
+
+/* Wait until child exits, then return its exit status. */
+int
+process_wait_for_child_exit (tid_t child)
+{
+  ASSERT (0 <= child);
+  return -1;
+}
+
+/* Return the cpi associated with this child.
+   Returns NULL if we have no record of this child.
+    'No record' could occur for two reasons:
+      1. We did not make a child with this tid_t.
+      2. We made such a child but have already called process_wait_for_child_exit. */
+struct child_process_info * 
+process_parent_lookup_child (tid_t child)
+{
+  ASSERT (0 <= child);
+  return NULL;
+}
+
+struct child_process_info * 
+process_parent_prepare_child_info (void)
+{
+  return NULL;
+}
+
+/* Atomically increment the ref count. */
+void child_process_info_atomic_inc_refcount (struct child_process_info *cpi)
+{
+  ASSERT (cpi != NULL);
+
+  lock_acquire (&cpi->ref_count_lock);
+  cpi->ref_count++;
+  lock_release (&cpi->ref_count_lock);
+}
+
+/* Atomically decrement the ref count. If it is 0, we free the cpi.
+   Returns true if the cpi is still valid, false else. */
+bool child_process_info_atomic_dec_refcount (struct child_process_info *cpi)
+{
+  ASSERT (cpi != NULL);
+
+  bool did_free = false;
+
+  lock_acquire (&cpi->ref_count_lock);
+
+  cpi->ref_count--;
+  if (cpi->ref_count)
+    lock_release (&cpi->ref_count_lock);
+  else
+  {
+    free (cpi);
+    did_free = true;
+  }
+
+  return did_free;
+}
+
 /* Starts a new thread running a user program loaded from
    ARGS. The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
@@ -258,6 +350,10 @@ process_exit (void)
      to leave locked? This would require shared memory, or the ability
      to lock some kernel object... */
   ASSERT (list_empty (&cur->lock_list));
+
+  /* Tell parent that we're exiting.
+     Exit status must have been set already (done in syscall_exit). */
+  process_mark_exiting (thread_get_child_info_self ()->child_exit_status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
