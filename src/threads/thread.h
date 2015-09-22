@@ -171,6 +171,7 @@ const char *thread_name (void);
 enum thread_status thread_get_status (struct thread *);
 bool thread_is_sleeping (struct thread *);
 struct child_process_info * thread_get_child_info_self (void);
+void thread_set_child_info_self (struct child_process_info *cpi);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);

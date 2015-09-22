@@ -10,6 +10,10 @@
    safe for both parent and child to access even if the other has
    exited.
 
+   The parent MUST have called process_wait_for_child_load before 
+     it returns from syscall_exec. Otherwise we risk a null pointer
+     dereference in start_process.
+
    The embedded sema and lock allow parent and child to synchronize. */
 struct child_process_info
 {
@@ -22,7 +26,8 @@ struct child_process_info
 
   /* status_sema is Up'd twice by the child and
      Down'd twice by the parent:
-     Once each for did_child_load_successfully, child_exit_status. */
+     Once each for did_child_load_successfully, child_exit_status.
+     Parent must Down for did_...success first and child_exit_status second. */
   struct semaphore status_sema;
   bool did_child_load_successfully; /* True if load() works in start_process, false else. */
   int child_exit_status; /* Set when child calls syscall_exit. */
@@ -35,5 +40,8 @@ tid_t process_execute (const char *file_name);
 int process_wait (tid_t);
 void process_exit (void);
 void process_activate (void);
+
+/* Used by syscall.c */
+void process_set_exit_status (int exit_status);
 
 #endif /* userprog/process.h */

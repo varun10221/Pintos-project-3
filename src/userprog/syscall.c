@@ -82,6 +82,9 @@ static void syscall_seek (int fd, unsigned position);
 static unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
 
+/* Handle the syscall contained in this stack frame.
+   Any invalid pointers (stack pointer itself, or values
+   referred to therein) will prompt exit(-1). */
 static void
 syscall_handler (struct intr_frame *f) 
 {
@@ -96,6 +99,13 @@ syscall_handler (struct intr_frame *f)
   uint32_t *pd = thread_current ()->pagedir;
   /* Copy esp so we can navigate the stack without disturbing the caller. */
   void *sp = f->esp;
+
+  /* Verify sp is valid. */
+  if (!is_valid_uaddr (pd, sp))
+  {
+    syscall_exit (-1);
+  }
+
   /* Identify syscall. */
   int32_t syscall = *(int32_t *) stack_pop (&sp);
 
@@ -259,12 +269,8 @@ syscall_halt ()
 static void 
 syscall_exit (int status)
 {
-  /* Mark our exit status in our child_info_self pointer. 
-     This allows process_exit to call process_mark_exiting with
-     the correct exit status. */
-  struct child_process_info *cpi = thread_current ()->child_info_self;
-  ASSERT (cpi != NULL);
-  cpi->child_exit_status = status;
+  /* Mark our exit status. */
+  process_set_exit_status (status);
 
   thread_exit ();
   NOT_REACHED ();
@@ -280,11 +286,8 @@ syscall_exec (const char *cmd_line)
 {
   ASSERT (cmd_line != NULL);
 
-  tid_t ret = process_execute (cmd_line);
-  pid_t pid = (pid_t) ret;
-  /* Wait for child to try to load its executable.
-     Return -1 if it fails to load. */
-  return pid;
+  tid_t child = process_execute (cmd_line);
+  return child;
 }
 
 /* Waits for a child process pid and retrieves the child's exit status.
@@ -292,8 +295,7 @@ syscall_exec (const char *cmd_line)
 static int 
 syscall_wait (pid_t pid)
 {
-  /* TODO */
-  return -1;
+  return process_wait (pid);
 }
 
 /* Creates a new file called file initially initial_size bytes in size. 

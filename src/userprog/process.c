@@ -31,46 +31,93 @@ struct cl_args
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-/* IPC between parent and child. */
-struct child_process_info * process_parent_prepare_child_info (void);
-struct child_process_info * process_parent_lookup_child (tid_t child);
+/* IPC between parent and child for syscall_{exec,wait,exit}. */
 
-void process_mark_loaded (bool did_load_successfully);
-bool process_wait_for_child_load (tid_t child);
+/* Used by parent. */
+static struct child_process_info * process_parent_prepare_child_info (void);
+static struct child_process_info * process_parent_lookup_child (tid_t child);
 
-void process_mark_exiting (int exit_status);
-int process_wait_for_child_exit (tid_t child);
+/* Used by child. */
+static void process_set_load_success (bool did_load_succeed);
+static void process_signal_loaded (void);
+/* Used by parent. */
+static bool process_wait_for_child_load (struct child_process_info *cpi);
 
-void child_process_info_atomic_inc_refcount (struct child_process_info *cpi);
-bool child_process_info_atomic_dec_refcount (struct child_process_info *cpi);
+/* Used by child. */
+static void process_signal_exiting (void);
+/* Used by parent. */
+static int process_wait_for_child_exit (tid_t child);
 
-/* Child marks that it is loaded and sets its load status. */
-void 
-process_mark_loaded (bool did_load_successfully)
+/* Used by parent and child. */
+static void child_process_info_atomic_inc_refcount (struct child_process_info *cpi);
+static bool child_process_info_atomic_dec_refcount (struct child_process_info *cpi);
+
+/* Process sets whether or not it loaded successfully. */
+static void
+process_set_load_success (bool did_load_succeed)
 {
+  thread_get_child_info_self ()->did_child_load_successfully = did_load_succeed; 
 }
 
-/* Child marks that it is exiting and sets its exit status. */
-void 
-process_mark_exiting (int exit_status)
+/* Child signals that it has set its load status. */
+static void 
+process_signal_loaded (void)
 {
+  sema_up (&thread_get_child_info_self ()->status_sema);
+}
+
+/* Child sets its exit status. */
+void
+process_set_exit_status (int exit_status)
+{
+  thread_get_child_info_self ()->child_exit_status = exit_status;
+}
+
+/* Child signals that it has exited. */
+static void 
+process_signal_exiting (void)
+{
+  struct child_process_info *cpi = thread_get_child_info_self ();
+  ASSERT (cpi != NULL);
+
+  sema_up (&cpi->status_sema);
+  child_process_info_atomic_dec_refcount (cpi);
 }
 
 /* Wait until child loads, then return its load status.
    True if successfully loaded, else false. */
-bool
-process_wait_for_child_load (tid_t child)
+static bool
+process_wait_for_child_load (struct child_process_info *cpi)
 {
-  ASSERT (0 <= child);
-  return false;
+  ASSERT (cpi != NULL);
+
+  sema_down (&cpi->status_sema);
+  return cpi->did_child_load_successfully;
 }
 
 /* Wait until child exits, then return its exit status. */
-int
+static int
 process_wait_for_child_exit (tid_t child)
 {
-  ASSERT (0 <= child);
-  return -1;
+  /* Invalid tid. */
+  if(child < 0)
+    return -1;
+
+  struct child_process_info *cpi = process_parent_lookup_child (child);
+  /* No such child: invalid or we waited already. */
+  if (cpi == NULL)
+    return -1;
+
+  /* First time we are waiting on a valid child. */ 
+  list_remove (&cpi->elem);
+
+  /* Wait for child to mark itself done. */
+  sema_down (&cpi->status_sema);
+
+  /* Get status and decrement the refcount. */
+  int status = cpi->child_exit_status;
+  child_process_info_atomic_dec_refcount (cpi);
+  return status;
 }
 
 /* Return the cpi associated with this child.
@@ -78,21 +125,50 @@ process_wait_for_child_exit (tid_t child)
     'No record' could occur for two reasons:
       1. We did not make a child with this tid_t.
       2. We made such a child but have already called process_wait_for_child_exit. */
-struct child_process_info * 
+static struct child_process_info * 
 process_parent_lookup_child (tid_t child)
 {
   ASSERT (0 <= child);
+
+  struct list_elem *e;
+
+  struct list *child_list = &thread_current ()->child_list;
+  for (e = list_begin (child_list); e != list_end (child_list);
+       e = list_next (e))
+    {
+      struct child_process_info *cpi = list_entry (e, struct child_process_info, elem);
+      if (cpi->child_tid == child)
+        return cpi;
+    }
   return NULL;
 }
 
-struct child_process_info * 
+/* Prepare a new 'struct child_process_info' with refcount 1.
+   Add it to the parent's child_list. */
+static struct child_process_info * 
 process_parent_prepare_child_info (void)
 {
-  return NULL;
+  struct child_process_info *cpi = (struct child_process_info *) malloc(sizeof(struct child_process_info));
+  if (cpi == NULL)
+    return NULL;
+
+  cpi->child_tid = -1;
+  cpi->parent_tid = thread_tid ();
+  lock_init (&cpi->ref_count_lock);
+  sema_init (&cpi->status_sema, 0);
+  cpi->did_child_load_successfully = false;
+  cpi->child_exit_status = -1;
+
+  /* Add to parent's child_list. */
+  list_push_back (&thread_current ()->child_list, &cpi->elem);
+  cpi->ref_count = 1;
+
+  return cpi;
 }
 
 /* Atomically increment the ref count. */
-void child_process_info_atomic_inc_refcount (struct child_process_info *cpi)
+static void 
+child_process_info_atomic_inc_refcount (struct child_process_info *cpi)
 {
   ASSERT (cpi != NULL);
 
@@ -103,30 +179,42 @@ void child_process_info_atomic_inc_refcount (struct child_process_info *cpi)
 
 /* Atomically decrement the ref count. If it is 0, we free the cpi.
    Returns true if the cpi is still valid, false else. */
-bool child_process_info_atomic_dec_refcount (struct child_process_info *cpi)
+static bool 
+child_process_info_atomic_dec_refcount (struct child_process_info *cpi)
 {
   ASSERT (cpi != NULL);
 
-  bool did_free = false;
+  bool is_still_valid = true;
 
   lock_acquire (&cpi->ref_count_lock);
 
   cpi->ref_count--;
-  if (cpi->ref_count)
-    lock_release (&cpi->ref_count_lock);
-  else
+
+  /* Were we the last to hold a reference? 
+   
+     NB: do this test atomically to avoid race
+      with parent and child decrementing concurrently and
+      then both trying to free the cpi. */
+  if (cpi->ref_count == 0)
   {
+    lock_release (&cpi->ref_count_lock);
     free (cpi);
-    did_free = true;
+    is_still_valid = false;
+  }
+  else{
+    lock_release (&cpi->ref_count_lock);
   }
 
-  return did_free;
+  return is_still_valid;
 }
 
 /* Starts a new thread running a user program loaded from
    ARGS. The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. 
+
+   Will not return until the new thread has loaded
+   its executable and signald whether it succeeded or failed.
   
    ARGS: file_name [arg1 arg2 ...]
    */
@@ -151,10 +239,18 @@ process_execute (const char *args)
     return TID_ERROR;
   strlcpy (args_copy, args, PGSIZE);
 
-  /* Prepare a cl_args to pass to start_process. */
-  cl_args = (struct cl_args *) palloc_get_page (0);
-  if (cl_args == NULL)
+  void *thr_args = palloc_get_page (0);
+  if (thr_args == NULL)
     return TID_ERROR;
+
+  /* Prepare a child info object and put a reference to it at the beginning of thr_args. */
+  struct child_process_info *cpi = process_parent_prepare_child_info ();
+  ASSERT (cpi != NULL);
+  memcpy (thr_args, &cpi, sizeof(void *));
+
+  /* Prepare a cl_args to pass to start_process. */
+  cl_args = (struct cl_args *) (thr_args + sizeof(void *));
+
   cl_args->argc = 0;
   /* Args is in a fresh page, so point it to just past itself. */
   cl_args->args = (char *) cl_args + offsetof(struct cl_args, args) + sizeof(char *);
@@ -172,21 +268,33 @@ process_execute (const char *args)
     cl_args_ptr += len + 1;
   }
 
-  /* TODO This should be handled more cleanly than with an ASSERT. */
+  /* TODO Should this should be handled more cleanly than with an ASSERT? */
   ASSERT (0 < cl_args->argc);
 
   /* Free our working memory. */
   palloc_free_page (args_copy);
 
   /* Create a new thread to execute FILE_NAME. */
-  const char *file_name = cl_args->args;
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, cl_args);
 
-  /* start_process will free cl_args if it starts OK. 
+  /* First string is the file_name. */
+  const char *file_name = cl_args->args;
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, thr_args);
+
+  /* start_process will free thr_args if it starts successfully.
      If not, we have to clean this up ourselves. */
   if (tid == TID_ERROR)
-    palloc_free_page (cl_args); 
-
+    palloc_free_page (thr_args); 
+  else
+  {
+    bool did_load_succeed = process_wait_for_child_load (cpi);
+    if (!did_load_succeed)
+    {
+      /* Call wait so that we clean up the child_process_info struct. */
+      process_wait_for_child_exit (cpi->child_tid);
+      tid = TID_ERROR;
+    }
+  }
+  
   return tid;
 }
 
@@ -199,14 +307,30 @@ struct int64_elem
 };
 
 /* A thread function that loads a user process and starts it
-   running with its args. Does not return. */
+   running with its args. Does not return. 
+   
+   THR_ARGS format:
+     child_process_info*  
+     struct cl_args*
+   */
 static void
-start_process (void *cl_args_)
+start_process (void *thr_args)
 {
-  ASSERT (cl_args_ != NULL);
+  ASSERT (thr_args != NULL);
 
   int i;
-  struct cl_args *cl_args = cl_args_;
+
+  /* Extract the child info reference and then process the cl_args. 
+     Race condition here on cpi, so parent must call process_wait_for_child_load
+     to ensure we've done this setup step. */
+  struct child_process_info *cpi = (struct child_process_info *) *(struct child_process_info **) thr_args;
+
+  cpi->child_tid = thread_tid ();
+  thread_set_child_info_self (cpi);
+
+  child_process_info_atomic_inc_refcount (cpi);
+
+  struct cl_args *cl_args = (struct cl_args *) (thr_args + sizeof(void *));
   char *file_name = cl_args->args;
   struct intr_frame if_;
   bool success;
@@ -275,7 +399,6 @@ start_process (void *cl_args_)
   stack_push_ptr (&if_.esp, NULL);
 
   /* Clean up memory. */
-  palloc_free_page (cl_args);
   while (!list_empty (&offset_list))
   {
     struct list_elem *e = list_pop_front (&offset_list);
@@ -283,9 +406,16 @@ start_process (void *cl_args_)
     free(ie);
   }
 
+  /* Set and signal load status. */
+  process_set_load_success (success);
+  process_signal_loaded ();
+
   /* If load failed, quit. */
   if (!success) 
+  {
+    process_set_exit_status (-1);
     thread_exit ();
+  }
 
   /* 3.3.5: Lock writes to the executable while we are running. 
    
@@ -303,6 +433,9 @@ start_process (void *cl_args_)
     file_deny_write (file_obj);
   }
   filesys_unlock ();
+
+  /* Free the args, now that we're done with them . */
+  palloc_free_page (thr_args);
   
   /* If we couldn't open the file, quit. Something is quite wrong. */
   if(fd < 0)
@@ -323,16 +456,11 @@ start_process (void *cl_args_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting.
-
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   immediately, without waiting. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child) 
 {
-  /* TODO Infinite loop for now. */
-  for(;;) ; 
-  return -1;
+  return process_wait_for_child_exit (child);
 }
 
 /* Free the current process's resources. */
@@ -351,9 +479,12 @@ process_exit (void)
      to lock some kernel object... */
   ASSERT (list_empty (&cur->lock_list));
 
+  /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. */
+  printf("%s: exit(%d)\n", thread_name (), thread_get_child_info_self ()->child_exit_status);
+
   /* Tell parent that we're exiting.
-     Exit status must have been set already (done in syscall_exit). */
-  process_mark_exiting (thread_get_child_info_self ()->child_exit_status);
+     Exit status must have been set already (via process_set_exit_status()). */
+  process_signal_exiting ();
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

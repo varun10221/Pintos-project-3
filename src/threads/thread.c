@@ -323,11 +323,18 @@ thread_name (void)
   return thread_current ()->name;
 }
 
-/* Returns the child_info_self field associated of the running thread. */
+/* Returns the child_info_self field associated with the running thread. */
 struct child_process_info * 
 thread_get_child_info_self (void)
 {
   return thread_current ()->child_info_self;
+}
+
+/* Sets the child_info_self field associated with the running thread. */
+void
+thread_set_child_info_self (struct child_process_info *cpi)
+{
+  thread_current ()->child_info_self = cpi;
 }
 
 /* Returns the status of the specified thread. */
@@ -1139,6 +1146,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->fd_table.n_elts = 0;
   t->fd_table.max_elts = 0;
   t->fd_table.file_arr = NULL;
+
+  /* Initialize fields for parent/child interaction. */
+  list_init(&t->child_list);
+  t->child_info_self = NULL;
 #endif
 
   t->elem.sort_val = NULL;
