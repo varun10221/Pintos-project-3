@@ -537,31 +537,26 @@ is_valid_ubuf (uint32_t *pd, const void *u_buf, unsigned size, enum io_type io_t
   ASSERT (u_buf != NULL);
   ASSERT (io_t == IO_TYPE_READ || IO_TYPE_WRITE);
 
-  /* TODO Speed enhancement: We only need to test the first byte and every subsequent page boundary. */
+  /* Since memory is paged, we only need to test the first byte and the first 
+     byte of every subsequent page. */
+  if (!is_valid_uaddr(pd, u_buf))
+    return false;
 
-  /* Test each byte. */
-  unsigned i;
-  for (i = 0; i < size; i++)
+  /* Last byte we need to test. */
+  void *last_byte = u_buf + size - 1;
+
+  void *p = pg_round_up (u_buf);
+  while (p <= last_byte)
   {
-    if (!is_valid_uaddr(pd, u_buf+i))
+    if (!is_valid_uaddr(pd, p))
       return false;
-    /* For use with get_char / put_char. */
-    /*
-    if (io_t == IO_TYPE_WRITE)
-    {
-      Try a put_char
-    }
-    else
-    {
-      Try a get_char
-    }
-    */
+    p = pg_round_up (p+1);
   }
 
   return true;
 }
 
-/* Code to allow faster user address checking. */
+/* Code from Dr. Back to allow faster user address checking. */
 
 /* Reads a byte at user virtual address UADDR.
    UADDR must be below PHYS_BASE.

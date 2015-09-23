@@ -156,6 +156,8 @@ process_parent_prepare_child_info (void)
   lock_init (&cpi->ref_count_lock);
   sema_init (&cpi->status_sema, 0);
   cpi->did_child_load_successfully = false;
+  /* Unless child explicitly sets his exit status, we exit in failure.
+     e.g. being killed due to a page fault. */
   cpi->child_exit_status = -1;
 
   /* Add to parent's child_list. */
