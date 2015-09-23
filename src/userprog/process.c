@@ -217,8 +217,7 @@ child_process_info_atomic_dec_refcount (struct child_process_info *cpi)
    Will not return until the new thread has loaded
    its executable and signald whether it succeeded or failed.
   
-   ARGS: file_name [arg1 arg2 ...]
-   */
+   ARGS: file_name [arg1 arg2 ...] */
 tid_t
 process_execute (const char *args) 
 {
@@ -226,13 +225,14 @@ process_execute (const char *args)
   struct cl_args *cl_args;
   tid_t tid;
 
-  /* Arg checking. */
+  /* Arg checking. 
+     Failure == kernel bug: syscall_exec should not have given us a NULL pointer. */
   ASSERT (args != NULL);
-  /* Make sure the args (formatted as a struct cl_args) will not be 
-     too long to fit into PGSIZE. 
-     
-     TODO This should be handled more cleanly than an ASSERT. */
-  ASSERT (strlen (args) + sizeof(struct cl_args) < PGSIZE);
+
+  /* Make sure the args (formatted for start_process) will not be 
+     too long to fit into PGSIZE. */
+  if (PGSIZE < sizeof(void *) + sizeof(struct cl_args) + strlen (args))
+    return TID_ERROR; 
 
   /* Make a copy of ARGS so that we can tokenize it. */
   args_copy = palloc_get_page (0);
@@ -269,11 +269,12 @@ process_execute (const char *args)
     cl_args_ptr += len + 1;
   }
 
-  /* TODO Should this should be handled more cleanly than with an ASSERT? */
-  ASSERT (0 < cl_args->argc);
-
   /* Free our working memory. */
   palloc_free_page (args_copy);
+
+  /* No arguments means there is no file name to execute (e.g. if user provided a null byte). */
+  if (cl_args->argc <= 0)
+    return TID_ERROR;
 
   /* Create a new thread to execute FILE_NAME. */
 
