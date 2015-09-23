@@ -28,9 +28,9 @@ enum io_type
   };
 
 /* For testing user-provided addresses. */
-static bool is_valid_uaddr (uint32_t *pd, const void *uaddr);
-static bool is_valid_ustring (uint32_t *pd, const char *u_str);
-static bool is_valid_ubuf (uint32_t *pd, const void *u_buf, unsigned size, enum io_type io_t);
+static bool is_valid_uaddr (uint32_t *pd, void *uaddr);
+static bool is_valid_ustring (uint32_t *pd, char *u_str);
+static bool is_valid_ubuf (uint32_t *pd, void *u_buf, unsigned size, enum io_type io_t);
 static int get_user (const uint8_t *uaddr);
 static bool put_user (uint8_t *udst, uint8_t byte);
 
@@ -241,20 +241,15 @@ syscall_handler (struct intr_frame *f)
 
     /* Project 3 and optionally project 4. */
     case SYS_MMAP:                   /* Map a file into memory. */
-      /* TODO */
     case SYS_MUNMAP:                 /* Remove a memory mapping. */
-      /* TODO */
 
     /* Project 4 only. */
     case SYS_CHDIR:                  /* Change the current directory. */
-      /* TODO */
     case SYS_MKDIR:                  /* Create a directory. */
-      /* TODO */
     case SYS_READDIR:                /* Reads a directory entry. */
-      /* TODO */
     case SYS_ISDIR:                  /* Tests if a fd represents a directory. */
-      /* TODO */
     case SYS_INUMBER:                 /* Returns the inode number for a fd. */
+
     default:
       printf ("Unsupported system call! vec %i esp %i\n", f->vec_no, *(int32_t *) f->esp);
   };  
@@ -269,7 +264,6 @@ syscall_handler (struct intr_frame *f)
 static void 
 syscall_halt ()
 {
-  /* TODO Anything else? */
   shutdown_power_off ();
 }
 
@@ -383,7 +377,7 @@ syscall_read (int fd, void *buffer, unsigned size)
 
   if (fd == STDOUT_FILENO)
   {
-    unsigned i;
+    int i;
     char *buf = (char *) buffer;
     for (i = 0; i < n_left; i++)
     {
@@ -494,16 +488,17 @@ syscall_close (int fd)
 
 /* Returns true if uaddr is non-null and points to already-mapped non-kernel address space. */
 static bool 
-is_valid_uaddr (uint32_t *pd, const void *uaddr)
+is_valid_uaddr (uint32_t *pd, void *uaddr)
 {
   /* TODO Inefficient, but need clarification from Dr. Back on the use of get_user. */
-  return (uaddr != NULL && is_user_vaddr (uaddr) && pagedir_get_page (pd, uaddr) != NULL);
+  return (uaddr != NULL && is_user_vaddr (uaddr) 
+          && pagedir_get_page (pd, uaddr) != NULL);
 }
 
 /* Returns true if we can read this user-provided c-string 
    without pagefaulting or leaving the user's legal address space. */
 static bool 
-is_valid_ustring (uint32_t *pd, const char *u_str)
+is_valid_ustring (uint32_t *pd, char *u_str)
 {
   ASSERT (pd != NULL);
   ASSERT (u_str != NULL);
@@ -531,7 +526,7 @@ is_valid_ustring (uint32_t *pd, const char *u_str)
 /* Returns true if we can read or write this user-provided buffer
    without pagefaulting or leaving the user's legal address space. */
 static bool 
-is_valid_ubuf (uint32_t *pd, const void *u_buf, unsigned size, enum io_type io_t)
+is_valid_ubuf (uint32_t *pd, void *u_buf, unsigned size, enum io_type io_t)
 {
   ASSERT (pd != NULL);
   ASSERT (u_buf != NULL);
