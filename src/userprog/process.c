@@ -334,20 +334,44 @@ start_process (void *thr_args)
   struct cl_args *cl_args = (struct cl_args *) (thr_args + sizeof(void *));
   char *file_name = cl_args->args;
   struct intr_frame if_;
-  bool success;
+  bool success = false;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
+  /* Load executable. */ 
+
+  /* Grab the filesys_lock, allowing us to load() and file_deny_write atomically.
+     This allows us to pass the exec-missing test, which requires that we load invalid files. */
+  filesys_lock ();
   success = load (file_name, &if_.eip, &if_.esp);
+  if (success)
+  {
+    /* 3.3.5: Lock writes to the executable while we are using it. 
+       Closing a file will re-enable writes. 
+       All open files (including this one) are closed in process_exit. */
+    int fd = thread_new_file (file_name);
+    if (0 <= fd)
+    {
+      struct file *file_obj = thread_fd_lookup (fd);
+      /* Failure to find the file just after we've opened it is a kernel bug. */
+      ASSERT (file_obj != NULL);
+      file_deny_write (file_obj);
+    }
+    else
+      /* Couldn't open file?? (even though we just did in load(). */
+      success = false;
+  }
+  filesys_unlock ();
 
   /* Set and signal load status. */
   process_set_load_success (success);
   process_signal_loaded ();
 
-  /* If load failed, quit. */
+  /* If load or file_deny_write failed, quit. */
   if (!success) 
   {
     process_set_exit_status (-1);
@@ -418,30 +442,9 @@ start_process (void *thr_args)
     free(ie);
   }
 
-  /* 3.3.5: Lock writes to the executable while we are running. 
-   
-     Closing a file will re-enable writes.
-
-     TODO Verify that we close open files on our way out. 
-     This is done in process_exit; do we go through there
-     when we die? */
-  filesys_lock ();
-  int fd = thread_new_file (file_name);
-  if (0 <= fd)
-  {
-    struct file *file_obj = thread_fd_lookup (fd);
-    ASSERT (file_obj != NULL);
-    file_deny_write (file_obj);
-  }
-  filesys_unlock ();
-
   /* Free the args, now that we're done with them . */
   palloc_free_page (thr_args);
   
-  /* If we couldn't open the file, quit. Something is quite wrong. */
-  if(fd < 0)
-    thread_exit ();
-
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -588,7 +591,11 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
-   Returns true if successful, false otherwise. */
+   Returns true if successful, false otherwise. 
+   
+   We open and close it again. The caller must prevent race conditions
+   associated with file system operations, presumably by wrapping
+   calls to load() with filesys_[un]lock(). */
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
