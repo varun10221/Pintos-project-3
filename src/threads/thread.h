@@ -225,5 +225,9 @@ bool sleeping_queue_eq (const struct list_elem *a,
 int thread_new_file (const char *file);
 struct file * thread_fd_lookup (int fd);
 void thread_fd_delete (int fd);
+void thread_close_all_files (void);
+
+/* Functions for interacting with a thread's held locks. */
+void thread_release_all_locks (void);
 
 #endif /* threads/thread.h */

@@ -1320,3 +1320,26 @@ thread_fd_delete (int fd)
 {
   file_table_delete_fd (&thread_current ()->fd_table, fd);
 }
+
+/* Close all open file handles and free the memory.
+   Use when a process is exiting. */
+void thread_close_all_files (void)
+{
+  file_table_destroy (&thread_current ()->fd_table);
+}
+
+/* Release all locks held by this thread.
+   Use when a process is exiting. */
+void thread_release_all_locks (void)
+{
+  struct list_elem *e;
+  struct lock *l;
+  struct list *lock_list = &thread_current ()->lock_list;
+
+  while(!list_empty (lock_list))
+  {
+    e = list_pop_front (lock_list);
+    l = list_entry (e, struct lock, elem);
+    lock_release (l);
+  }
+}

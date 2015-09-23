@@ -19,7 +19,6 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
-#include "threads/file_table.h"
 
 /* Structure for command-line args. */
 struct cl_args
@@ -342,7 +341,18 @@ start_process (void *thr_args)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* Now esp is the stack pointer. Load up the arguments. */
+  /* Set and signal load status. */
+  process_set_load_success (success);
+  process_signal_loaded ();
+
+  /* If load failed, quit. */
+  if (!success) 
+  {
+    process_set_exit_status (-1);
+    thread_exit ();
+  }
+
+  /* Load succeeded. esp is the stack pointer. Load up the arguments. */
   struct int64_elem *ie = NULL; 
 
   /* Calculate the starting offset of each string. */
@@ -406,17 +416,6 @@ start_process (void *thr_args)
     free(ie);
   }
 
-  /* Set and signal load status. */
-  process_set_load_success (success);
-  process_signal_loaded ();
-
-  /* If load failed, quit. */
-  if (!success) 
-  {
-    process_set_exit_status (-1);
-    thread_exit ();
-  }
-
   /* 3.3.5: Lock writes to the executable while we are running. 
    
      Closing a file will re-enable writes.
@@ -470,14 +469,9 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  /* Close all open file handles and free the memory. */
-  file_table_destroy (&cur->fd_table);
-
-  /* TODO Unlock any locks we hold? Or does this only matter
-     for kernel threads? Can a thread hold locks that are unsafe
-     to leave locked? This would require shared memory, or the ability
-     to lock some kernel object... */
-  ASSERT (list_empty (&cur->lock_list));
+  thread_close_all_files ();
+  /* Not required, but keep user processes out of trouble if they happen to share locks. */
+  thread_release_all_locks ();
 
   /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. */
   printf("%s: exit(%d)\n", thread_name (), thread_get_child_info_self ()->child_exit_status);

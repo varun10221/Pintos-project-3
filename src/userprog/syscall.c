@@ -102,9 +102,7 @@ syscall_handler (struct intr_frame *f)
 
   /* Verify sp is valid. */
   if (!is_valid_uaddr (pd, sp))
-  {
     syscall_exit (-1);
-  }
 
   /* Identify syscall. */
   int32_t syscall = *(int32_t *) stack_pop (&sp);
@@ -116,17 +114,23 @@ syscall_handler (struct intr_frame *f)
   /* No syscall takes more than 3 args. All args on stack are 4 bytes; cast as appropriate. */
   int32_t args[3]; 
   for(i = 0; i < syscall_nargs[syscall - SYS_MIN]; i++)
+  {
+    /* Verify sp is valid. */
+    if (!is_valid_uaddr (pd, sp))
+      syscall_exit (-1);
+    /* Get arg. */
     args[i] = *(int32_t *) stack_pop (&sp);
+  }
 
   /* For those syscalls that evaluate a user-provided address,
      test here for safety. This allows us to centralize the error handling
-     and lets us simply the syscall_* routines. 
+     and lets us simplify the syscall_* routines. 
      
      If an address is invalid, we change the syscall to SYS_EXIT to terminate
      the program. */
   if (syscall_has_pointer[syscall - SYS_MIN])
   {
-    /* Either ustr or ubuf will be set to non-NULL. */
+    /* Either ustr or ubuf will be set to non-NULL (unless user passed a NULL pointer...) */
     char *ustr = NULL, *ubuf = NULL;
     unsigned length = 0;
     enum io_type io_t;
@@ -158,12 +162,11 @@ syscall_handler (struct intr_frame *f)
         NOT_REACHED ();
     }
 
-    ASSERT (ustr != NULL || ubuf != NULL); 
     if (ustr != NULL)
     {
       if (!is_valid_ustring (pd, ustr))
       {
-        /* Exit in error. Use -1 to match API of wait(). */
+        /* Exit in error. */ 
         syscall = SYS_EXIT;
         args[0] = -1;
       }
@@ -176,6 +179,14 @@ syscall_handler (struct intr_frame *f)
         syscall = SYS_EXIT;
         args[0] = -1;
       }
+    }
+    else
+    {
+      /* Both are null, meaning that the user provided a null address. */
+
+      /* Exit in error. */
+      syscall = SYS_EXIT;
+      args[0] = -1;
     }
   } /* End of user-provided address handling. */
 
@@ -367,8 +378,8 @@ syscall_read (int fd, void *buffer, unsigned size)
 
   ASSERT (buffer != NULL);
 
-  unsigned n_left = size;
-  unsigned n_read = 0;
+  int n_left = (int) size;
+  int n_read = 0;
 
   if (fd == STDOUT_FILENO)
   {
@@ -386,7 +397,7 @@ syscall_read (int fd, void *buffer, unsigned size)
     struct file *f = thread_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
-      return -1;
+      n_read = -1;
     else
       /* Let file_read do any desired buffering. */
       n_read = file_read (f, buffer, size);
@@ -405,14 +416,14 @@ static int
 syscall_write (int fd, const void *buffer, unsigned size)
 {
   bool is_valid_fd = (fd == STDOUT_FILENO || N_RESERVED_FILENOS <= fd);
-  if (! is_valid_fd)
+  if (!is_valid_fd)
     return -1;
 
   ASSERT (buffer != NULL);
 
-  unsigned n_to_write;
-  unsigned n_left = size;
-  unsigned n_written = 0;
+  int n_to_write;
+  int n_left = (int) size;
+  int n_written = 0;
 
   if (fd == STDOUT_FILENO)
   {
@@ -432,7 +443,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
     struct file *f = thread_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
-      return -1;
+      n_written = -1;
     else
       /* Let file_write do any desired buffering. */
       n_written = file_write (f, buffer, size);
