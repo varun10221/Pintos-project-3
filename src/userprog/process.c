@@ -335,7 +335,6 @@ start_process (void *thr_args)
   struct cl_args *cl_args = (struct cl_args *) (thr_args + sizeof(void *));
   char *file_name = cl_args->args;
   struct intr_frame if_;
-  bool success = false;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -345,26 +344,21 @@ start_process (void *thr_args)
 
   /* Load executable. */ 
 
-  /* Grab the filesys_lock, allowing us to load() and file_deny_write atomically.
-     This allows us to pass the exec-missing test, which requires that we load invalid files. */
+  /* Grab the filesys_lock, allowing us to file_deny_write and then load() atomically. */
+  bool success = false;
   filesys_lock ();
-  success = load (file_name, &if_.eip, &if_.esp);
-  if (success)
+  int fd = thread_new_file (file_name);
+  if (0 <= fd)
   {
+    struct file *file_obj = thread_fd_lookup (fd);
+    /* Failure to find the file just after we've opened it is a kernel bug. */
+    ASSERT (file_obj != NULL);
     /* 3.3.5: Lock writes to the executable while we are using it. 
        Closing a file will re-enable writes. 
        All open files (including this one) are closed in process_exit. */
-    int fd = thread_new_file (file_name);
-    if (0 <= fd)
-    {
-      struct file *file_obj = thread_fd_lookup (fd);
-      /* Failure to find the file just after we've opened it is a kernel bug. */
-      ASSERT (file_obj != NULL);
-      file_deny_write (file_obj);
-    }
-    else
-      /* Couldn't open file?? (even though we just did in load(). */
-      success = false;
+    file_deny_write (file_obj);
+    /* File is read-only: safe to load executable. */
+    success = load (file_name, &if_.eip, &if_.esp);
   }
   filesys_unlock ();
 
@@ -372,7 +366,7 @@ start_process (void *thr_args)
   process_set_load_success (success);
   process_signal_loaded ();
 
-  /* If load or file_deny_write failed, quit. */
+  /* If we've failed to deny writes to the executable and load it, quit. */
   if (!success) 
   {
     process_set_exit_status (-1);
@@ -630,7 +624,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
 
