@@ -233,7 +233,7 @@ main (int argc, char *argv[])
         ASSERT (MIN_CHILDREN <= n_children);
         orig_n_children = n_children;
       }
-      /* Subsequent iterations, verify we got a matching number. */
+      /* Subsequent iterations, verify we got a matching number of children. */
       else
       {
         if (n_children != orig_n_children)
@@ -242,7 +242,7 @@ main (int argc, char *argv[])
 
       /* Wait until the children are done.
          This needs to be a certainty or else we give false errors, so
-         wait repeatedly. Pathological scheduling will still break us. */
+         wait repeatedly. Pathological scheduling may still break us. */
         int j;
         for(j = 0; j < 5; j++)
           wait_for_process_to_finish (child_executable);
@@ -261,7 +261,12 @@ main (int argc, char *argv[])
   else
     NOT_REACHED ();
 
+  /* Clean up. */
+  remove (launcher_executable);
+  remove (child_executable);
+
   msg ("success. program created at least %i children each iteration, and the same number were created each time.", MIN_CHILDREN);
   msg ("end");
+
   return orig_n_children;
 }
