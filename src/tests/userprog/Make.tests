@@ -15,7 +15,8 @@ write-boundary write-zero write-stdin write-bad-fd exec-once exec-arg	\
 exec-multiple exec-missing exec-bad-ptr wait-simple wait-twice		\
 wait-killed wait-bad-pid multi-recurse multi-child-fd rox-simple	\
 rox-child rox-multichild bad-read bad-write bad-read2 bad-write2        \
-bad-jump bad-jump2)
+bad-jump bad-jump2 \
+bad-syscall )
 
 tests/userprog_PROGS = $(tests/userprog_TESTS) $(addprefix \
 tests/userprog/,child-simple child-args child-bad child-close child-rox)
@@ -33,6 +34,7 @@ tests/userprog/bad-jump_SRC = tests/userprog/bad-jump.c tests/main.c
 tests/userprog/bad-read2_SRC = tests/userprog/bad-read2.c tests/main.c
 tests/userprog/bad-write2_SRC = tests/userprog/bad-write2.c tests/main.c
 tests/userprog/bad-jump2_SRC = tests/userprog/bad-jump2.c tests/main.c
+tests/userprog/bad-syscall_SRC = tests/userprog/bad-syscall.c tests/main.c
 tests/userprog/sc-boundary_SRC = tests/userprog/sc-boundary.c	\
 tests/userprog/boundary.c tests/main.c
 tests/userprog/sc-boundary-2_SRC = tests/userprog/sc-boundary-2.c	\
