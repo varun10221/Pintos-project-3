@@ -609,3 +609,83 @@ put_user (uint8_t *udst, uint8_t byte)
         : "=&a" (error_code), "=m" (*udst) : "q" (byte));
    return error_code != -1;
 }
+
+/* Copy N_BYTES from user-provided SRC to safe DEST, one byte at a time. 
+   Returns true if successful, false at the first segfault.
+
+   May want this in P3 or P4. Not used in P2. */
+static bool
+copy_from_user (int8_t *dest, const uint8_t *src, unsigned n_bytes)
+{
+  ASSERT (dest != NULL);
+  ASSERT (src != NULL);
+
+  unsigned i;
+  int8_t rc;
+  for (i = 0; i < n_bytes; i++)
+  {
+    rc = get_user(src);
+    if (rc == -1)
+      break;
+    *dest = rc;
+    dest++;
+  }
+  return rc;
+}
+
+/* Human-readable syscall. Useful for debugging syscall_handler. */
+static char *
+syscall_to_str (int syscall)
+{
+  ASSERT (SYS_MIN <= syscall && syscall <= SYS_MAX);
+
+  switch (syscall)
+  {
+    case SYS_HALT:
+      return "SYS_HALT";
+    case SYS_EXIT:
+      return "SYS_EXIT";
+    case SYS_EXEC:
+      return "SYS_EXEC";
+    case SYS_WAIT:
+      return "SYS_WAIT";
+    case SYS_CREATE:
+      return "SYS_CREATE";
+    case SYS_REMOVE:
+      return "SYS_REMOVE";
+    case SYS_OPEN:
+      return "SYS_OPEN";
+    case SYS_FILESIZE:
+      return "SYS_FILESIZE";
+    case SYS_READ:
+      return "SYS_READ";
+    case SYS_WRITE:
+      return "SYS_WRITE";
+    case SYS_SEEK:
+      return "SYS_SEEK";
+    case SYS_TELL:
+      return "SYS_TELL";
+    case SYS_CLOSE:
+      return "SYS_CLOSE";
+
+    /* Project 3 and optionally project 4. */
+    case SYS_MMAP:
+      return "SYS_MMAP";
+    case SYS_MUNMAP:
+      return "SYS_MUNMAP";
+
+    /* Project 4 only. */
+    case SYS_CHDIR:
+      return "SYS_CHDIR";
+    case SYS_MKDIR:
+      return "SYS_MKDIR";
+    case SYS_READDIR:
+      return "SYS_READDIR";
+    case SYS_ISDIR:
+      return "SYS_ISDIR";
+    case SYS_INUMBER:
+      return "SYS_INUMBER";
+    default:
+      NOT_REACHED ();
+  }
+}
