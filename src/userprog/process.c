@@ -72,7 +72,8 @@ process_set_exit_status (int exit_status)
   thread_get_child_info_self ()->child_exit_status = exit_status;
 }
 
-/* Child signals that it has exited. */
+/* Child signals that it has exited. 
+   Child must not touch its child_info_self pointer again. */
 static void 
 process_signal_exiting (void)
 {
@@ -119,11 +120,13 @@ process_wait_for_child_exit (tid_t child)
   return status;
 }
 
-/* Return the cpi associated with this child.
-   Returns NULL if we have no record of this child.
+/* Return the cpi associated with this CHILD.
+   Returns NULL if we have no record of this CHILD.
     'No record' could occur for two reasons:
-      1. We did not make a child with this tid_t.
-      2. We made such a child but have already called process_wait_for_child_exit. */
+      1. We did not make a CHILD with this tid_t.
+      2. We made such a CHILD but have already called process_wait_for_child_exit. 
+
+   CHILD is expected to be at least 0. */
 static struct child_process_info * 
 process_parent_lookup_child (tid_t child)
 {
@@ -158,7 +161,7 @@ process_parent_prepare_child_info (void)
   cpi->did_child_load_successfully = false;
   /* Unless child explicitly sets his exit status, we exit in failure.
      e.g. being killed due to a page fault. */
-  cpi->child_exit_status = -1;
+  cpi->child_exit_status = TID_ERROR;
 
   /* Add to parent's child_list. */
   list_push_back (&thread_current ()->child_list, &cpi->elem);
@@ -188,7 +191,6 @@ child_process_info_atomic_dec_refcount (struct child_process_info *cpi)
   bool is_still_valid = true;
 
   lock_acquire (&cpi->ref_count_lock);
-
   cpi->ref_count--;
 
   /* Were we the last to hold a reference? 
@@ -246,7 +248,8 @@ process_execute (const char *args)
 
   /* Prepare a child info object and put a reference to it at the beginning of thr_args. */
   struct child_process_info *cpi = process_parent_prepare_child_info ();
-  ASSERT (cpi != NULL);
+  if (cpi == NULL)
+    return TID_ERROR;
   memcpy (thr_args, &cpi, sizeof(void *));
 
   /* Prepare a cl_args to pass to start_process. */
@@ -272,7 +275,7 @@ process_execute (const char *args)
   /* Free our working memory. */
   palloc_free_page (args_copy);
 
-  /* No arguments means there is no file name to execute (e.g. if user provided a null byte). */
+  /* No arguments means there is no file name to execute (e.g. if user provided an empty string). */
   if (cl_args->argc <= 0)
     return TID_ERROR;
 
@@ -312,8 +315,8 @@ struct int64_elem
    running with its args. Does not return. 
    
    THR_ARGS format:
-     child_process_info*  
-     struct cl_args*
+     child_process_info* (pointer to a shared cpi)
+     struct cl_args
    */
 static void
 start_process (void *thr_args)
@@ -345,22 +348,7 @@ start_process (void *thr_args)
   /* Load executable. */ 
 
   /* Grab the filesys_lock, allowing us to file_deny_write and then load() atomically. */
-  bool success = false;
-  filesys_lock ();
-  int fd = thread_new_file (file_name);
-  if (0 <= fd)
-  {
-    struct file *file_obj = thread_fd_lookup (fd);
-    /* Failure to find the file just after we've opened it is a kernel bug. */
-    ASSERT (file_obj != NULL);
-    /* 3.3.5: Lock writes to the executable while we are using it. 
-       Closing a file will re-enable writes. 
-       All open files (including this one) are closed in process_exit. */
-    file_deny_write (file_obj);
-    /* File is read-only: safe to load executable. */
-    success = load (file_name, &if_.eip, &if_.esp);
-  }
-  filesys_unlock ();
+  bool success = load (file_name, &if_.eip, &if_.esp);
 
   /* Set and signal load status. */
   process_set_load_success (success);
@@ -473,8 +461,11 @@ process_exit (void)
   /* Not required, but keep user processes out of trouble if they happen to share locks. */
   thread_release_all_locks ();
 
-  /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. */
-  printf("%s: exit(%d)\n", thread_name (), thread_get_child_info_self ()->child_exit_status);
+  /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. 
+     Only announce if we were a valid thread. */
+  struct child_process_info *cpi = thread_get_child_info_self ();
+  if(cpi->did_child_load_successfully) 
+    printf("%s: exit(%d)\n", thread_name (), cpi->child_exit_status);
 
   /* Tell parent that we're exiting.
      Exit status must have been set already (via process_set_exit_status()). */
@@ -586,20 +577,19 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
-   Returns true if successful, false otherwise. 
-   
-   We open and close it again. The caller must prevent race conditions
-   associated with file system operations, presumably by wrapping
-   calls to load() with filesys_[un]lock(). */
+   Returns true if successful, false otherwise. */
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
+  int fd;
   off_t file_ofs;
   bool success = false;
   int i;
+
+  filesys_lock ();
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -607,13 +597,18 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  /* Open executable file. */
-  file = filesys_open (file_name);
-  if (file == NULL) 
-    {
-      printf ("load: %s: open failed\n", file_name);
-      goto done; 
-    }
+  fd = thread_new_file (file_name);
+  if (fd < 0)
+    goto done;
+
+  file = thread_fd_lookup (fd);
+  /* Failure to find the file just after we've opened it is a kernel bug. */
+  ASSERT (file != NULL);
+  /* 3.3.5: Lock writes to the executable while we are using it. 
+     Closing a file will re-enable writes. 
+     All open files (including this one) are closed in process_exit. */
+  file_deny_write (file);
+  /* File is now read-only: safe to load executable. */
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -624,6 +619,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
+      printf ("load: %s: error loading executable\n", file_name);
       goto done; 
     }
 
@@ -697,7 +693,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  filesys_unlock ();
   return success;
 }
 
