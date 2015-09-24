@@ -1135,7 +1135,6 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init (&t->lock_list);
   t->pending_lock = NULL;
 #ifdef USERPROG
-  /* TODO Is this a good idea? Follow the path... */
   t->pagedir = NULL;
 #endif
   t->wake_me_at = 0;
