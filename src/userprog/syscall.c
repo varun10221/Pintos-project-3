@@ -28,11 +28,14 @@ enum io_type
   };
 
 /* For testing user-provided addresses. */
-static bool is_valid_uaddr (uint32_t *pd, void *uaddr);
-static bool is_valid_ustring (uint32_t *pd, char *u_str);
-static bool is_valid_ubuf (uint32_t *pd, void *u_buf, unsigned size, enum io_type io_t);
+static bool maybe_valid_uaddr (const void *uaddr);
+static bool is_valid_uptr (void *u_ptr);
+static bool is_valid_ustring (const char *u_str);
+static bool is_valid_ubuf (void *u_buf, unsigned size, bool will_write);
+
 static int get_user (const uint8_t *uaddr);
 static bool put_user (uint8_t *udst, uint8_t byte);
+static bool read_user_str (const char *str);
 
 /* Number of args for each syscall.
    Table is indexed by SYSCALL_* value from lib/syscall-nr.h */
@@ -88,26 +91,24 @@ static void syscall_close (int fd);
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  /* printf ("system call! vec %i esp %p\n", f->vec_no, f->esp); */
-
   int i;
 
   /* Assume we fail. */
   f->eax = -1;
 
-  /* Get this thread's pagedir so we can check pointers for validity. */
-  uint32_t *pd = thread_current ()->pagedir;
   /* Copy esp so we can navigate the stack without disturbing the caller. */
   void *sp = f->esp;
 
   /* Verify sp is valid. */
-  if (!is_valid_uaddr (pd, sp))
+  if (!is_valid_uptr (sp))
     syscall_exit (-1);
 
   /* Identify syscall. */
   int32_t syscall = *(int32_t *) stack_pop (&sp);
 
-  ASSERT (SYS_MIN <= syscall && syscall <= SYS_MAX);
+  /* Invalid syscall? */
+  if (syscall < SYS_MIN || SYS_MAX < syscall)
+    syscall_exit(-1);
 
   /* Extract the args. */
 
@@ -115,8 +116,8 @@ syscall_handler (struct intr_frame *f)
   int32_t args[3]; 
   for(i = 0; i < syscall_nargs[syscall - SYS_MIN]; i++)
   {
-    /* Verify sp is valid. */
-    if (!is_valid_uaddr (pd, sp))
+    /* Verify arg is valid. */
+    if (!is_valid_uptr (sp))
       syscall_exit (-1);
     /* Get arg. */
     args[i] = *(int32_t *) stack_pop (&sp);
@@ -164,7 +165,7 @@ syscall_handler (struct intr_frame *f)
 
     if (ustr != NULL)
     {
-      if (!is_valid_ustring (pd, ustr))
+      if (!is_valid_ustring (ustr))
       {
         /* Exit in error. */ 
         syscall = SYS_EXIT;
@@ -173,7 +174,8 @@ syscall_handler (struct intr_frame *f)
     }
     else if (ubuf != NULL)
     {
-      if (!is_valid_ubuf (pd, ubuf, length, io_t))
+      /* On a READ syscall we will write to the user-provided buffer. */
+      if (!is_valid_ubuf (ubuf, length, io_t == IO_TYPE_READ))
       {
         /* Exit in error. Use -1 to match API of wait(). */
         syscall = SYS_EXIT;
@@ -486,64 +488,65 @@ syscall_close (int fd)
   return;
 }
 
-/* Returns true if uaddr is non-null and points to already-mapped non-kernel address space. */
+/* Returns true if UADDR is non-null and below kernel space. 
+   UADDR may point to un-mapped user space. */
 static bool 
-is_valid_uaddr (uint32_t *pd, void *uaddr)
+maybe_valid_uaddr (const void *uaddr)
 {
-  /* TODO Inefficient, but need clarification from Dr. Back on the use of get_user. */
-  return (uaddr != NULL && is_user_vaddr (uaddr) 
-          && pagedir_get_page (pd, uaddr) != NULL);
+  return (uaddr != NULL && is_user_vaddr (uaddr));
 }
 
-/* Returns true if we can read this user-provided c-string 
+/* Returns true if we can read user-provided c-string U_STR
    without pagefaulting or leaving the user's legal address space. */
 static bool 
-is_valid_ustring (uint32_t *pd, char *u_str)
+is_valid_ustring (const char *u_str)
 {
-  ASSERT (pd != NULL);
-  ASSERT (u_str != NULL);
-
-  /* Is the first byte safe? */
-  if (!is_valid_uaddr(pd, u_str))
-    return false;
-
-  /* The first byte is safe. Check each byte until we reach the
-     end of the string or encounter an illegal address. */
-  char *p = u_str;
-
-  /* Invariant: *p is a safe address to dereference. */
-  while (*p != '\0')
-  {
-    p++; 
-    /* Read this byte and see if it's OK. */
-    if (!is_valid_uaddr (pd, p))
-      return false;
-  }
-
-  return true;
+  return read_user_str (u_str);
 }
 
-/* Returns true if we can read or write this user-provided buffer
+/* Returns true if we can read user-provided ptr U_PTR
    without pagefaulting or leaving the user's legal address space. */
 static bool 
-is_valid_ubuf (uint32_t *pd, void *u_buf, unsigned size, enum io_type io_t)
+is_valid_uptr (void *u_ptr)
 {
-  ASSERT (pd != NULL);
-  ASSERT (u_buf != NULL);
-  ASSERT (io_t == IO_TYPE_READ || IO_TYPE_WRITE);
+  return is_valid_ubuf (u_ptr, sizeof(void *), false);
+}
+
+/* Returns true if we can read or write user-provided buffer U_BUF
+   without pagefaulting or leaving the user's legal address space. 
+   
+   The buffer is unmodified (if WILL_WRITE, we read a byte and 
+   then write the byte back). */
+static bool 
+is_valid_ubuf (void *u_buf, unsigned size, bool will_write)
+{
+  int rc;
+  void *p = u_buf;
 
   /* Since memory is paged, we only need to test the first byte and the first 
-     byte of every subsequent page. */
-  if (!is_valid_uaddr(pd, u_buf))
+     byte of every subsequent page. The same tests are performed
+     prior to the loop on p and in the loop on the first byte of subsequent pages. */
+
+  /* Valid address and we can read without segfaulting? */
+  if (!maybe_valid_uaddr(p) || (rc = get_user (p)) == -1)
+    return false;
+  /* User requested a read, so we need to be able to write to this byte.
+     Try to write the byte we just read so we don't pollute the user's buffer
+     in the event of a read failure. */
+  if (will_write && !put_user (p, rc))
     return false;
 
   /* Last byte we need to test. */
   void *last_byte = u_buf + size - 1;
 
-  void *p = pg_round_up (u_buf);
+  /* Loop until we pass the last_byte. */
+  p = pg_round_up (p);
   while (p <= last_byte)
   {
-    if (!is_valid_uaddr(pd, p))
+    /* Same tests as above. */
+    if (!maybe_valid_uaddr(p) || (rc = get_user (p)) == -1)
+      return false;
+    if (will_write && !put_user (p, rc))
       return false;
     p = pg_round_up (p+1);
   }
@@ -565,7 +568,36 @@ get_user (const uint8_t *uaddr)
        : "=&a" (result) : "m" (*uaddr));
   return result;
 }
- 
+
+/* Read each byte of user-provided STR.
+   Returns true if successful, false if segfault. */
+static bool
+read_user_str (const char *str)
+{
+  bool did_segfault = false;
+  int rc;
+  do{
+    /* Non-NULL and below kernel space? */
+    if (!maybe_valid_uaddr (str))
+    {
+      did_segfault = true;
+      break;
+    }
+
+    /* Is in a mapped page? */
+    rc = get_user ((uint8_t *) str);
+    if (rc == -1)
+    {
+      did_segfault = true;
+      break;
+    }
+
+    str++;
+  } while (rc != '\0');
+
+  return !did_segfault;
+}
+
 /* Writes BYTE to user address UDST.
    UDST must be below PHYS_BASE.
    Returns true if successful, false if a segfault occurred. */

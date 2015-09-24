@@ -153,9 +153,6 @@ page_fault (struct intr_frame *f)
      to communicate to syscall.c::get_user, put_user. */
   if (!user)
   {
-    /* TODO For now this should not happen. */
-    ASSERT (0);
-    /* TODO Is this right? */
     f->eip = (void *) f->eax;
     f->eax = 0xffffffff;
     return;
