@@ -46,6 +46,7 @@ static bool process_wait_for_child_load (struct child_process_info *cpi);
 static void process_signal_exiting (void);
 /* Used by parent. */
 static int process_wait_for_child_exit (tid_t child);
+void process_parent_discard_children (void);
 
 /* Used by parent and child. */
 static void child_process_info_atomic_inc_refcount (struct child_process_info *cpi);
@@ -118,6 +119,22 @@ process_wait_for_child_exit (tid_t child)
   int status = cpi->child_exit_status;
   child_process_info_atomic_dec_refcount (cpi);
   return status;
+}
+
+/* For use when a process is exiting. P
+   Parent decrements the ref count associated with each child
+   on which it never wait'd. */
+void process_parent_discard_children (void)
+{
+  struct list *child_list = &thread_current ()->child_list;
+  struct child_process_info *cpi;
+  struct list_elem *e;
+  while (!list_empty (child_list))
+  {
+    e = list_pop_front (child_list);
+    cpi = list_entry (e, struct child_process_info, elem);
+    child_process_info_atomic_dec_refcount (cpi);
+  }
 }
 
 /* Return the cpi associated with this CHILD.
@@ -450,7 +467,9 @@ process_wait (tid_t child)
   return process_wait_for_child_exit (child);
 }
 
-/* Free the current process's resources. */
+/* Free the current process's resources. 
+   All exiting processes must come through here to avoid leaks. 
+   Called from thread_exit. */
 void
 process_exit (void)
 {
@@ -461,14 +480,20 @@ process_exit (void)
   /* Not required, but keep user processes out of trouble if they happen to share locks. */
   thread_release_all_locks ();
 
+  /* Indicate that we no longer have a reference to any un-waited children. 
+     If they exited already, we clean up the shared CPI. If not, they will
+     clean it up when they exit. */
+  process_parent_discard_children ();
+
   /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. 
      Only announce if we were a valid thread. */
   struct child_process_info *cpi = thread_get_child_info_self ();
   if(cpi->did_child_load_successfully) 
     printf("%s: exit(%d)\n", thread_name (), cpi->child_exit_status);
 
-  /* Tell parent that we're exiting.
-     Exit status must have been set already (via process_set_exit_status()). */
+  /* Tell our parent that we're exiting.
+     Exit status must have been set already (via process_set_exit_status()). 
+     Default exit status is -1. */
   process_signal_exiting ();
 
   /* Destroy the current process's page directory and switch back
