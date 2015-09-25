@@ -35,6 +35,14 @@
    file to communicate: either creation of a signal file, or making
    a signal file writable. Either way should work fine.
 
+   TODO I am observing extreme contention (for filesys_lock?) once the child count
+   reaches 20. I'm guessing that file_open holds the filesys_lock for longer.
+   Consequently I anticipate that introducing YET ANOTHER process that is the
+   only one trying file_open, and having the children wait_for_process_to_finish
+   on that signal PROCESS, might be a good route. 
+   I have other work to do, so I will leave that as "future work". For now,
+   LAUNCHER_EXITS_FIRST mode will be disabled.
+
    Test submitted by Jamie Davis <davisjam@vt.edu>, Fall 2015. */
 
 #include <debug.h>
@@ -165,7 +173,8 @@ wait_for_file_to_exist (const char *watch_file)
 {
   ASSERT (watch_file != NULL);
 
-  int spin_counter = 10000;
+  /* DEBUGGING */
+  int spin_counter = 100000 + random_ulong () % 5000;
 
   /* Wait until open succeeds. */
   int fd = -1;
@@ -182,7 +191,10 @@ wait_for_file_to_exist (const char *watch_file)
   int i;
   char c = 'Z';
   for (i = 0; i < 5; i++)
+  {
     ASSERT (write (fd, &c, 1) == 1);
+    int result = wait_a_bit(spin_counter);
+  }
 
   close (fd);
 }
@@ -201,8 +213,6 @@ launcher_run (enum behavior behav, const char *launcher_executable, const char *
   /* Should be plenty... */
   int MAX_CHILDREN = 512;
 
-  printf("launcher_run: behavior %i (LAUNCHER_EXITS_FIRST %i)\n", behav, LAUNCHER_EXITS_FIRST);
-
   if (behav == CHILDREN_EXIT_FIRST)
     remove (signal_file);
 
@@ -210,13 +220,14 @@ launcher_run (enum behavior behav, const char *launcher_executable, const char *
   int n_children = 0;
   do{
     /* Launch a child. */
-    /* PROCESS_TYPE BEHAVIOR WATCH_FILE */
+    /* PROCESS_TYPE BEHAVIOR CHILD_ID WATCH_FILE */
     char child_cmd[128];
     const char *watch_file = (behav == LAUNCHER_EXITS_FIRST ? launcher_executable : signal_file);
     snprintf (child_cmd, sizeof child_cmd,
-              "%s %i %i %s", 
-              child_executable, CHILD, behav, watch_file);
+              "%s %i %i %i %s", 
+              child_executable, CHILD, behav, n_children, watch_file);
     pid_t child_pid = exec (child_cmd);
+
     /* Can't create any more children. */
     if (child_pid == -1)
       break;
@@ -232,6 +243,7 @@ launcher_run (enum behavior behav, const char *launcher_executable, const char *
     ASSERT (create (signal_file, 256));
     wait_for_process_to_finish (child_executable);
   }
+
   return n_children;
 }
 
@@ -251,12 +263,13 @@ child_run (enum behavior behav, const char *watch_file)
 /* The first copy is invoked without command line arguments.
    subsequent copies are invoked with: 
    launcher: PROCESS_TYPE BEHAVIOR
-   children: PROCESS_TYPE BEHAVIOR WATCH_FILE */
+   children: PROCESS_TYPE BEHAVIOR CHILD_ID WATCH_FILE */
 int
 main (int argc, char *argv[])
 {
   int process_type; 
   enum behavior behav;
+  int child_id;
   char *watch_file; 
 
   bool is_grandparent = (argc == 1);
@@ -267,7 +280,10 @@ main (int argc, char *argv[])
     process_type = atoi(argv[1]);
     behav = atoi(argv[2]);
     if (process_type == CHILD)
-      watch_file = argv[3];
+    {
+      child_id = atoi(argv[3]);
+      watch_file = argv[4];
+    }
   }
 
   /* Internal error, debugging code. */
@@ -288,8 +304,7 @@ main (int argc, char *argv[])
       copy_file (launcher_executable, test_name);
       behav = BEHAVIOR_MIN + random_ulong () % (BEHAVIOR_MAX - BEHAVIOR_MIN + 1);
 
-      /* TODO TESTING */
-      behav = CHILDREN_EXIT_FIRST;
+      /* TODO Make it so that CHILDREN_EXIT_FIRST is feasible. See comments at the top.*/
       behav = LAUNCHER_EXITS_FIRST;
 
       char launcher_cmd[128];
@@ -328,6 +343,7 @@ main (int argc, char *argv[])
   }
   else if (process_type == CHILD)
   {
+    random_init (child_id);
     child_run (behav, watch_file);
     return 0;
   }
