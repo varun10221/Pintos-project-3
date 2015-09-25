@@ -4,8 +4,10 @@
  
    Grandparent: 
      for(1..10):
-       Launch a child that launches as many children as possible,
-       and exits without waiting on any of them (BEFORE any finish)
+       Launch a "launcher" child that launches as many children as possible,
+       and exits without waiting on any of them.
+       Each iteration this launcher decides whether to exit BEFORE
+       or AFTER its children do.
 
    The grandparent ensures that the same number of children can be 
    launched each time.
@@ -29,16 +31,9 @@
    is good. The more expensive the operation, the more likely it is that B has
    exited.
 
-   Possible addition:
-     This program can be trivially extended to test the case where the parent *does*
-     wait for its children. To do this, have the parent create all of the children
-     up to system exhaustion, then have the parent create a "signal file". Children
-     exit when they see the signal file.
-
-     This allows a controlled test of whether or not the same number of children
-     can be created each time. However, since any memory leaks are likely on
-     the path where the parent does not wait for its children, this is likely
-     an uninteresting test and is not currently implemented.
+   To have the children exit before the parent, the parent uses a
+   file to communicate: either creation of a signal file, or making
+   a signal file writable. Either way should work fine.
 
    Test submitted by Jamie Davis <davisjam@vt.edu>, Fall 2015. */
 
@@ -60,7 +55,17 @@ const char *test_name = "oom-nowait";
 const char *launcher_executable = "oom-nw-launch";
 const char *child_executable = "oom-nw-child";
 
+/* Used in CHILDREN_EXIT_FIRST mode to signal the children to exit. */
+const char *signal_file = "oom-nw-signal";
+
 enum process_type { GRANDPARENT, LAUNCHER, CHILD };
+enum behavior 
+{ 
+  BEHAVIOR_MIN,
+  LAUNCHER_EXITS_FIRST = BEHAVIOR_MIN, 
+  CHILDREN_EXIT_FIRST, 
+  BEHAVIOR_MAX = CHILDREN_EXIT_FIRST
+};
 
 /* Copy src to dst. */
 static void
@@ -114,15 +119,16 @@ wait_a_bit (int n_spins)
   return count;
 }
 
-/* EXECUTABLE_TO_WATCH: The executable of an actively-running process
+/* WATCH_FILE: The executable of an actively-running process
    Wait until that process has "probably" exited.
-   The executable will be modified by this routine. */
+
+   The contents of WATCH_FILE will be modified by this routine. */
 static void
-wait_for_process_to_finish (const char *executable_to_watch)
+wait_for_process_to_finish (const char *watch_file)
 {
-  ASSERT (executable_to_watch != NULL);
+  ASSERT (watch_file != NULL);
   /* Open and try to write to it. */
-  int fd = open (executable_to_watch);
+  int fd = open (watch_file);
   ASSERT (0 <= fd);
 
   int spin_counter = 10000;
@@ -148,10 +154,43 @@ wait_for_process_to_finish (const char *executable_to_watch)
   close (fd);
 }
 
-/* For launcher: spawn children, exit before waiting for them.
-   Returns the number of children we created. */ 
+/* WATCH_FILE: A file that is created to signal that
+   we should return. We return after the file exists
+   and we have waited long enough that the creator
+   has probably had time to exit if he does so promptly.
+
+   The contents of WATCH_FILE will be modified by this routine. */
+static void
+wait_for_file_to_exist (const char *watch_file)
+{
+  ASSERT (watch_file != NULL);
+
+  int spin_counter = 10000;
+
+  /* Wait until open succeeds. */
+  int fd = -1;
+  do{
+    fd = open (watch_file);
+    /* Don't spin on the mutex for the filesys in the kernel. 
+       This should be long enough to consume a TIME_SLICE and
+       force preemption. */
+    int result = wait_a_bit(spin_counter);
+  } while (fd < 0);
+
+  /* Open succeeded, so make a few writes. This should give
+     the parent process plenty of time to finish exiting. */
+  int i;
+  char c = 'Z';
+  for (i = 0; i < 5; i++)
+    ASSERT (write (fd, &c, 1) == 1);
+
+  close (fd);
+}
+
+/* For launcher: spawn children, exit before or after they do based on BEHAV
+   Return the number of children we created. */ 
 static int 
-launcher_run (const char *launcher_executable, const char *child_executable)
+launcher_run (enum behavior behav, const char *launcher_executable, const char *child_executable)
 {
   ASSERT (launcher_executable != NULL);
   ASSERT (child_executable != NULL);
@@ -162,15 +201,21 @@ launcher_run (const char *launcher_executable, const char *child_executable)
   /* Should be plenty... */
   int MAX_CHILDREN = 512;
 
+  printf("launcher_run: behavior %i (LAUNCHER_EXITS_FIRST %i)\n", behav, LAUNCHER_EXITS_FIRST);
+
+  if (behav == CHILDREN_EXIT_FIRST)
+    remove (signal_file);
+
   /* Spawn as many children as we can. */
   int n_children = 0;
   do{
     /* Launch a child. */
-    /* PROCESS_TYPE EXECUTABLE_TO_WATCH */
+    /* PROCESS_TYPE BEHAVIOR WATCH_FILE */
     char child_cmd[128];
+    const char *watch_file = (behav == LAUNCHER_EXITS_FIRST ? launcher_executable : signal_file);
     snprintf (child_cmd, sizeof child_cmd,
-              "%s %i %s", 
-              child_executable, CHILD, launcher_executable);
+              "%s %i %i %s", 
+              child_executable, CHILD, behav, watch_file);
     pid_t child_pid = exec (child_cmd);
     /* Can't create any more children. */
     if (child_pid == -1)
@@ -181,28 +226,38 @@ launcher_run (const char *launcher_executable, const char *child_executable)
     ASSERT (n_children <= MAX_CHILDREN);
   } while(1);
 
-  /* Return before wait'ing. */
+  /* If waiting for children, signal them and then wait on the executable. */
+  if (behav == CHILDREN_EXIT_FIRST)
+  {
+    ASSERT (create (signal_file, 256));
+    wait_for_process_to_finish (child_executable);
+  }
   return n_children;
 }
 
-/* For child: if we wait, wait on executable_to_watch. */
+/* For child: wait on WATCH_FILE in the fashion indicated by BEHAV. */
 static void
-child_run (const char *executable_to_watch)
+child_run (enum behavior behav, const char *watch_file)
 {
-  ASSERT (executable_to_watch != NULL);
-  wait_for_process_to_finish (executable_to_watch);
+  ASSERT (watch_file != NULL);
+  if (behav == LAUNCHER_EXITS_FIRST)
+    wait_for_process_to_finish (watch_file);
+  else
+    wait_for_file_to_exist (watch_file);
+
   return;
 }
 
 /* The first copy is invoked without command line arguments.
    subsequent copies are invoked with: 
-   launcher: PROCESS_TYPE
-   children: PROCESS_TYPE EXECUTABLE_TO_WATCH */
+   launcher: PROCESS_TYPE BEHAVIOR
+   children: PROCESS_TYPE BEHAVIOR WATCH_FILE */
 int
 main (int argc, char *argv[])
 {
   int process_type; 
-  char *executable_to_watch; 
+  enum behavior behav;
+  char *watch_file; 
 
   bool is_grandparent = (argc == 1);
   if (is_grandparent)
@@ -210,8 +265,9 @@ main (int argc, char *argv[])
   else
   {
     process_type = atoi(argv[1]);
+    behav = atoi(argv[2]);
     if (process_type == CHILD)
-      executable_to_watch = argv[2];
+      watch_file = argv[3];
   }
 
   /* Internal error, debugging code. */
@@ -230,10 +286,16 @@ main (int argc, char *argv[])
     {
       /* Fresh copy of our executable for the launcher. */
       copy_file (launcher_executable, test_name);
+      behav = BEHAVIOR_MIN + random_ulong () % (BEHAVIOR_MAX - BEHAVIOR_MIN + 1);
+
+      /* TODO TESTING */
+      behav = CHILDREN_EXIT_FIRST;
+      behav = LAUNCHER_EXITS_FIRST;
 
       char launcher_cmd[128];
+      /* launcher: PROCESS_TYPE BEHAVIOR */
       snprintf (launcher_cmd, sizeof launcher_cmd,
-                "%s %i", launcher_executable, LAUNCHER);
+                "%s %i %i", launcher_executable, LAUNCHER, behav);
 
       pid_t launcher_pid = exec (launcher_cmd);
       int n_children = wait (launcher_pid);
@@ -262,11 +324,11 @@ main (int argc, char *argv[])
   } /* GRANDPARENT. */
   else if (process_type == LAUNCHER)
   {
-    return launcher_run (launcher_executable, child_executable);
+    return launcher_run (behav, launcher_executable, child_executable);
   }
   else if (process_type == CHILD)
   {
-    child_run (executable_to_watch);
+    child_run (behav, watch_file);
     return 0;
   }
   else
