@@ -29,6 +29,17 @@
    is good. The more expensive the operation, the more likely it is that B has
    exited.
 
+   Possible addition:
+     This program can be trivially extended to test the case where the parent *does*
+     wait for its children. To do this, have the parent create all of the children
+     up to system exhaustion, then have the parent create a "signal file". Children
+     exit when they see the signal file.
+
+     This allows a controlled test of whether or not the same number of children
+     can be created each time. However, since any memory leaks are likely on
+     the path where the parent does not wait for its children, this is likely
+     an uninteresting test and is not currently implemented.
+
    Test submitted by Jamie Davis <davisjam@vt.edu>, Fall 2015. */
 
 #include <debug.h>
