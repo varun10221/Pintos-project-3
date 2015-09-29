@@ -24,11 +24,13 @@
 struct cl_args
 {
   int argc;   /* Number of args. */
-  char *args; /* Sequence of c-strings: null-delimited args. */
+  int total_arglen; /* Sum of lengths of arg strings. */
+  char *args; /* Sequence of c-strings, one per arg. */
 };
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+bool load_args_onto_stack (void **esp, struct cl_args *args);
 
 /* IPC between parent and child for syscall_{exec,wait,exit}. */
 
@@ -273,6 +275,7 @@ process_execute (const char *args)
   cl_args = (struct cl_args *) (thr_args + sizeof(void *));
 
   cl_args->argc = 0;
+  cl_args->total_arglen = 0;
   /* Args is in a fresh page, so point it to just past itself. */
   cl_args->args = (char *) cl_args + offsetof(struct cl_args, args) + sizeof(char *);
 
@@ -287,6 +290,8 @@ process_execute (const char *args)
     len = strlcpy(cl_args_ptr, token, PGSIZE);
     /* Skip ahead over the string we just wrote, including null byte. */
     cl_args_ptr += len + 1;
+    /* Count this length, including the null byte. */
+    cl_args->total_arglen += len + 1;
   }
 
   /* Free our working memory. */
