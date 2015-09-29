@@ -182,11 +182,18 @@ syscall_handler (struct intr_frame *f)
         args[0] = -1;
       }
     }
+    /* OK, both buffers are null. This may or may not be OK. */
+    else if ( (syscall == SYS_READ || syscall == SYS_WRITE) && length == 0 )
+    {
+      /* User wants to do IO with length 0. Success, I guess. */
+      f->eax = 0;
+      return;
+    }
     else
     {
-      /* Both are null, meaning that the user provided a null address. */
-
-      /* Exit in error. */
+      /* Both buffers are null, meaning that the user provided a null address.
+         He did not request anything trivial that we can satisfy.
+         Exit in error. */
       syscall = SYS_EXIT;
       args[0] = -1;
     }
