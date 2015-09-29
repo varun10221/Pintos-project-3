@@ -124,7 +124,7 @@ process_wait_for_child_exit (tid_t child)
   return status;
 }
 
-/* For use when a process is exiting. P
+/* For use when a process is exiting.
    Parent decrements the ref count associated with each child
    on which it never wait'd. */
 void process_parent_discard_children (void)
@@ -185,6 +185,7 @@ process_parent_prepare_child_info (void)
 
   /* Add to parent's child_list. */
   list_push_back (&thread_current ()->child_list, &cpi->elem);
+  /* Parent has a reference to this cpi. */
   cpi->ref_count = 1;
 
   return cpi;
@@ -346,8 +347,6 @@ start_process (void *thr_args)
 {
   ASSERT (thr_args != NULL);
 
-  int i;
-
   /* Extract the child info reference and then process the cl_args. 
      Race condition here on cpi, so parent must call process_wait_for_child_load
      to ensure we've done this setup step. */
@@ -356,6 +355,8 @@ start_process (void *thr_args)
   cpi->child_tid = thread_tid ();
   thread_set_child_info_self (cpi);
 
+  /* Do this before we signal the parent that we have loaded, lest the
+     parent exit and free the cpi before we call exit(). */
   child_process_info_atomic_inc_refcount (cpi);
 
   struct cl_args *cl_args = (struct cl_args *) (thr_args + sizeof(void *));
@@ -385,67 +386,12 @@ start_process (void *thr_args)
   }
 
   /* Load succeeded. esp is the stack pointer. Load up the arguments. */
-  struct int64_elem *ie = NULL; 
-
-  /* Calculate the starting offset of each string. */
-  struct list offset_list;
-  list_init (&offset_list);
-  int64_t off = 0;
-  for (i = 0; i < cl_args->argc; i++)
+  bool could_load_args = load_args_onto_stack (&if_.esp, cl_args);
+  /* If we could not load args, quit. */
+  if (!could_load_args)
   {
-    ie = (struct int64_elem *) malloc(sizeof(struct int64_elem));
-    ie->val = off;
-    list_push_back (&offset_list, &ie->elem);
-    /* Skip to the next string. */
-    off += strlen (cl_args->args + off) + 1;
-  }
-
-  char *orig_stack_top = (char *) if_.esp;
-
-  /* Push arguments onto stack in reverse order. */
-  char *curr = NULL;
-  struct list_elem *e = NULL;
-  for (e = list_rbegin (&offset_list); e != list_rend (&offset_list);
-       e = list_prev (e))
-  {
-    /* Calculate offset of the next arg to push. */
-    ie = list_entry (e, struct int64_elem, elem);
-    curr = cl_args->args + ie->val;
-    stack_push_string (&if_.esp, curr);
-  }
-  /* Round down to multiple of 4. */
-  stack_align (&if_.esp, 4);
-  /* Push a null pointer sentinel. */
-  stack_push_ptr (&if_.esp, NULL);
-
-  /* Push the location of each of the args I pushed above. */
-  char *curr_sp = orig_stack_top;
-  for (e = list_rbegin (&offset_list); e != list_rend (&offset_list);
-       e = list_prev (e))
-  {
-    /* Calculate offset of this arg. */
-    ie = list_entry (e, struct int64_elem, elem);
-    curr = cl_args->args + ie->val;
-    curr_sp -= strlen (curr) + 1;
-    stack_push_ptr (&if_.esp, (void *) curr_sp);
-  }
-
-  /* Push the location of argv itself, which is located at
-     the current location of the stack pointer. */
-  curr_sp = (char *) if_.esp;
-  stack_push_ptr (&if_.esp, curr_sp);
-
-  /* Push argc. */
-  stack_push_int (&if_.esp, cl_args->argc);
-  /* Push fake return address. */
-  stack_push_ptr (&if_.esp, NULL);
-
-  /* Clean up memory. */
-  while (!list_empty (&offset_list))
-  {
-    struct list_elem *e = list_pop_front (&offset_list);
-    ie = list_entry (e, struct int64_elem, elem);
-    free(ie);
+    process_set_exit_status (-1);
+    thread_exit ();
   }
 
   /* Free the args, now that we're done with them . */
@@ -459,6 +405,104 @@ start_process (void *thr_args)
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
+}
+
+/* Load args onto the stack specified by esp. 
+   Returns true on success, false on failure. */
+bool
+load_args_onto_stack (void **esp, struct cl_args *cl_args)
+{
+  ASSERT (esp != NULL && *esp != NULL);
+  ASSERT (cl_args != NULL);
+
+  /* Make sure the quantity of args won't overflow the stack page. 
+     We put more information into it than here we did in process_execute, so the
+     sizeof test we did there is insufficient.
+
+     esp can hold PGSIZE bytes, based on how it is initialized
+     in setup_stack.
+
+     How much data, total, will be put into the stack page? */
+  int64_t space_needed = 
+    cl_args->total_arglen + /* Total length of all arg strings. */
+    4 + /* Round down to a multiple of 4, adding at most 4 bytes. */
+    sizeof(void *) + /* Null pointer sentinel. */
+    sizeof(void *)*cl_args->argc + /* Pointers to each of the args. */
+    sizeof(void *)*2 + /* Location of argv, fake return address. */
+    sizeof(int); /* argc. */
+
+  if (PGSIZE < space_needed)
+  {
+    /* If a page cannot hold all of this, return failure. */
+    return false;
+  }
+
+  /* Calculate the starting offset of each string. */
+  struct int64_elem *ie = NULL; 
+  struct list offset_list;
+  list_init (&offset_list);
+
+  /* Offset into cl_args->args. */
+  int64_t off = 0;
+  int i;
+  for (i = 0; i < cl_args->argc; i++)
+  {
+    ie = (struct int64_elem *) malloc(sizeof(struct int64_elem));
+    ie->val = off;
+    list_push_back (&offset_list, &ie->elem);
+    /* Skip to the next string. */
+    off += strlen (cl_args->args + off) + 1;
+  }
+
+  char *orig_stack_top = (char *) *esp;
+
+  /* Push arguments onto stack in reverse order. */
+  char *curr = NULL;
+  struct list_elem *e = NULL;
+  for (e = list_rbegin (&offset_list); e != list_rend (&offset_list);
+       e = list_prev (e))
+  {
+    ie = list_entry (e, struct int64_elem, elem);
+    /* Calculate offset of the next arg to push. */
+    curr = cl_args->args + ie->val;
+    stack_push_string (esp, curr);
+  }
+  /* Round down to multiple of 4. */
+  stack_align (esp, 4);
+  /* Push a null pointer sentinel. */
+  stack_push_ptr (esp, NULL);
+
+  /* Push the location of each of the args I pushed above. */
+  char *curr_sp = orig_stack_top;
+  for (e = list_rbegin (&offset_list); e != list_rend (&offset_list);
+       e = list_prev (e))
+  {
+    ie = list_entry (e, struct int64_elem, elem);
+    /* Calculate offset of this arg. */
+    curr = cl_args->args + ie->val;
+    curr_sp -= strlen (curr) + 1;
+    stack_push_ptr (esp, (void *) curr_sp);
+  }
+
+  /* Push the location of argv itself, which is located at
+     the current location of the stack pointer. */
+  curr_sp = (char *) *esp;
+  stack_push_ptr (esp, curr_sp);
+
+  /* Push argc. */
+  stack_push_int (esp, cl_args->argc);
+  /* Push fake return address. */
+  stack_push_ptr (esp, NULL);
+
+  /* Clean up memory. */
+  while (!list_empty (&offset_list))
+  {
+    struct list_elem *e = list_pop_front (&offset_list);
+    ie = list_entry (e, struct int64_elem, elem);
+    free(ie);
+  }
+
+  return true;
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
