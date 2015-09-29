@@ -81,7 +81,8 @@ static void
 process_signal_exiting (void)
 {
   struct child_process_info *cpi = thread_get_child_info_self ();
-  ASSERT (cpi != NULL);
+  /* If a kernel thread, simply return. */
+  if (cpi == NULL) return;
 
   sema_up (&cpi->status_sema);
   child_process_info_atomic_dec_refcount (cpi);
