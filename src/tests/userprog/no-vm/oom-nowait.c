@@ -304,7 +304,7 @@ main (int argc, char *argv[])
       copy_file (launcher_executable, test_name);
       behav = BEHAVIOR_MIN + random_ulong () % (BEHAVIOR_MAX - BEHAVIOR_MIN + 1);
 
-      /* TODO Make it so that CHILDREN_EXIT_FIRST is feasible. See comments at the top.*/
+      /* TODO Make CHILDREN_EXIT_FIRST is feasible. See comments at the top.*/
       behav = LAUNCHER_EXITS_FIRST;
 
       char launcher_cmd[128];
@@ -328,12 +328,13 @@ main (int argc, char *argv[])
           fail ("Error, on iteration %i I spawned %i children != orig %i\n", i, n_children, orig_n_children);
       }
 
-      /* Wait until the children are done.
+      /* Wait until the last executable is done. 
          This needs to be a certainty or else we give false errors, so
          wait repeatedly. Pathological scheduling may still break us. */
         int j;
+        char *exec_to_wait_on = (behav == LAUNCHER_EXITS_FIRST ? child_executable : launcher_executable);
         for(j = 0; j < 5; j++)
-          wait_for_process_to_finish (child_executable);
+          wait_for_process_to_finish (exec_to_wait_on);
 
     } /* Loop for NUM_REPETITIONS. */
   } /* GRANDPARENT. */
