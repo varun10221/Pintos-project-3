@@ -1,0 +1,579 @@
+         +--------------------------+
+                     |    CS 140    |
+         | PROJECT 2: USER PROGRAMS |
+         |     DESIGN DOCUMENT      |
+         +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+James (Jamie) Davis <davisjam@vt.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+I added three new tests:
+
+  src/tests/userprog/exec-noname
+    Call exec("")
+  src/tests/userprog/bad-syscall
+    Invoke the syscall handler with an invalid syscall number
+  src/tests/userprog/no-vm/oom-nowait
+    Children exit before parent does. Parent does not
+    wait() on them. Ensure that the same number of children
+    can be created each iteration.
+
+I am still working on submitting a pull request for these tests.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+None.
+
+         ARGUMENT PASSING
+         ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+process.c:
+  /* Structure for command-line args. */
+  struct cl_args
+  {
+    int argc;   /* Number of args. */
+    char *args; /* Sequence of c-strings: null-delimited args. */
+  };
+
+  /* To set up the initial stack, track offsets
+     of args using a list of int64_elem's. */
+  struct int64_elem
+  {
+    int64_t val;
+    struct list_elem elem;
+  };
+
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+process_execute gets the user-provided string for execution.
+I make a copy so that I can strtok_r.
+I pass a struct cl_args (described above) to start_process.
+
+I avoid overflowing the page I allocated in process_execute by checking whether or not I will
+have enough space early in process_execute:
+
+  /* Make sure the args (formatted for start_process) will not be 
+     too long to fit into PGSIZE. */
+  if (PGSIZE < sizeof(void *) + sizeof(struct cl_args) + strlen (args))
+    return TID_ERROR; 
+
+Once in start_process, I load(). If that works, then I set up the stack page
+in load_args_onto_stack using the functions defined in stack.c:
+
+  void * stack_push_string (void **sp, char *str);
+  void * stack_push_int (void **sp, int i);
+  void * stack_push_int32 (void **sp, int32_t i);
+  void * stack_push_ptr (void **sp, void *ptr);
+  void * stack_align (void **sp, size_t align);
+  void * stack_push_raw (void **sp, void *data, size_t n_bytes);
+  void * stack_pop (void **sp);
+
+I use a linked list of offsets and iterate over it in reverse order to push
+the strings and then to calculate the offset in the stack page in order
+to point to the strings properly.
+
+I avoid overflowing the stack page in start_process by checking whether or not
+everything will "fit" at the beginning of load_args_onto_stack:
+
+  /* Make sure the quantity of args won't overflow the stack page. 
+     We put more information into it than here we did in process_execute, so the
+     sizeof test we did there is insufficient.
+
+     esp can hold PGSIZE bytes, based on how it is initialized
+     in setup_stack.
+
+     How much data, total, will be put into the stack page? */
+  int64_t space_needed = 
+    cl_args->total_arglen + /* Total length of all arg strings. */
+    4 + /* Round down to a multiple of 4, adding at most 4 bytes. */
+    sizeof(void *) + /* Null pointer sentinel. */
+    sizeof(void *)*cl_args->argc + /* Pointers to each of the args. */
+    sizeof(void *)*2 + /* Location of argv, fake return address. */
+    sizeof(int); /* argc. */
+
+  if (PGSIZE < space_needed)
+  {
+    /* If a page cannot hold all of this, return failure. */
+    return false;
+  }
+
+This is independent of whether or not the load() succeeds; it just manifests
+itself as an early error.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+Pintos is a preemptive kernel. If multiple kernel threads call strtok ()
+concurrently, they will confuse each other.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+Advantage 1:
+Putting this burden on the user-side reduces the amount of code required
+to implement the kernel. This simplifies writing and debugging the kernel.
+This seems like a pretty small advantage, since the code required for this is minimal.
+
+Advantages 2-3:
+This allows the shell to implement features like globbing (cksum song_*.mp3) 
+and the automatic computation of program arguments (cksum `find . -name '*mp3'`).
+Such features are useful for composing command invocations, but would be
+inappropriate to support in the kernel.
+
+Advantage 4:
+If there are errors in the arguments (e.g. invalid characters in the file name), 
+this could be determined by the shell without the cost of a switch to kernel mode.
+
+           SYSTEM CALLS
+           ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+thread.c:
+  struct thread:
+
+    /* Owned by userprog/process.c using APIs provided by thread.h
+       Maps fd's to struct file *s. 
+       Thread APIs are defined for the fd_table. */
+    struct file_table fd_table;
+    /* Owned by userprog/process.c. */
+    struct list child_list; /* List of direct children. */
+    struct child_process_info *child_info_self; /* Pointer to my entry in my parent's child_list. */
+
+process.h:
+  /* Parent maintains a list of children in its 'struct thread'.
+     Child has a pointer to its entry in the parent's list.
+     Parent allocates each child_process_info on the heap so that they are
+     safe for both parent and child to access even if the other has
+     exited.
+  
+     The parent MUST have called process_wait_for_child_load before 
+       it returns from syscall_exec. Otherwise we risk a null pointer
+       dereference in start_process.
+  
+     The embedded sema and lock allow parent and child to synchronize. */
+  struct child_process_info
+  {
+    tid_t child_tid; /* For locating a child by tid in parent's child_list. Set by child at startup. */
+    tid_t parent_tid; /* For debugging. Set by parent at initialization. */
+  
+    /* Operations on ref_count are made atomic using the associated lock. */
+    struct lock ref_count_lock;
+    int8_t ref_count; /* Number of threads with a reference to this struct. */
+  
+    /* status_sema is Up'd twice by the child and
+       Down'd twice by the parent:
+       Once each for did_child_load_successfully, child_exit_status.
+       Parent must Down for did_child_load_successfully first and child_exit_status second. */
+    struct semaphore status_sema;
+    bool did_child_load_successfully; /* True if load() works in start_process, false else. */
+    int child_exit_status; /* Set when child calls syscall_exit. */
+  
+    /* For inclusion in the parent's child_list. */
+    struct list_elem elem;
+  };
+
+syscall.c:
+  /* Size of tables. */
+  #define N_SUPPORTED_SYSCALLS 13
+
+  /* Read/write buffer size. We do IO in this unit. */
+  #define STDINOUT_BUFSIZE 512
+  
+  enum io_type 
+    {
+      IO_TYPE_READ, /* IO will read. */
+      IO_TYPE_WRITE /* IO will write. */
+    };
+
+  /* Number of args for each syscall.
+     Table is indexed by SYSCALL_* value from lib/syscall-nr.h */
+  static int syscall_nargs[N_SUPPORTED_SYSCALLS] =
+  {
+  0 /* halt */,   1 /* exit */,
+  1 /* exec */,   1 /* wait */,
+  2 /* create */, 1 /* remove */,
+  1 /* open */,   1 /* filesize */,
+  3 /* read */,   3 /*write */,
+  2 /* seek */,   1 /* tell */,
+  1 /* close */
+  };
+
+  /* Whether or not the syscall has a user-provided address.
+     Table is indexed by SYSCALL_* value from lib/syscall-nr.h */
+  static bool syscall_has_pointer[N_SUPPORTED_SYSCALLS] =
+  {
+  false /* halt */,   false /* exit */,
+  true /* exec */,    false /* wait */,
+  true /* create */,  true /* remove */,
+  true /* open */,    false /* filesize */,
+  true /* read */,    true /*write */,
+  false /* seek */,   false /* tell */,
+  false /* close */
+  };
+
+
+filesys.c:
+  /* Ability to do sequential access to the filesys. */
+  static struct lock filesys_mutex;
+
+stdio.h:
+  /* This is the minimum fd for files. */
+  +#define N_RESERVED_FILENOS 2
+
+syscall-nr.h:
+  SYS_MIN,                    /* Minimum system call number, for correctness checking. */
+  SYS_HALT = SYS_MIN,
+...
+  SYS_MAX = SYS_INUMBER       /* Maximum system call number, for correctness checking. */
+
+threads/file_table.h
+/* A file_table is a simple structure used to track
+   a set of files.
+
+   Threads use them to track their set of open files.
+   Complexity estimates in the context of threads:
+     Lookup is O(1): A file descriptor (fd) is an index into the file_arr.
+     Insertion is O(N) on average: Adding a new file requires locating the first unused index,
+       allocating a struct file, and populating it. See "Growth".
+     Deletion is O(1): Deleting a file requires freeing the associated memory and
+       setting the pointer to NULL. 
+     Growth is O(N): If the file_table is full, we allocate a new one twice as large,
+       copy the pointers over, and continue. Existing fds remain valid because the
+       index into the table is unchanged. This puts the maximum number of
+       files at SIZE_MAX. 
+       
+     Operations on this structure are NOT thread safe. 
+     This is OK because we do not support user-level threads (i.e. sub-processes). */
+struct file_table
+{
+  size_t n_elts;           /* Number of elements in the table. */
+  size_t max_elts;         /* Max number of elements in the table. */
+  struct file **file_arr;  /* Pointer to file pointers. Allows for cheap resizing. */
+};
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+Each thread maintains a struct file_table fd_table in its struct thread.
+An fd_table is describd above, but is essentially a dynamically sized vector.
+The default size is 128, but it can grow as needed. It does not shrink.
+
+thread.h exposes a set of APIs to allow process.c to interact with files.
+
+  int thread_new_file (const char *file);
+  struct file * thread_fd_lookup (int fd);
+  void thread_fd_delete (int fd);
+  void thread_close_all_files (void);
+
+When a thread opens a file, the index of the first unused entry in the vector
+is converted to and returned as the fd. The conversion uses this function:
+
+  /* Convert index in file table to fd. */
+  static int
+  file_table_ix_to_fd (int ix)
+  {
+    ASSERT (0 <= ix);
+    return ix + N_RESERVED_FILENOS;
+  }
+
+There is an inverse: file_table_fd_to_ix.
+
+Consequently, file descriptors are unique within a process but multiple processes
+may have the same file descriptors.
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+I have one function that does a "sanity test" on a user data:
+  /* Returns true if UADDR is non-null and below kernel space. 
+     UADDR may point to un-mapped user space. */
+  static bool 
+  maybe_valid_uaddr (const void *uaddr)
+  {
+    return (uaddr != NULL && is_user_vaddr (uaddr));
+  }
+
+If user data passes this test, I use the put_user and get_user functions
+provided by Dr. Back in conjunction with code in page_fault that detects
+a page fault occurring in kernel mode and sets eip and eax appropriately.
+If a page fault is incurred by reading and/or writing data, it is clear that
+the user data was invalid.
+
+Three wrapper functions are defined in syscall.c for this purpose:
+  static bool is_valid_ustring (const char *u_str)
+  static bool is_valid_uptr (void *u_ptr)
+  static bool is_valid_ubuf (void *u_buf, unsigned size, bool will_write)
+
+For a ustring, I read every byte up to and including the terminating null byte.
+For a uptr, I read sizeof(void *) bytes.
+For a ubuf, I read/write the first byte of the buffer, and the first byte of every 
+subsequent page until I exceed SIZE bytes.
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+My code does not inspect the page table at all. 
+
+In a read/write system call with one page of data, my code will inspect at most 2 bytes: 
+the first byte, and (if the buffer spans two pages) the first byte in the second page.
+
+In a read/write system call with two bytes, my code will inspect at most 2 bytes: 
+the first byte, and (if the buffer spans two pages) the first byte in the second page
+(which in this case is just the second byte).
+
+There is no room for improvement in these numbers. We must test each page provided
+by the user at least once.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+When creating a child, a process allocates a struct child_process_info
+and passes a pointer to this struct for the new thread to access
+in start_process. The parent tracks this child_process_info struct in its
+child_list field. The child tracks this child_process_info struct in its child_info_self field.
+
+When a child exit()s, it Ups the status_sema in its struct child_process_info.
+When a parent wait(pid_t)s, it looks up this pid_t in its child_list.
+
+If it finds it, it Downs the status_sema, ensuring that wait() does not return
+until the child has Upd the status_sema and exited. It then removes the entry
+from its list.
+
+If it does not find it, it returns -1 (invalid pid_t, or already waited and removed from the list).
+
+Aside: My initial design tracked a child's status info directly in the parent, 
+and the child would be given its parent's tid_t. On exit(), the child would search all_list 
+to determine whether or not its parent was still present. If so, it would
+lock all_list and update the parent's record to indicate the child's exit status.
+This lock would also need to be acquired when adding and removing processes.
+
+I chose to use the "garbage collection" scheme you outlined in class instead
+because I concluded that it would scale better and provide better encapsulation;
+I didn't want a child to be able to access its parent's information.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+The specific approach taken for address checking is discussed above. 
+
+All user-provided memory addresses are checked for validity in syscall_handler.
+
+In syscall_handler, the stack pointer is tested using is_valid_uptr.
+A table is defined for convenient arg parsing:
+  static int syscall_nargs[N_SUPPORTED_SYSCALLS] 
+
+Since no syscall has more than 3 args, I define
+  /* No syscall takes more than 3 args. All args on stack are 4 bytes; cast as appropriate. */
+  int32_t args[3]; 
+and place each extracted argument into args.
+
+Now that the args are extracted, I use another table
+  static bool syscall_has_pointer[N_SUPPORTED_SYSCALLS]
+to decide whether or not I need to validate the pointer provided
+by the user. If I do, I switch on the syscall and validate the
+buffer appropriately.
+
+If any issue is found, I change the syscall to SYS_EXIT with exit code -1.
+By routing the flow through syscall_exit(), I know that the resources will be freed
+appropriately by thread_exit and process_exit.
+
+Example path:
+  User calls read (3, buf, 1024) 
+  We enter syscall_handler and verify that the stack pointer is valid.
+  Using the syscall_nargs table, we determine the number of arguments for read and extract each
+  of them, ensuring the validity of the stack pointer before each access.
+  
+  Now using syscall_has_pointer, we see that one or more of the args of the read syscall is a pointer.
+  We switch on the syscall and determine that we need to test args[1] with length args[2] for readability.
+  We then call is_valid_ubuf to verify that we can write to each page spanned by the user-provided buffer.
+
+  Having passed all of these tests, we call syscall_read with the appropriate args:
+    case SYS_READ:                   /* Read from a file. */
+      f->eax = syscall_read ((int) args[0], (void *) args[1], (unsigned) args[2]);
+      break;
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+As discussed in B5, a parent and child pair share a struct child_process_info.
+This struct has a semaphore called status_sema. The child Ups the status_sema twice:
+once after loading, and once before exiting.
+
+Before the status_sema is Up'd in load, the child sets the did_child_load_successfully 
+field of its child_info_self.
+
+Before the status_sema is Up'd in exit, the child sets thechild_exit_status 
+field of its child_info_self.
+
+The parent Downs the status_sema up to twice: once in process_execute after
+calling thread_create, and once if it calls wait() on the child.
+
+In process_execute, the parent knows that the did_child_load_successfully field
+of the struct child_process_info has been set once it successfully Downs the semaphore.
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+This was discussed a bit in B5 and B6. The use of a semaphore ensures that 
+the parent and child synchronize properly if the parent wait()s on the child
+before or after it has exited. 
+
+The memory allocated for the child_process_info is shared by the parent and the child.
+A struct child_process_info includes the following fields:
+  struct lock ref_count_lock;
+  int8_t ref_count; /* Number of threads with a reference to this struct. */
+
+When the parent allocates the struct, it stores it in its child_list and sets the ref_count 
+to 1. The child atomically increments the ref count at start time, before signaling to the
+parent that it has loaded.
+  The child must increment ref_count BEFORE it signals to the parent that it has loaded,
+  since otherwise the parent could exit(), decrement the ref count, and free the memory, causing the
+  child to access a null pointer on its own exit().
+
+In process_exit, a process atomically decrements the ref_count for its child_info_self, 
+and decrements the ref_count for all of its un-wait()'d children.
+If the ref_count for a child_process_info is zero after decrementing, the child_process_info is safe to be free'd, and the
+decrementer frees it. If it is executed, decrement-and-check-and-free is done atomically to avoid a preemption race in the 
+decrement path. This prevents the case where parent and child both decrement concurrently, find ref count to be 0, and both
+free the same memory.
+
+I added a test, oom-nowait, to test the case where the parent does not wait for the children before it exits.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+By centralizing and performing the error checking in syscall_handler, 
+prior to calling the handler for each specific system call, the system call functions (syscall_halt .. syscall_close)
+only have to worry about errors at the level of the system call's semantics -- e.g. file_open 
+fails in syscall_open, or the pid_t provided to syscall_wait is invalid.
+
+This made the code for each syscall function clean and easy to read and validate.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+Disadvantages:
+  There are a few "pathological" cases under which the use of a dynamical grow-only 
+  array could be bad.
+
+  1. If a process opens an enormous number of files at once, closes them all, 
+  and then does nothing further related to files, it will an unnecessary amount of
+  memory for the rest of its lifetime. However, at the cost of one pointer per file,
+  this should only be harmful in "extreme" cases.
+
+  2. By using the index into the array as the file descriptor number, we have to
+  search the array for the first empty entry in order to open a file. 
+  If a process opens N files and keeps them open, only closing and opening other files 
+  from then on, then the cost of each subsequent open() is roughly N. This is inferior
+  to an implementation with lower insertion time.
+
+Advantages:
+  1. By using an array I get O(1) lookup time. Most processes do not open and close a large number
+  of files, so the O(1) lookup time outweighs the risks described above related to memory
+  consumption and O(N) insertion time.
+
+  2. The implementation is both simple and "good enough", so to my mind it is the best 
+  approach for the task.
+   
+  3. Using indices into an array makes lookup easy and also makes it easy to handle "reserved"
+  fd's like STDIN, STDOUT, and STDERR. A simple addition or subtraction allows us to convert
+  from "index space" to "fd space".
+  
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+I could see no advantages, so I did not change it.
+
+         SURVEY QUESTIONS
+         ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+I thought the assignment was appropriately sized.
+I was surprised by the number of hints you dropped in class, though.
+Figuring out how to share memory between parent and child was one of
+the more fun parts of the assignment for me, and I was taken aback that
+you told everyone how to do it so explicitly.
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+Thinking about how to verify user pointers (including the stack pointer
+itself) was really neat. It was eye-opening regarding the kinds of
+shenanigans that the user can try to pull. 
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
+
+I enjoyed writing new tests. I think asking us to
+assess existing tests or write new tests as part of the assignment
+would be useful. In particular, figuring out how to have the parent exit
+before its children in oom-nowait.c was tricky and enjoyable, since I could 
+only use a limited set of system calls.
