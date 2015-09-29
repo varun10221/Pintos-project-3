@@ -15,12 +15,17 @@ James (Jamie) Davis <davisjam@vt.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
-I added three new tests:
+I added four new tests:
 
   src/tests/userprog/exec-noname
     Call exec("")
   src/tests/userprog/bad-syscall
     Invoke the syscall handler with an invalid syscall number
+  src/tests/userprog/open-many
+    Open 100 files, repeating 10 times.
+    Ensures that no fds are duplicated within an iteration.
+    Optionally leaks fds so that you end up having 
+    100*10 files open at once.
   src/tests/userprog/no-vm/oom-nowait
     Children exit before parent does. Parent does not
     wait() on them. Ensure that the same number of children
