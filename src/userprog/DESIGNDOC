@@ -70,7 +70,7 @@ process.c:
 >> How do you avoid overflowing the stack page?
 
 process_execute gets the user-provided string for execution.
-I make a copy so that I can strtok_r.
+I make a copy so that I can strtok_r without damaging the user-supplied pointer.
 I pass a struct cl_args (described above) to start_process.
 
 I avoid overflowing the page I allocated in process_execute by checking whether or not I will
@@ -128,8 +128,9 @@ itself as an early error.
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
-Pintos is a preemptive kernel. If multiple kernel threads call strtok ()
-concurrently, they will confuse each other.
+Pintos is a preemptive kernel. strok is not re-entrant, so if 
+multiple kernel threads call strtok () concurrently, they will 
+both be modifying the same buffer. Disaster awaits.
 
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
@@ -147,8 +148,27 @@ Such features are useful for composing command invocations, but would be
 inappropriate to support in the kernel.
 
 Advantage 4:
+This goes along with 2-3, but this lets you use environment variables
+in command invocations. The kernel should not track the environment
+of each user.
+
+Advantage 5?
 If there are errors in the arguments (e.g. invalid characters in the file name), 
 this could be determined by the shell without the cost of a switch to kernel mode.
+However, presumably this would be handled by the analog of filesys_open;
+I'm not sure if there are cases where the shell could legitimately catch errors
+without duplicating code from the kernel.
+
+Advantage 6?
+This allows the shell to implement command processing however it wants.
+A command could be phrased as "argsN argsN-1 ... args0 executable" rather than "executable args0 args1 ... args N",
+in the theme of Reverse Polish Notation. As long as the shell couches
+the command in a format expected by the kernel, the shell is free to request
+commands and identify executables however it desires.
+This is essentially the benefit of modularity + honoring APIs.
+
+I'm not sure if I'm quite getting to the crux of this question.
+I might just be describing the purpose of the shell itself.
 
            SYSTEM CALLS
            ============
