@@ -18,7 +18,7 @@
 static const int N_TIMES_TO_OPEN = 100;
 static const int N_REPETITIONS = 100;
 
-static const bool CLOSE_FILES = false;
+static const bool CLOSE_FILES = true;
 
 /* fail()'s if two fds in this set are identical or if any are < 0. */
 static void
