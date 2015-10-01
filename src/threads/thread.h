@@ -134,6 +134,9 @@ struct thread
        Maps fd's to struct file *s. 
        Thread APIs are defined for the fd_table. */
     struct file_table fd_table;
+    /* Owned by userprog/process.c. Used to keep the
+       executable from being modified. */
+    struct file *my_executable;
 
     /* Owned by userprog/process.c. */
     struct list child_list; /* List of direct children. */

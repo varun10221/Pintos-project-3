@@ -535,6 +535,10 @@ process_exit (void)
      clean it up when they exit. */
   process_parent_discard_children ();
 
+  /* Unlock executable, if we opened one. */
+  if (cur->my_executable != NULL)
+    file_close (cur->my_executable);
+
   /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. 
      Only announce if we were a valid thread. */
   struct child_process_info *cpi = thread_get_child_info_self ();
@@ -659,7 +663,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
-  int fd;
   off_t file_ofs;
   bool success = false;
   int i;
@@ -672,16 +675,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  fd = thread_new_file (file_name);
-  if (fd < 0)
+  t->my_executable = filesys_open (file_name);
+  if (t->my_executable == NULL)
     goto done;
 
-  file = thread_fd_lookup (fd);
-  /* Failure to find the file just after we've opened it is a kernel bug. */
-  ASSERT (file != NULL);
+  /* Convenient shorthand... */
+  file = t->my_executable;
   /* 3.3.5: Lock writes to the executable while we are using it. 
      Closing a file will re-enable writes. 
-     All open files (including this one) are closed in process_exit. */
+     t->my_executable is closed in process_exit. */
   file_deny_write (file);
   /* File is now read-only: safe to load executable. */
 

@@ -1146,6 +1146,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->fd_table.max_elts = 0;
   t->fd_table.file_arr = NULL;
 
+  t->my_executable = NULL;
+
   /* Initialize fields for parent/child interaction. */
   list_init(&t->child_list);
   t->child_info_self = NULL;
