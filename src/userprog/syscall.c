@@ -33,6 +33,14 @@ static bool is_valid_uptr (void *u_ptr);
 static bool is_valid_ustring (const char *u_str);
 static bool is_valid_ubuf (void *u_buf, unsigned size, bool will_write);
 
+static bool strncpy_from_user (char *dest, const char *src, unsigned MAX_LEN);
+static bool copy_from_user (void *dest, const void *src, unsigned n_bytes);
+static bool copy_ptr_from_user (void *dest, const void *src);
+static bool copy_int32_t_from_user (int32_t *dest, const int32_t *src);
+
+static bool pop_int32_t_from_user_stack (int32_t *dest, int32_t **stack);
+static bool pop_ptr_from_user_stack (void *dest, void **stack);
+
 static int get_user (const uint8_t *uaddr);
 static bool put_user (uint8_t *udst, uint8_t byte);
 static bool read_user_str (const char *str);
@@ -99,28 +107,21 @@ syscall_handler (struct intr_frame *f)
   /* Copy esp so we can navigate the stack without disturbing the caller. */
   void *sp = f->esp;
 
-  /* Verify sp is valid. */
-  if (!is_valid_uptr (sp))
-    syscall_exit (-1);
-
   /* Identify syscall. */
-  int32_t syscall = *(int32_t *) stack_pop (&sp);
+  int32_t syscall;
+  if (!pop_int32_t_from_user_stack (&syscall, &sp))
+    syscall_exit (-1);
 
   /* Invalid syscall? */
   if (syscall < SYS_MIN || SYS_MAX < syscall)
     syscall_exit(-1);
 
   /* Extract the args. */
-
-  /* No syscall takes more than 3 args. All args on stack are 4 bytes; cast as appropriate. */
   int32_t args[3]; 
-  for(i = 0; i < syscall_nargs[syscall - SYS_MIN]; i++)
+  for (i = 0; i < syscall_nargs[syscall - SYS_MIN]; i++)
   {
-    /* Verify arg is valid. */
-    if (!is_valid_uptr (sp))
+    if (!pop_int32_t_from_user_stack (&args[i], &sp))
       syscall_exit (-1);
-    /* Get arg. */
-    args[i] = *(int32_t *) stack_pop (&sp);
   }
 
   /* For those syscalls that evaluate a user-provided address,
@@ -511,12 +512,110 @@ is_valid_ustring (const char *u_str)
   return read_user_str (u_str);
 }
 
-/* Returns true if we can read user-provided ptr U_PTR
+/* Returns true if we can read user-space U_PTR
    without pagefaulting or leaving the user's legal address space. */
 static bool 
 is_valid_uptr (void *u_ptr)
 {
   return is_valid_ubuf (u_ptr, sizeof(void *), false);
+}
+
+/* Copy this many bytes from user-space SRC into DEST.
+   True on success, false if we leave user's legal address space or pagefault. */
+static bool 
+copy_from_user (void *dest, const void *src, unsigned n_bytes)
+{
+  ASSERT (dest != NULL);
+
+  int rc;
+  unsigned i;
+  for (i = 0; i < n_bytes; i++)
+  {
+    if (!maybe_valid_uaddr(src) || (rc = get_user(src)) == -1)
+      return false;
+    *(char *) dest = rc;
+    dest++;
+    src++;
+  }
+
+  return true;
+}
+
+/* Copy a pointer's worth of data from user-space SRC into DEST.
+   True on success, false if we leave user's legal address space or pagefault. */
+static bool 
+copy_ptr_from_user (void *dest, const void *src)
+{
+  return copy_from_user (dest, src, sizeof(void *));
+}
+
+/* Copy a pointer's worth of data from user-space STACK into DEST.
+   Pop STACK on success. 
+   True on success, false if we leave user's legal address space or pagefault. */
+static bool
+pop_ptr_from_user_stack (void *dest, void **stack)
+{
+  ASSERT (dest != NULL);
+  ASSERT (stack != NULL);
+
+  bool success = copy_ptr_from_user (dest, *stack);
+  if (success)
+    stack_pop (stack);
+  return success;
+}
+
+/* Copy an int32_t from SRC into DEST.
+   True on success, false if we leave user's legal address space or pagefault. */
+static bool 
+copy_int32_t_from_user (int32_t *dest, const int32_t *src)
+{
+  return copy_from_user (dest, src, sizeof(int32_t));
+}
+
+/* Copy an int32_t from SRC into DEST.
+   Pop STACK on success. 
+   True on success, false if we leave user's legal address space or pagefault. */
+static bool 
+pop_int32_t_from_user_stack (int32_t *dest, int32_t **stack)
+{
+  ASSERT (dest != NULL);
+  ASSERT (stack != NULL);
+
+  bool success = copy_int32_t_from_user (dest, *stack);
+  if (success)
+    stack_pop (stack);
+  return success;
+}
+
+/* Copy string from user-space SRC into DEST. 
+   True on success, false if we leave user's legal address space or pagefault. 
+   False if src is more than MAX_LEN characters, including terminating null byte. 
+   
+   On failure, dest may contain up to the first MAX_LEN characters of u_str,
+   and in this case is not a valid c-string. 
+   
+   Not used in P2, but will be needed in P3. */
+static bool 
+strncpy_from_user (char *dest, const char *src, unsigned MAX_LEN)
+{
+  ASSERT (dest != NULL);
+
+  int rc;
+  int i;
+  for (i = 0; i < MAX_LEN; i++)
+  {
+    if (!maybe_valid_uaddr (src) || (rc = get_user (src)) == -1)
+      return false;
+    *dest = rc;
+    /* Did we read the null byte? */
+    if (rc == '\0')
+      return true;
+    dest++;
+    src++;
+  }
+
+  /* We have read MAX_LEN characters, so the string is too long for DEST. */
+  return false;
 }
 
 /* Returns true if we can read or write user-provided buffer U_BUF
@@ -615,29 +714,6 @@ put_user (uint8_t *udst, uint8_t byte)
    asm ("movl $1f, %0; movb %b2, %1; 1:"
         : "=&a" (error_code), "=m" (*udst) : "q" (byte));
    return error_code != -1;
-}
-
-/* Copy N_BYTES from user-provided SRC to safe DEST, one byte at a time. 
-   Returns true if successful, false at the first segfault.
-
-   May want this in P3 or P4. Not used in P2. */
-static bool
-copy_from_user (int8_t *dest, const uint8_t *src, unsigned n_bytes)
-{
-  ASSERT (dest != NULL);
-  ASSERT (src != NULL);
-
-  unsigned i;
-  int8_t rc;
-  for (i = 0; i < n_bytes; i++)
-  {
-    rc = get_user(src);
-    if (rc == -1)
-      break;
-    *dest = rc;
-    dest++;
-  }
-  return rc;
 }
 
 /* Human-readable syscall. Useful for debugging syscall_handler. */
