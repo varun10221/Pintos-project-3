@@ -15,29 +15,31 @@ James (Jamie) Davis <davisjam@vt.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
-I added four new tests:
+I added five new tests:
 
   src/tests/userprog/exec-noname
     Call exec("")
   src/tests/userprog/bad-syscall
     Invoke the syscall handler with an invalid syscall number
+  src/tests/userprog/rox-fd-leak
+    Check for file descriptors "leaking" from kernel to user space
   src/tests/userprog/open-many
-    Open 100 files, repeating 10 times.
+    Open 100 files, repeating 100 times.
     Ensures that no fds are duplicated within an iteration.
     Optionally leaks fds so that you end up having 
-    100*10 files open at once.
+    100*100 files open at once. Default behavior is
+    to close files at the end of each iteration.
   src/tests/userprog/no-vm/oom-nowait
     Children exit before parent does. Parent does not
     wait() on them. Ensure that the same number of children
     can be created each iteration.
 
-I am still working on submitting a pull request for these tests.
-
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
 
-None.
+I took a peek at http://www.ibm.com/developerworks/library/l-kernel-memory-access/
+to learn how this is done in Linux. I borrowed the names of some functions.
 
          ARGUMENT PASSING
          ================
