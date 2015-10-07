@@ -143,6 +143,15 @@ struct thread
     struct child_process_info *child_info_self; /* Pointer to my entry in my parent's child_list. */
 #endif
 
+    /* Structures for virtual memory. */
+
+    /* Owned by vm/page.h. For inclusion in the list of owners of a page. */
+    struct list_elem page_elem;
+    /* Maps mmap_id_t to file*. */
+    struct file_table mmap_table;
+    /* Used to determine where a given page is. */
+    struct supp_page_table supp_page_table;
+
     /* Owned by devices/timer.c. */
     int64_t wake_me_at; /* Wake a thread in thread_status THREAD_BLOCKED when 0 < wake_me_at <= current timer tick */
 

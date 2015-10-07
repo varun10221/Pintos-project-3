@@ -9,41 +9,35 @@
 #include "vm/page.h"
 #include "vm/swap.h"
 
-typedef int32_t frame_id_t;
-const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);
+typedef int32_t id_t;
+static const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);
 
-enum frame_status
+enum frame_swapslot_status
 {
-  FRAME_EMPTY, /* There is no page occupying this frame. */
-  FRAME_OCCUPIED, /* There is a page resident in this frame. */
-  FRAME_PINNED, /* There is a page resident in this frame. It is pinned (cannot be evicted). */
+  EMPTY, /* There is no page occupying this frame/slot swap. */
+  OCCUPIED, /* There is a page resident in this frame/slot swap. */
+  PINNED /* There is a page resident in this frame. It is pinned (cannot be evicted). */
 };
 
-
-/* Fundamental unit of the frame table. 
- * TODO UPDATE */
-struct frame_table_entry
+/* Fundamental unit of the frame and swap tables. */
+struct frame_swap_table_entry
 {
-  frame_id_t frame_id; /* Unique ID for this frame. */
-  unsigned stamp; /* Incremented each time the resident page is evicted. Solve ABA problem. */
+  id_t id; /* Unique ID for this frame/swap slot. */
+  struct page *pg; /* Page resident in this frame or swap slot. */
+  unsigned stamp; /* TODO Need this? Incremented each time the resident page is evicted. Solves ABA problem. */
+
   struct lock lock; /* Lock to control this FTE. */
-  enum frame_status status;
-
-  /* TODO I think we should be storing pointers, not our own copies. */
-  struct list mappings; /* List of 'struct mapping's: processes that are using this frame. Uses fte_elem from 'struct mapping'. */
-  void *page; /* Which page is in this frame? */
-
-  /* Can change this type later if needed... */
-  struct list_elem elem; /* For tracking in a list. */
+  enum frame_swapslot_status status;
 };
 
-struct frame_table
+/* Frame table and swap table use same structure. */
+struct frame_swap_table
 {
-  struct bitmap *frame_status; 
-  struct lock frame_status_lock;
+  struct bitmap *usage; /* 0 if available, 1 if in use. */
+  struct lock usage_lock; /* For atomic updates to usage. */
 
   /* Array mapping frame index to corresponding entry. */
-  struct frame_table_entry *frames;
+  struct frame_swap_table_entry *entries;
 };
 
 /* Basic life cycle. */
