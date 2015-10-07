@@ -23,7 +23,7 @@ enum segment_type
 
 /* Structure tracking the mapping between a virtual address (page) and its location. */
 /* TODO should this be called a page? */
-struct mapping
+struct page
 {
   /* OWNER */
   struct supp_page_table *spt; /* Supp. Page Table that contains this mapping. */
