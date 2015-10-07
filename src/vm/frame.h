@@ -4,10 +4,12 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <list.h>
-#include "threads/synch.h"
-#include "threads/vaddr.h"
+
 #include "vm/page.h"
 #include "vm/swap.h"
+
+#include "threads/synch.h"
+#include "threads/vaddr.h"
 
 typedef int32_t id_t;
 static const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);

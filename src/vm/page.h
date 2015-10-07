@@ -3,7 +3,9 @@
 
 #include <list.h>
 #include <hash.h>
+
 #include "vm/frame.h"
+#include "threads/synch.h"
 
 /* Not sure if we need this. */
 struct frame_swap_table_entry;
@@ -82,7 +84,7 @@ struct segment
   enum segment_type type; 
   
   struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
-}
+};
 
 /* Structure tracking the mapping between a virtual address (page) and its location. */
 struct page

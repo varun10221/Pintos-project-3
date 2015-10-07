@@ -8,6 +8,7 @@
 #include "lib/kernel/fpra.h"
 #include "threads/thread_priorities.h"
 #include "threads/file_table.h"
+#include "vm/page.h"
 
 /* Forward declarations. */
 struct lock;
