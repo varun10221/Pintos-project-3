@@ -1302,7 +1302,7 @@ int
 thread_new_file (const char *file)
 {
   ASSERT (file != NULL);
-  return file_table_new_fd (&thread_current ()->fd_table, file);
+  return file_table_new_entry_by_name (&thread_current ()->fd_table, file);
 }
 
 /* Return the 'struct file*' associated with this fd. 
@@ -1319,7 +1319,7 @@ thread_fd_lookup (int fd)
 void 
 thread_fd_delete (int fd)
 {
-  file_table_delete_fd (&thread_current ()->fd_table, fd);
+  file_table_delete_entry (&thread_current ()->fd_table, fd);
 }
 
 /* Close all open file handles and free the memory.

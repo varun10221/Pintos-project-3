@@ -4,10 +4,14 @@
 #include "filesys/file.h"
 #include <stddef.h>
 
+typedef int32_t ft_id_t;
+
 /* A file_table is a dynamic array used to track
    the set of files associated with a process.
 
-   Threads use them to track their set of open files.
+   Maps an integer id to a struct file*.
+
+   Threads use them to track their set of open and mmap'd files.
    Complexity estimates in the context of threads:
      Lookup is O(1): A file descriptor (fd) is an index into the file_arr.
      Insertion is O(N) on average: Adding a new file requires locating the first unused index,
@@ -33,8 +37,9 @@ void file_table_init (struct file_table *, int init_size);
 void file_table_destroy(struct file_table *);
 
 /* Adding and deleting elements. */
-int file_table_new_fd (struct file_table *, const char *name);
-struct file * file_table_lookup (struct file_table *, int fd);
-void file_table_delete_fd (struct file_table *, int fd);
+int file_table_new_entry_by_name (struct file_table *, const char *name);
+int file_table_new_entry_by_file (struct file_table *, struct file *f);
+struct file * file_table_lookup (struct file_table *, ft_id_t id);
+void file_table_delete_entry (struct file_table *, ft_id_t id);
 
 #endif /* threads/file_table.h */

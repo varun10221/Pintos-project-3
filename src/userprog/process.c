@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "threads/file_table.h"
 
 /* Structure for command-line args. */
 struct cl_args
@@ -920,4 +921,45 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+/* mmap support. */
+
+/* Add a mapping for FD in thread's mmap_table. 
+ 
+   Returns mapid, or -1 on failure. */ 
+mapid_t process_mmap_add (int fd)
+{
+  ASSERT (0 <= fd);
+  struct file *f = thread_fd_lookup (fd); 
+  if (f == NULL)
+    return -1;
+  struct file *dup = file_reopen (f);
+  if (dup == NULL)
+    return -1;
+  
+  mapid_t id = file_table_new_entry_by_file (&thread_current ()->mmap_table, dup);
+  return id;
+}
+
+/* Remove this mapping. */
+void process_mmap_remove (mapid_t id)
+{
+  ASSERT (0 <= id); 
+  file_table_delete_entry (&thread_current ()->mmap_table, id);
+}
+
+/* Find the struct file* associated with this id. 
+   Returns NULL if no mapping. */
+struct file * process_mmap_lookup (mapid_t id)
+{
+  ASSERT (0 <= id); 
+  return file_table_lookup (&thread_current ()->mmap_table, id);
+}
+
+/* Remove all extant mappings from the mmap_table and free the memory.
+   Use when a process is exiting. */
+void process_mmap_remove_all (void)
+{
+  file_table_destroy (&thread_current ()->mmap_table); 
 }

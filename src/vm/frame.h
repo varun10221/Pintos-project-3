@@ -43,11 +43,11 @@ struct frame_swap_table
 };
 
 /* Basic life cycle. */
-bool frame_table_init (struct frame_table *);
-void frame_table_destroy (struct frame_table *);
+bool frame_table_init (struct frame_swap_table *);
+void frame_table_destroy (struct frame_swap_table *);
 
 /* Getting and releasing frames. */
-bool frame_table_get_frame (struct frame_table *, struct mapping *);
-void frame_table_release_frame (struct frame_table *, struct mapping *);
+bool frame_table_get_frame (struct frame_swap_table *, struct page *);
+void frame_table_release_frame (struct frame_swap_table *, struct page *);
 
 #endif /* vm/frame.h */
