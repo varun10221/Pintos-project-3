@@ -27,6 +27,12 @@ struct frame_swap_table_entry
   id_t id; /* Unique ID for this frame/swap slot. */
   struct page *pg; /* Page resident in this frame or swap slot. */
   unsigned stamp; /* TODO Need this? Incremented each time the resident page is evicted. Solves ABA problem. */
+  /* Notes on the stamp idea: This is so that it is clear that the contents of a frame have changed.
+     We would need this if processes are tracking {frame, last_known_stamp} pairs.
+     That way if two processes lock a frame, and the first one evicts the resident page,
+     the second one sees that the stamp has changed (and therefore that the resident page has changed). 
+
+     Not clear if we need this. Still need to ponder synchronization.  */
 
   struct lock lock; /* Lock to control this FTE. */
   enum frame_swapslot_status status;
