@@ -89,6 +89,10 @@ struct segment
 /* Structure tracking the mapping between a virtual address (page) and its location. */
 struct page
 {
+  /* TODO A list of 'owners' (i.e. thread*) is insufficient for eviction. We need to know {owner, vaddr} pairs so that
+     we can pagedir_clear_page (owner, vaddr). I propose using a struct that holds a pair {address, thread*}. 
+     Presumably a pd* would be sufficient but we might need the thread* later, and the thread* would be more
+     useful for debugging anyway. */
   struct list owners; /* List of threads that use this page. */
   int32_t segment_page; /* Which page in its segment is this? */
 
