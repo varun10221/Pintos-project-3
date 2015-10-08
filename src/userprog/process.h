@@ -3,6 +3,9 @@
 
 #include "threads/thread.h"
 #include "threads/synch.h"
+#include "filesys/file.h"
+
+typedef ft_id_t mapid_t;
 
 /* Parent maintains a list of children in its 'struct thread'.
    Child has a pointer to its entry in the parent's list.
@@ -43,5 +46,11 @@ void process_activate (void);
 
 /* Used by syscall.c */
 void process_set_exit_status (int exit_status);
+
+/* mmap support. */
+mapid_t process_mmap_add (int fd);
+void process_mmap_remove (mapid_t);
+struct file * process_mmap_lookup (mapid_t);
+void process_mmap_remove_all (void);
 
 #endif /* userprog/process.h */

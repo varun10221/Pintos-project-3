@@ -8,6 +8,11 @@
 #include "threads/palloc.h"
 #include "vm/swap.h"
 
+/*change struct frame_table_entry to frame _swap_table entry .TODO */
+
+/* Frame table. List of frames containing the resident pages. */
+struct frame_swap_table frame_table;
+
 /* Convert KADDR to frame id. TODO */
 static frame_id_t frame_table_addr_to_ix (void *kaddr)
 {

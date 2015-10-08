@@ -1,0 +1,250 @@
+Group members:
+
+Jamie Davis (davisjam@vt.edu)
+Varun Subramanian (varuns92@vt.edu)
+
+---------------
+
+C declarations and comments:
+
+thread.h: struct thread:
+  /* Structures for virtual memory. */
+  /* Owned by vm/page.h. For inclusion in the list of owners of a page. */
+  struct list_elem page_elem;
+  /* Maps mmap_id_t to file*. */
+  struct file_table mmap_table;
+  /* Used to determine where a given page is. */
+  struct supp_page_table supp_page_table;
+
+page.h:
+  enum page_state
+  {
+    PAGE_RESIDENT, /* This page is in a frame. */
+    PAGE_SWAPPED_OUT, /* This page is in a swap slot. */
+    PAGE_IN_FILE, /* This page is in a file (mmap). */
+    PAGE_NEVER_ACCESSED /* This page has never been accessed. */
+  };
+
+  enum segment_type
+  {
+    SEGMENT_PRIVATE, /* Not shared between multiple processes. */
+    SEGMENT_SHARED_RO /* RO shared segment. */
+  };
+
+  enum popularity_range
+  {
+    POPULARITY_MIN = 0,  /* Lowest value a page's popularity can take on. */
+    POPULARITY_START = 127, /* Initial value for a new page's popularity. */
+    POPULARITY_MAX = 255 /* Highest value a page's popularity can take on. */
+  };
+
+  /* Maps all virtual addresses known to this process. */
+  struct supp_page_table
+  {
+    struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends just below PHYS_BASE). */
+  };
+
+  /* Pages that may be shared between multiple processes. 
+     Each process maintains its own concept of what the page number means. */
+  struct shared_pages
+  {
+    struct lock lock; /* For atomic update of the mappings. */
+    struct hash *page_mappings; /* Maps from page number to page. */
+  };
+
+  /* Container for a segment shared between multiple processes.
+   
+     Allocated by the first process to access the shared segment.
+     Cleaned up by the last process to release the shared segment. 
+     
+     A pointer to the page_mappings element can be cast to the ro_shared_segment itself. */
+  struct ro_shared_segment
+  {
+    struct shared_pages page_mappings; /* Maps relative page number to page. */
+    block_sector_t inode_sector; /* Sector of the inode to which the file is mapped; unique in the FS across the lifetime of the executable. */
+
+    int ref_count; /* How many processes are using this shared segment? Last one done has to clean up. */
+    struct lock ref_count_lock; /* Atomic modifications. */
+
+    struct hash_elem elem; /* For storage in the ro_segment_table. Hash on inode_start. */
+  };
+
+  /* A single global structure is defined to allow the sharing of the RO pages of executables. */
+  struct ro_shared_segment_table
+  {
+    struct hash inode_to_segment; /* Hash inode number to an ro_shared_segment. */
+    struct lock hash_lock; /* Lock before modifying the hash. */
+  } ro_shared_segment_table;
+
+  /* Tracks a particular address range for a process. */
+  struct segment
+  {
+    /* An address belongs to this segment if (start <= addr && addr < end). */
+    void *start; /* Starting address of this segment (virtual address). */
+    void *end; /* One address past the final address of this segment (virtual address). */
+
+    struct shared_pages *page_mappings; /* Maps from segment page number to page. Can be shared with other processes. */
+
+    /* SEGMENT_PRIVATE: We are the only one using page_mappings.
+       SEGMENT_SHARED_RO: page_mappings is shared. Need to acquire lock before 
+         defining new mappings. Can be cast to a 'struct ro_shared_segment *' if needed. */
+    enum segment_type type; 
+    
+    struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
+  }
+
+  /* Structure tracking the mapping between a virtual address (page) and its location. */
+  struct page
+  {
+    struct list owners; /* List of threads that use this page. */
+    int32_t segment_page; /* Which page in its segment is this? */
+
+    struct frame_swap_table_entry *frame; /* Frame or slot in which this page resides. */
+    unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */
+
+    int8_t popularity; /* For LRU algorithm. Defaults to POPULARITY_START, incremented/decremented based on access bit. */
+
+    enum page_state state; /* What state is this page in? */
+    bool is_pinned; /* Whether or not this page is pinned in its frame. */
+
+    struct file *mmap_file; /* For loading and evicting pages in PAGE_IN_FILE state. */
+
+    struct lock mapping_lock; /* TODO Is this how SPT and FT should communicate w.r.t. eviction? */
+    struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
+  };
+
+frame.h:
+  typedef int32_t id_t;
+  static const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);
+
+  enum frame_swapslot_status
+  {
+    EMPTY, /* There is no page occupying this frame/slot swap. */
+    OCCUPIED, /* There is a page resident in this frame/slot swap. */
+    PINNED /* There is a page resident in this frame. It is pinned (cannot be evicted). */
+  };
+
+  /* Fundamental unit of the frame and swap tables. */
+  struct frame_swap_table_entry
+  {
+    id_t id; /* Unique ID for this frame/swap slot. */
+    struct page *pg; /* Page resident in this frame or swap slot. */
+    unsigned stamp; /* TODO Need this? Incremented each time the resident page is evicted. Solves ABA problem. */
+
+    struct lock lock; /* Lock to control this FTE. */
+    enum frame_swapslot_status status;
+  };
+
+  /* Frame table and swap table use same structure. */
+  struct frame_swap_table
+  {
+    struct bitmap *usage; /* 0 if available, 1 if in use. */
+    struct lock usage_lock; /* For atomic updates to usage. */
+
+    /* Array mapping frame index to corresponding entry. */
+    struct frame_swap_table_entry *entries;
+  };
+
+swap.h:
+  /* DIV_ROUND_UP in case PGSIZE is not evenly divisible by SECTOR_SIZE. 
+     Overestimate the number of sectors we need, since we can't share sectors
+     between two slots. */
+  static const uint32_t BLOCK_SECTORS_PER_PAGE = DIV_ROUND_UP (PGSIZE, SECTOR_SIZE);
+  static const uint32_t SWAP_TABLE_N_SLOTS = block_size (block_get_role (BLOCK_SWAP)) / BLOCK_SECTORS_PER_PAGE;
+
+---------------
+
+Global variables:
+
+  frame.c:
+    /* Frame table. List of frames containing the resident pages. */
+    struct frame_swap_table frame_table;
+
+  swap.c:
+    /* Swap table. Used as extension of frame table. */
+    struct frame_swap_table swap_table;
+
+  frame.h: Above, we declared a ro_shared_segment_table for sharing the RO
+    pages of executables.
+
+---------------
+
+Container details:
+
+SUPPLEMENTAL PAGE TABLE:
+
+(a) how it is populated
+  At load, create 3 segments: one ro shared segment of 
+  executable, one rw private segment of executable, and one stack segment. 
+  New segments are inserted whenever mmap() is called; one per active mmap instance.
+(b) how many elements it will contain
+  Three initial segments and one segment for each active mmap instance.
+(c) how it is accessed
+  Each struct thread* has a private SPT.
+
+  When a page fault occurs, the segments of the active process are searched to determine
+  the segment to which the address belongs. The relative page is calculated and the
+  hash (mapping relative page number to struct page*) is consulted. 
+  
+  If there is an entry, the page's state field is examined to determine where it resides: 
+    - could be in file
+    - could be in swap
+  If there is no entry:
+    - if it is close to the start of the stack segment (the segment with end == PHYS_BASE),
+      then we grow the stack segment
+    - else terminate the process for illegal memory access
+(d) how many copies of that container exist in the system
+  One for each struct thread*
+(e) how it is destroyed, if applicable
+  In process_exit()
+
+FRAME TABLE: 
+
+(a) how it is populated
+  At boot time we allocate all pages in the user pool and mark them as empty frames.
+(b) how many elements it will contain
+  One frame for each page in the user pool.
+(c) how it is accessed
+  Global structure protected by locks.
+(d) how many copies of that container exist in the system
+  One.
+(e) how it is destroyed, if applicable
+  N/A
+
+SWAP TABLE:
+(a) how it is populated
+  At boot time, we create an entry for each page-sized region in the swap partition.
+(b) how many elements it will contain
+  One entry for each page in the swap partition.
+(c) how it is accessed
+  Global structure protected by locks.
+(d) how many copies of that container exist in the system
+  One.
+(e) how it is destroyed, if applicable
+  N/A
+
+FILE MAPPINGS TABLE:
+(a) how it is populated
+  Each time a process calls mmap(), we add an entry to the mmap table.
+(b) how many elements it will contain
+  One for each active mmap instance of the process.
+(c) how it is accessed
+  Private table for each thread.
+(d) how many copies of that container exist in the system
+  One per thread.
+(e) how it is destroyed, if applicable
+  In process_exit, all mappings are unmapped.
+
+SHARING PAGES OF EXECUTABLES:
+(global ro_shared_segment_table) 
+(a) how it is populated
+  Entries are added and deleted as executables are
+  mapped and unmapped in start_process (load?) and process_exit
+(b) how many elements it will contain
+  One for each unique executable in use.
+(c) how it is accessed
+  Global structure protected by a lock.
+(d) how many copies of that container exist in the system
+  One.
+(e) how it is destroyed, if applicable
+  N/A

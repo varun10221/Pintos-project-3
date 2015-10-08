@@ -2,10 +2,10 @@
 #define THREADS_SYNCH_H
 
 #include <list.h>
-#include <priority_queue.h>
 #include <stdbool.h>
-#include "threads/thread.h"
 
+/* Forward declarations. */
+struct thread;
 struct priority_queue;
 
 /* A counting semaphore. */

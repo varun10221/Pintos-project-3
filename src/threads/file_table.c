@@ -8,8 +8,8 @@
 #include "filesys/filesys.h"
 
 static bool file_table_grow (struct file_table *, int new_size);
-static int file_table_ix_to_fd (int ix);
-static int file_table_fd_to_ix (int fd);
+static int file_table_ix_to_id (int ix);
+static int file_table_id_to_ix (ft_id_t id);
 
 /* Initialize a file table with space for this many elements. */
 void 
@@ -66,11 +66,11 @@ file_table_destroy (struct file_table *ft)
   ft->max_elts = 0;
 }
 
-/* Add a new fd corresponding to FILE to FT.
+/* Add a new id to FT corresponding to the file specified by NAME.
    Will grow the file table if it is full. 
    Returns -1 if failure is encountered. */ 
 int 
-file_table_new_fd (struct file_table *ft, const char *name)
+file_table_new_entry_by_name (struct file_table *ft, const char *name)
 {
   ASSERT (ft != NULL);
   ASSERT (name != NULL);
@@ -99,7 +99,49 @@ file_table_new_fd (struct file_table *ft, const char *name)
       {
         /* Successfully added an open file. */
         ft->n_elts++;
-        return file_table_ix_to_fd (i);
+        return file_table_ix_to_id (i);
+      }
+      else
+        return -1;
+    }
+  }
+
+  NOT_REACHED ();
+}
+
+/* Add a new id to FT corresponding to the file specified by F.
+   Will grow the file table if it is full. 
+   Returns -1 if failure is encountered. */ 
+int file_table_new_entry_by_file (struct file_table *ft, struct file *f)
+{
+  ASSERT (ft != NULL);
+  ASSERT (f != NULL);
+
+  size_t i, first_ix_to_check = 0, orig_max = ft->max_elts;
+
+  /* Is there space for a new file? */
+  if (ft->n_elts == ft->max_elts)
+  {
+    /* Start the array at size 8; small enough to handle many typical process flows
+       without needing to grow again? */
+    bool grew = file_table_grow (ft, (0 < ft->max_elts ? 2*ft->max_elts : 8));
+    if (grew)
+      /* ft was full, so the first empty entry will be the old max_elts. */
+      first_ix_to_check = orig_max;
+    else
+      return -1;
+  }
+
+  for (i = first_ix_to_check; i < ft->max_elts; i++)
+  {
+    if (ft->file_arr[i] == NULL)
+    {
+      ft->file_arr[i] = f;
+      if (ft->file_arr[i] != NULL)
+      {
+        /* Successfully added an open file. */
+        ft->n_elts++;
+        return file_table_ix_to_id (i);
       }
       else
         return -1;
@@ -120,25 +162,25 @@ file_table_lookup (struct file_table *ft, int fd)
   if (fd < N_RESERVED_FILENOS)
     return NULL;
 
-  int ix = file_table_fd_to_ix (fd);
+  int ix = file_table_id_to_ix (fd);
   if (ft->max_elts < (size_t) ix)
     /* ix is beyond safety. */
     return NULL;
   return ft->file_arr[ix]; 
 }
 
-/* Delete this fd from the table. If no such
+/* Delete ID from the table. If no such
    fd is present, nothing happens. 
-   If this fd is present, closes the file. */
+   If this ID is present, closes the file. */
 void 
-file_table_delete_fd (struct file_table *ft, int fd)
+file_table_delete_entry (struct file_table *ft, ft_id_t id)
 {
   ASSERT (ft != NULL);
 
-  if (fd < N_RESERVED_FILENOS)
+  if (id < N_RESERVED_FILENOS)
     return;
 
-  int ix = file_table_fd_to_ix (fd);
+  int ix = file_table_id_to_ix (id);
   if (ft->max_elts <= (size_t) ix)
     /* ix is beyond safety. */
     return; 
@@ -186,15 +228,15 @@ file_table_grow (struct file_table *ft, int new_size)
 
 /* Convert fd to index in file table. */
 static int
-file_table_fd_to_ix (int fd)
+file_table_id_to_ix (ft_id_t id)
 {
-  ASSERT (N_RESERVED_FILENOS <= fd);
-  return fd - N_RESERVED_FILENOS;
+  ASSERT (N_RESERVED_FILENOS <= id);
+  return id - N_RESERVED_FILENOS;
 }
 
 /* Convert index in file table to fd. */
 static int
-file_table_ix_to_fd (int ix)
+file_table_ix_to_id (int ix)
 {
   ASSERT (0 <= ix);
   return ix + N_RESERVED_FILENOS;

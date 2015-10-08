@@ -27,8 +27,10 @@
 */
 
 #include "threads/synch.h"
+
 #include <stdio.h>
 #include <string.h>
+#include <priority_queue.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 

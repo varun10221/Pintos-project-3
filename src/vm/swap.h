@@ -1,8 +1,12 @@
 #ifndef VM_SWAP_H
 #define VM_SWAP_H
 
-#include "vm/frame.h"
+#include <round.h>
 
-typedef int32_t swap_id_t;
+#include "vm/frame.h"
+#include "threads/vaddr.h"
+#include "devices/block.h"
+
+/* TODO Declare public interface. */
 
 #endif /* vm/swap.h */
