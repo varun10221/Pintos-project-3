@@ -5,7 +5,7 @@
 #include <hash.h>
 
 struct supp_page_table;
-struct mapping;
+struct page;/*changed from mapping*/
 
 enum page_state
 {
@@ -22,7 +22,7 @@ enum segment_type
 }
 
 /* Structure tracking the mapping between a virtual address (page) and its location. */
-/* TODO should this be called a page? */
+/* TODO should this be called a page? *//*made changes
 struct page
 {
   /* OWNER */

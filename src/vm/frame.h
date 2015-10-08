@@ -14,9 +14,9 @@ const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);
 
 enum frame_status
 {
-  FRAME_EMPTY, /* There is no page occupying this frame. */
+  FRAME_EMPTY,     /* There is no page occupying this frame. */
   FRAME_OCCUPIED, /* There is a page resident in this frame. */
-  FRAME_PINNED, /* There is a page resident in this frame. It is pinned (cannot be evicted). */
+  FRAME_PINNED,  /* There is a page resident in this frame. It is pinned (cannot be evicted). */
 };
 
 
