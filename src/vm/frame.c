@@ -20,7 +20,7 @@ static frame_id_t frame_table_addr_to_ix (void *kaddr)
   return 0;
 }
 
-void frame_table_init_frame (struct frame_table_entry *fte, frame_id_t id)
+void frame_table_init_frame (struct frame_swap_table_entry *fte, frame_id_t id)
 {
   ASSERT (fte != NULL);
 
@@ -33,12 +33,12 @@ void frame_table_init_frame (struct frame_table_entry *fte, frame_id_t id)
 
 /* System-wide frame table. Processes use the functions
    defined in frame.h to interact with this table. */
-struct frame_table system_frame_table;
+struct frame_swap_table system_frame_table;
 
 /* Basic life cycle. */
 
 /* Initialize this ft. Not thread safe. Should be called once. */
-bool frame_table_init (struct frame_table *ft)
+bool frame_table_init (struct frame_swap_table *ft)
 {
   ASSERT (ft != NULL);
 
@@ -50,7 +50,7 @@ bool frame_table_init (struct frame_table *ft)
     
   lock_init (&ft->frame_status_lock);
 
-  ft->frames = (struct frame_table_entry *) malloc (FRAME_TABLE_N_FRAMES * sizeof(struct frame_table_entry));
+  ft->frames = (struct frame_swap_table_entry *) malloc (FRAME_TABLE_N_FRAMES * sizeof(struct frame_swap_table_entry));
   if (ft->frames == NULL)
     goto CLEANUP_AND_ERROR;
   for (i = 0; i < FRAME_TABLE_N_FRAMES; i++)
@@ -69,7 +69,7 @@ bool frame_table_init (struct frame_table *ft)
 }
 
 /* Destroy this ft. Not thread safe. Should be called once. */
-void frame_table_destroy (struct frame_table *ft)
+void frame_table_destroy (struct frame_swap_table *ft)
 {
   ASSERT (ft != NULL);
 
@@ -83,7 +83,7 @@ void frame_table_destroy (struct frame_table *ft)
    Return the locked FTE.
 
    If no candidate is identified, returns NULL. */
-struct frame_table_entry * frame_table_get_eviction_candidate (struct frame_table *ft)
+struct frame_swap_table_entry * frame_table_get_eviction_candidate (struct frame_swap_table *ft)
 {
   ASSERT (ft != NULL);
 
@@ -91,7 +91,7 @@ struct frame_table_entry * frame_table_get_eviction_candidate (struct frame_tabl
 }
 
 /* Swap this frame out. */ 
-swap_id_t frame_table_swap_out (struct frame_table_entry *fte)
+swap_id_t frame_table_swap_out (struct frame_swap_table_entry *fte)
 {
   ASSERT (fte != NULL);
 
@@ -99,19 +99,19 @@ swap_id_t frame_table_swap_out (struct frame_table_entry *fte)
 }
 
 /* Swap this frame in. */
-void frame_table_swap_in (struct frame_table_entry *fte, swap_id_t swap_id)
+void frame_table_swap_in (struct frame_swap_table_entry *fte, swap_id_t swap_id)
 {
   ASSERT (fte != NULL);
 }
 
 /* Not yet fleshed out. */
-void frame_table_write_page_to_file (struct frame_table_entry *fte)
+void frame_table_write_page_to_file (struct frame_swap_table_entry *fte)
 {
   ASSERT (fte != NULL);
 }
 
 /* Not yet fleshed out. */
-void frame_table_read_page_from_file (struct frame_table_entry *fte)
+void frame_table_read_page_from_file (struct frame_swap_table_entry *fte)
 {
   ASSERT (fte != NULL);
 }
@@ -119,12 +119,12 @@ void frame_table_read_page_from_file (struct frame_table_entry *fte)
 /* Get a frame. Thread safe. 
    
    Returns true if we get a frame, else false. */
-bool frame_table_get_frame (struct frame_table *ft, struct mapping *mapping)
+bool frame_table_get_frame (struct frame_swap_table *ft, struct mapping *mapping)
 {
   ASSERT (ft != NULL);
   ASSERT (mapping != NULL);
 
-  struct frame_table_entry *fte;
+  struct frame_swap_table_entry *fte;
 
   lock_acquire (&ft->frame_status_lock);
   /* Find a free frame in frame_status if one exists. */
@@ -172,7 +172,7 @@ bool frame_table_get_frame (struct frame_table *ft, struct mapping *mapping)
 }
 
 /* Release the frame holding kernel page KPAGE. Thread safe. */
-void frame_table_release_frame (struct frame_table * ft, struct mapping *mapping)
+void frame_table_release_frame (struct frame_swap_table * ft, struct mapping *mapping)
 {
   ASSERT (ft != NULL);
   ASSERT (mapping != NULL);

@@ -7,7 +7,7 @@ struct frame_swap_table swap_table;
 
 /* DIV_ROUND_UP in case PGSIZE is not evenly divisible by BLOCK_SECTOR_SIZE. 
    Overestimate the number of sectors we need, since we can't share sectors
-   between two slots. */
+   between two slots. Yes, this is needlessly paranoid. */
 const uint32_t BLOCK_SECTORS_PER_PAGE = DIV_ROUND_UP (PGSIZE, BLOCK_SECTOR_SIZE);
 
 static inline uint32_t get_swap_table_n_slots (void)
@@ -19,3 +19,13 @@ static inline uint32_t get_swap_table_n_slots (void)
 }
 
 uint32_t BLOCK_SECTORS_PER_PAGE = get_swap_table_n_slots ();
+
+/* Basic life cycle */
+bool swap_table_init (struct frame_swap_table *)
+{
+  return false;
+}
+
+void swap_table_destroy (struct frame_swap_table *)
+{
+}
