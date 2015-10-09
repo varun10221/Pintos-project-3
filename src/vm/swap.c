@@ -28,14 +28,14 @@ uint32_t TOTAL_PAGES_IN_SWAP = get_swap_table_n_slots ();
 bool swap_table_init (struct frame_swap_table *st)
 {  
    int i;
-   ASSERT(st!=NULL);
+   ASSERT (st!=NULL);
     st->usage = bitmap_create(get_swap_table_n_slots);
     if(st->usage)
          goto CLEANUP_AND_ERROR;
     lock_init(&st->usage_lock);
-    st->entries = (struct frame_swap_table_entry *) 
+    st->entries = (struct swap_slot *) 
                            calloc(TOTAL_PAGES_IN_SWAP,
-                                sizeof(struct frame_swap_table_entry));
+                                sizeof(struct swap_slot));
      for (i = 0;i <TOTAL_PAGES_IN_SWAP; i++)
        {
           swap_table_init_slot(&entries[i],i);
@@ -53,14 +53,13 @@ bool swap_table_init (struct frame_swap_table *st)
 
     /*TODO: initialize the swap table entries by allocating memory */
      return true;
-}
+ }
 
-void swap_table_init_slot (struct frame_swap_table_entry *ste , swap_id_t id)
+void swap_table_init_slot (struct swap_slot *ste , swap_id_t id)
 {
-   ASSERT(ste !=NULL);
+   ASSERT (ste !=NULL);
    ste->id = id;
-   ste->stamp =0;
-   lock_init(&ste->lock);
+   lock_init (&ste->lock);
    ste->status = EMPTY;
    ste->page = NULL;
 }
@@ -77,44 +76,45 @@ void swap_table_destroy (struct frame_swap_table *st)
 /*TODO: DISCARD NEEDS TO BE ADDED PER PAGE */
 /*write a page to swap, by looking for a free page
  * if found, write a one page amount of data*/
-size_t push_to_swap (void *frame_address, struct frame_swap_table *st )
+size_t swap_write (void *frame_address, struct frame_swap_table *st )
 {
   int i;
   struct block *blk = block_get_role (BLOCK_SWAP);
   ASSERT(block!=NULL);
   lock_acquire (&st->usage_lock);
-  size_t free_slot = bitmap_scan_and_flip(st->usage,0,1,false);/* searches for one free slot starting at index 0 */
-  ASSERT(free_slot != BITMAP_ERROR);/* TODO:need to find a better way to handle this*/
+  size_t free_slot = bitmap_scan_and_flip (st->usage,0,1,false);/* searches for one free slot starting at index 0 */
+  ASSERT (free_slot != BITMAP_ERROR);/* TODO:need to find a better way to handle this*/
       
-  for(i=0 ; i < BLOCK_SECTORS_PER_PAGE;i++)
+  for(i=0 ; i < BLOCK_SECTORS_PER_PAGE; i++)
      {
-       block_write(blk,(free_slot+1)*SECTORS_PER_PAGE+i,frame_address+i*SECTOR_SIZE);
+       block_write (blk, (free_slot+1)*SECTORS_PER_PAGE+i, 
+                                   frame_address+i*SECTOR_SIZE);
             /*TODO: need to check on sector zero and frame adress used as buffer*/  
 
 /*TODO:add the ste assignments in swap in and swap out*/
  }
 
-    lock_release(&st->usage_lock);/*ToDO:add the entry lock for entries*/
+    lock_release (&st->usage_lock);/*ToDO:add the entry lock for entries*/
     return free_slot;//may use this to update supp.pg table 
 }
 
 
-void pull_from_stack (struct frame_swap_table *st, 
-                              size_t swap_slot, void *addr)
+void swap_read (struct frame_swap_table *st, 
+                              size_t swap_segment, void *addr)
 {
-   struct block *blk = block_get_role(BLOCK_SWAP);
+   struct block *blk = block_get_role (BLOCK_SWAP);/*TODO:Move it global*/
    ASSERT(blk!=NULL);
-   lock_acquire(&st->usage_lock);
-   if(bitmap_test (st->usage, swap_slot))
+   lock_acquire (&st->usage_lock);
+   if(bitmap_test (st->usage, swap_segment))
      {
-       bitmap_set (st->usage , swap_slot , false);
+       bitmap_set (st->usage , swap_segment , false);
        for(i=0;i<BLOCK_SECTORS_PER_PAGE;i++)
         {
-         block_read(blk,(swap_slot+1)*SECTORS_PER_PAGE+i,addr+i*SECTOR_SIZE);
+         block_read (blk, (swap_segment+1)*SECTORS_PER_PAGE+i, addr+i*SECTOR_SIZE);
          }
       } 
    else PANIC("pointed swap_slot is empty");
-    lock_release(&st->usage_lock);
+    lock_release (&st->usage_lock);
     
 } 
 
