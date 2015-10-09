@@ -40,6 +40,10 @@
 #include "filesys/fsutil.h"
 #endif
 
+#include "vm/page.h"
+#include "vm/frame.h"
+#include "vm/swap.h"
+
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -107,6 +111,11 @@ main (void)
   tss_init ();
   gdt_init ();
 #endif
+
+  /* Initialize virtual memory system. */
+  frame_table_init (&frame_table);
+  swap_table_init (&swap_table);
+  ro_shared_segment_table_init (&ro_shared_segment_table);
 
   /* Initialize interrupt handlers. */
   intr_init ();
