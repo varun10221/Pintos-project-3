@@ -7,9 +7,6 @@
 #include "vm/frame.h"
 #include "threads/synch.h"
 
-/* Not sure if we need this. */
-struct frame_swap_table_entry;
-
 enum page_state
 {
   PAGE_RESIDENT, /* This page is in a frame. */
@@ -110,10 +107,7 @@ struct page
   struct frame_swap_table_entry *frame; /* Frame or slot in which this page resides. */
   unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */
 
-  int8_t popularity; /* For LRU algorithm. Defaults to POPULARITY_START, incremented/decremented based on access bit. */
-
   enum page_state state; /* What state is this page in? */
-  bool is_pinned; /* Whether or not this page is pinned in its frame. */
 
   struct file *mmap_file; /* For loading and evicting pages in PAGE_IN_FILE state. */
 
