@@ -8,9 +8,6 @@
 #include "vm/frame.h"
 #include "threads/synch.h"
 
-/* Not sure if we need this. */
-struct frame_swap_table_entry;
-
 enum page_state
 {
   PAGE_RESIDENT, /* This page is in a frame. */
@@ -88,23 +85,31 @@ struct segment
   struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
 };
 
+/* A page tracks a list of its "owners": processes that need to be notified
+   if the page's location changes. 
+   A page_owner_info contains enough information to update the pagedir for
+   each owning process. */
+struct page_owner_info
+{
+  struct thread *owner;
+  void *vaddr;
+  struct list_elem elem;
+};
+
 /* Structure tracking the mapping between a virtual address (page) and its location. */
 struct page
 {
   /* TODO A list of 'owners' (i.e. thread*) is insufficient for eviction. We need to know {owner, vaddr} pairs so that
      we can pagedir_clear_page (owner, vaddr). I propose using a struct that holds a pair {address, thread*}. 
      Presumably a pd* would be sufficient but we might need the thread* later, and the thread* would be more
-     useful for debugging anyway. */
+     useful for debugging anyway. Use a dynamically-instantiated struct page_owner_info. */
   struct list owners; /* List of threads that use this page. */
   int32_t segment_page; /* Which page in its segment is this? */
 
   struct frame_swap_table_entry *frame; /* Frame or slot in which this page resides. */
   unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */
 
-  int8_t popularity; /* For LRU algorithm. Defaults to POPULARITY_START, incremented/decremented based on access bit. */
-
   enum page_state state; /* What state is this page in? */
-  bool is_pinned; /* Whether or not this page is pinned in its frame. */
 
   struct file *mmap_file; /* For loading and evicting pages in PAGE_IN_FILE state. */
 

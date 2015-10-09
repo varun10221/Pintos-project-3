@@ -146,8 +146,6 @@ struct thread
 
     /* Structures for virtual memory. */
 
-    /* Owned by vm/page.h. For inclusion in the list of owners of a page. */
-    struct list_elem page_elem;
     /* Maps mmap_id_t to file*. */
     struct file_table mmap_table;
     /* Used to determine where a given page is. */
