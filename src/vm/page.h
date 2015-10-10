@@ -3,6 +3,7 @@
 
 #include <list.h>
 #include <hash.h>
+#include <stdint.h>
 
 #include "threads/synch.h"
 #include "devices/block.h"
@@ -119,5 +120,16 @@ struct page
 
 void ro_shared_segment_table_init (void);
 void ro_shared_segment_table_destroy (void);
+
+/* Basic life cycle. */
+void supp_page_table_init (struct supp_page_table *);
+void supp_page_table_destroy (struct supp_page_table *);
+
+/* Usage. */
+struct page * supp_page_table_find_page (void *vaddr);
+
+/* TODO Should these APIs take a mapid_t or an fd? Need to ponder control flow from mmap() and munmap(). */
+bool supp_page_table_add_mapping (mapid_t, void *vaddr, bool is_writable);
+void supp_page_table_remove_mapping (mapid_t);
 
 #endif /* vm/page.h */

@@ -49,5 +49,7 @@ typedef uint64_t uintmax_t;
 #define SIZE_MAX UINT32_MAX
 
 typedef int32_t id_t;
+typedef id_t ft_id_t;
+typedef id_t mapid_t;
 
 #endif /* lib/stdint.h */

@@ -4,8 +4,6 @@
 #include "filesys/file.h"
 #include <stddef.h>
 
-typedef int32_t ft_id_t;
-
 /* A file_table is a dynamic array used to track
    the set of files associated with a process.
 

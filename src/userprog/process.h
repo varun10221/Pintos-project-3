@@ -5,7 +5,7 @@
 #include "threads/synch.h"
 #include "filesys/file.h"
 
-typedef ft_id_t mapid_t;
+#include <stdint.h>
 
 /* Parent maintains a list of children in its 'struct thread'.
    Child has a pointer to its entry in the parent's list.
