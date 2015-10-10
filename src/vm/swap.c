@@ -51,6 +51,7 @@ swap_table_init (void)
   ASSERT (SWAP_BLOCK != NULL);
 
   /* Bitmap. */
+  system_swap_table.n_free_entries = SWAP_TABLE_N_SLOTS;
   system_swap_table.usage = bitmap_create (SWAP_TABLE_N_SLOTS);
   ASSERT (system_swap_table.usage != NULL);
 
