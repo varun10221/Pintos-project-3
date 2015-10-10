@@ -99,11 +99,11 @@ struct page_owner_info
 /* Structure tracking the mapping between a virtual address (page) and its location. */
 struct page
 {
-  /* TODO A list of 'owners' (i.e. thread*) is insufficient for eviction. We need to know {owner, vaddr} pairs so that
-     we can pagedir_clear_page (owner, vaddr). I propose using a struct that holds a pair {address, thread*}. 
-     Presumably a pd* would be sufficient but we might need the thread* later, and the thread* would be more
-     useful for debugging anyway. Use a dynamically-instantiated struct page_owner_info. */
-  struct list owners; /* List of threads that use this page. */
+  /* List of page_owner_info's of the processes that use this page. 
+     NB The pagedirs (HW page tables) of the owners are updated and invalidated
+     by the frame table. The SPT itself should not modify the pagedir at all. */
+  struct list owners; 
+
   int32_t segment_page; /* Which page in its segment is this? */
 
   void *location; /* struct frame* or struct slot* in which this page resides. */
