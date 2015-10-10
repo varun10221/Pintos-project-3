@@ -40,6 +40,7 @@ struct frame
 /* Frame table and swap table have the same structure. */
 struct frame_swap_table
 {
+  int64_t n_free_entries; /* Number of available entries. Protected by usage_lock. */
   struct bitmap *usage; /* 0 if available, 1 if in use. */
   struct lock usage_lock; /* For atomic updates to usage. */
 
