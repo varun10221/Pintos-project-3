@@ -1,6 +1,7 @@
 #ifndef VM_FRAME_H
 #define VM_FRAME_H
 
+#include <stdint.h>
 #include <inttypes.h>
 #include <stddef.h>
 #include <list.h>
@@ -11,14 +12,15 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 
-typedef int32_t id_t;
+#include <bitmap.h>
+
 static const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);
 
-enum frame_table_entry_status
+enum frame_status
 {
-  EMPTY, /* There is no page occupying this frame. */
-  OCCUPIED, /* There is a page resident in this frame. */
-  PINNED /* There is a page resident in this frame. It is pinned (cannot be evicted). */
+  FRAME_EMPTY, /* There is no page occupying this frame. */
+  FRAME_OCCUPIED, /* There is a page resident in this frame. */
+  FRAME_PINNED /* There is a page resident in this frame. It is pinned (cannot be evicted). */
 };
 
 /* Entry in the frame table: "frame". */
@@ -27,12 +29,12 @@ struct frame
   id_t id; /* Index into the frame table. */
 
   struct page *pg; /* Page resident in this frame. */
-  struct void *paddr; /* Physical address of this frame. */
+  void *paddr; /* Physical address of this frame. */
 
   int8_t popularity; /* For LRU algorithm. Defaults to POPULARITY_START, incremented/decremented based on access bit. */
 
   struct lock lock; /* Lock to control this FTE. */
-  enum frame_table_entry_status status; /* Status of this frame. */
+  enum frame_status status; /* Status of this frame. */
 };
 
 /* Frame table and swap table have the same structure. */
@@ -47,12 +49,17 @@ struct frame_swap_table
   void *entries;
 };
 
-/* Basic life cycle. */
-bool frame_table_init (struct frame_swap_table *);
-void frame_table_destroy (struct frame_swap_table *);
+typedef struct frame_swap_table frame_table_t;
 
-/* Getting and releasing frames. */
-bool frame_table_get_frame (struct frame_swap_table *, struct page *);
-void frame_table_release_frame (struct frame_swap_table *, struct page *);
+/* Basic life cycle. */
+void frame_table_init (void);
+void frame_table_destroy (void);
+
+/* Storing and releasing pages. */
+void frame_table_store_page (struct page *);
+void frame_table_release_page (struct page *);
+
+void frame_table_pin_page (struct page *);
+void frame_table_unpin_page (struct page *);
 
 #endif /* vm/frame.h */
