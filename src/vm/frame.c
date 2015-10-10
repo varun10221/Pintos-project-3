@@ -79,6 +79,16 @@ void
 frame_table_store_page (struct page *pg)
 {
   ASSERT (pg != NULL);
+    /*acquire global lock*/
+   /*do a bitscan of frame_bit map,by calling free_frame _find*/
+   /*acquire lock on entry */ /*check frame status*/
+   /* release global lock */
+  /*in free frame, do a struct frame update */
+   /*update the details in corresponding page struct*/
+  /*flip the bitmap*/
+   /*update in spt */
+
+
 }
 
 /* Release resources associated with this page; process is done with it. 
@@ -86,11 +96,42 @@ frame_table_store_page (struct page *pg)
    TODO */
 void 
 frame_table_release_page (struct page *pg)
-{
-  ASSERT (pg != NULL);
+{ ASSERT (pg != NULL);
+  /* Get the frame from  pg->location */
+  /*revert  the frame parameters, probably a  frame_init */
+  /*acquire lock and do a bitflip */
+  /*make the other parameters to match init in case of release due to process exit */
+ /*TODO:Can we have a separate function for writing mmap file? */
+ /* Im assuming writing back mmap file involves block_write and some other support 
+   infra needed */
+ 
 }
 
-/* (Put page PG into a frame and) pin it there. 
+/*searches the global frame table and retieves a free frame.Not thread safe */
+struct frame *
+free_frame_find (void)
+{
+  /*do a bit map scan and retrieve the first free frame after locking the table */
+  /*release the lock*
+ /*then call swap out to put the frame in swap and retuen the free index */
+
+   return frame;
+}
+
+
+/*searches the global table and evicts the first non-pinned frame*/
+static id_t
+frame_evict (void)
+{
+  /*get a global lock on table*/
+  /*search for first non-pinned frame  and  call swap_table_store_page*/
+ /*for mmap file range, check if the page is dirty ,if so write to file,
+   else set the frame free and return frame */
+  /*may need to panic in an unlikely scenario of all frames pinned */
+ return id; //variable of type id_t  
+}
+
+/* (Put page PG into a frame and) pin  it there. 
    It will not be evicted until a call to 
     - frame_table_release_page(), or
     - frame_table_unpin_page()
@@ -99,6 +140,7 @@ void
 frame_table_pin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
+ /*change the frame_status to pinned */
 }
 
 /* Allow page PG to be evicted from its frame,
@@ -110,6 +152,19 @@ frame_table_unpin_page (struct page *pg)
   ASSERT (pg != NULL);
 }
 
+
+#if 0
+Just an overview of functions so far, 
+(to make sure if we have API's to handle all scenario)
+i)frame table init and frame init.
+ii)functions to store and evict a frame
+iii)function to discard frames
+iv)functions to pin , unpin.
+v)bit map_updation as a part of store and evict.
+vi)connecting swap and frame, for reading from swap, we can define the logic from spt, for storing , we can use the functions in frame.c
+
+#endif
+
 #if 0
 
 /* Allocating and freeing entries. */
@@ -117,7 +172,10 @@ frame_table_unpin_page (struct page *pg)
 /* Identify a frame table entry whose page can be evicted.
    Return the locked FTE.
 
-   If no candidate is identified, returns NULL. */
+   If no candidate is identified, returns NULL.
+   to get eviction candidate
+
+ */
 struct frame * frame_table_get_eviction_candidate (frame_table_t *ft)
 {
   ASSERT (ft != NULL);
