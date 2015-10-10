@@ -7,7 +7,7 @@
 #include "threads/synch.h"
 #include "devices/block.h"
 
-enum page_state
+enum page_status
 {
   PAGE_RESIDENT, /* This page is in a frame. */
   PAGE_SWAPPED_OUT, /* This page is in a swap slot. */
@@ -66,7 +66,7 @@ struct ro_shared_segment_table
 {
   struct hash inode_to_segment; /* Hash inode number to an ro_shared_segment. */
   struct lock hash_lock; /* Lock before modifying the hash. */
-} ro_shared_segment_table;
+};
 
 /* Tracks a particular address range for a process. */
 struct segment
@@ -109,12 +109,15 @@ struct page
   void *location; /* struct frame* or struct slot* in which this page resides. */
   unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */
 
-  enum page_state state; /* What state is this page in? */
+  enum page_status status; /* Status of this page. */
 
   struct file *mmap_file; /* For loading and evicting pages in PAGE_IN_FILE state. */
 
   struct lock mapping_lock; /* TODO Is this how SPT and FT should communicate w.r.t. eviction? */
   struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
 };
+
+void ro_shared_segment_table_init (void);
+void ro_shared_segment_table_destroy (void);
 
 #endif /* vm/page.h */
