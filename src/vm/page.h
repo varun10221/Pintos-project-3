@@ -4,16 +4,16 @@
 #include <list.h>
 #include <hash.h>
 
-
-#include "vm/frame.h"
 #include "threads/synch.h"
+#include "devices/block.h"
 
 enum page_state
 {
   PAGE_RESIDENT, /* This page is in a frame. */
   PAGE_SWAPPED_OUT, /* This page is in a swap slot. */
   PAGE_IN_FILE, /* This page is in a file (mmap). */
-  PAGE_NEVER_ACCESSED /* This page has never been accessed. */
+  PAGE_NEVER_ACCESSED, /* This page has never been accessed. */
+  PAGE_DISCARDED /* This page has been discarded by its owner and is going to be deleted. */
 };
 
 enum segment_type
@@ -106,7 +106,7 @@ struct page
   struct list owners; /* List of threads that use this page. */
   int32_t segment_page; /* Which page in its segment is this? */
 
-  struct frame_swap_table_entry *frame; /* Frame or slot in which this page resides. */
+  void *location; /* struct frame* or struct slot* in which this page resides. */
   unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */
 
   enum page_state state; /* What state is this page in? */
