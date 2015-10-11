@@ -14,9 +14,10 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "lib/user/syscall.h"
+#include "vm/page.h"
 
 /* Size of tables. */
-#define N_SUPPORTED_SYSCALLS 13
+#define N_SUPPORTED_SYSCALLS 15
 
 /* Read/write buffer size. We do IO in this unit. */
 #define STDINOUT_BUFSIZE 512
@@ -55,7 +56,8 @@ static int syscall_nargs[N_SUPPORTED_SYSCALLS] =
 1 /* open */,   1 /* filesize */,
 3 /* read */,   3 /*write */,
 2 /* seek */,   1 /* tell */,
-1 /* close */
+1 /* close */,  2 /* mmap */,
+1 /* munmap */
 };
 
 /* Whether or not the syscall has a user-provided address.
@@ -68,7 +70,8 @@ true /* create */,  true /* remove */,
 true /* open */,    false /* filesize */,
 true /* read */,    true /*write */,
 false /* seek */,   false /* tell */,
-false /* close */
+false /* close */,  true /* mmap */,
+false /* munmap */
 };
 
 static void syscall_handler (struct intr_frame *);
@@ -92,6 +95,8 @@ static int syscall_write (int fd, const void *buffer, unsigned size);
 static void syscall_seek (int fd, unsigned position);
 static unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
+static mapid_t syscall_mmap (int fd, void *addr);
+static void syscall_munmap (mapid_t mapping);
 
 /* Handle the syscall contained in this stack frame.
    Any invalid pointers (stack pointer itself, or values
@@ -132,8 +137,8 @@ syscall_handler (struct intr_frame *f)
      the program. */
   if (syscall_has_pointer[syscall - SYS_MIN])
   {
-    /* Either ustr or ubuf will be set to non-NULL (unless user passed a NULL pointer...) */
-    char *ustr = NULL, *ubuf = NULL;
+    /* One of ustr, ubuf, and uaddr will be set to non-NULL (unless user passed a NULL pointer...) */
+    char *ustr = NULL, *ubuf = NULL, *uaddr = NULL;
     unsigned length = 0;
     enum io_type io_t;
     switch (syscall)
@@ -160,6 +165,9 @@ syscall_handler (struct intr_frame *f)
         length = (unsigned) args[2];
         io_t = IO_TYPE_WRITE;
         break;
+      case SYS_MMAP:                   /* Map a file into memory. */
+        uaddr = (void *) args[1]; 
+        break;
       default:
         NOT_REACHED ();
     }
@@ -167,6 +175,15 @@ syscall_handler (struct intr_frame *f)
     if (ustr != NULL)
     {
       if (!is_valid_ustring (ustr))
+      {
+        /* Exit in error. */ 
+        syscall = SYS_EXIT;
+        args[0] = -1;
+      }
+    }
+    else if (uaddr != NULL)
+    {
+      if (!is_valid_uptr (uaddr))
       {
         /* Exit in error. */ 
         syscall = SYS_EXIT;
@@ -247,12 +264,16 @@ syscall_handler (struct intr_frame *f)
       f->eax = 0; /* void */
       break;
 
-    /* Un-implemented syscalls: drop through to the printf. */
-
     /* Project 3 and optionally project 4. */
     case SYS_MMAP:                   /* Map a file into memory. */
+      f->eax = syscall_mmap ((int) args[0], (void *) args[1]);
+      break;
     case SYS_MUNMAP:                 /* Remove a memory mapping. */
+      syscall_munmap ((mapid_t) args[0]);
+      f->eax = 0; /* void */
+      break;
 
+    /* Un-implemented syscalls: drop through to the printf. */
     /* Project 4 only. */
     case SYS_CHDIR:                  /* Change the current directory. */
     case SYS_MKDIR:                  /* Create a directory. */
@@ -494,6 +515,24 @@ syscall_close (int fd)
   thread_fd_delete (fd);
   filesys_unlock ();
   return;
+}
+
+/* Maps the file open as FD into the process's virtual address space at ADDR. 
+ 
+   Returns a "mapping ID" that uniquely identifies the mapping within
+   the process. Returns -1 on failure. */
+static mapid_t syscall_mmap (int fd, void *addr)
+{
+  /* TODO */
+  ASSERT (0 == 1);
+  return -1;
+}
+
+/* Unmaps the mapping designated by MAPPING. */
+static void syscall_munmap (mapid_t mapping)
+{
+  /* TODO */
+  ASSERT (0 == 1);
 }
 
 /* Returns true if UADDR is non-null and below kernel space. 
