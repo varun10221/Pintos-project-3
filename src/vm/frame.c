@@ -94,13 +94,23 @@ frame_table_store_page (struct page *pg)
    If an mmap'd file, flush changes to backing file. 
    TODO */
 void 
-frame_table_release_page (struct page *pg)
+frame_table_release_page (struct page *pg) 
 { 
   ASSERT (pg != NULL);
   /* Get the frame from  pg->location */
+  struct frame * fr = (struct frame *) pg->location;
   /*revert  the frame parameters, probably a  frame_init */
+  if (fr != NULL)
+    {
+      fr->status = FRAME_EMPTY;
+      fr->pg = NULL;
+      pg->location = NULL;
+      fr->popularity = POPULARITY_START;
+    }
   /*acquire lock and do a bitflip */
-  /*make the other parameters to match init in case of release due to process exit */
+   lock_acquire (&system_frame_table.usage_lock);
+   bitmap_flip (system_frame_table.usage , fr->id);
+   lock_release (&system_frame_table.usage_lock);
  /*TODO:Can we have a separate function for writing mmap file? 
    Im assuming writing back mmap file involves block_write and some other support 
    infra needed 
@@ -120,6 +130,13 @@ frame_table_pin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
  /*change the frame_status to pinned */
+  struct frame *fr = (struct frame *) pg->location;
+  /*lock so that page doesnt get evicted before pinning */
+  lock_acquire (fr->lock);
+  ASSERT(fr!=NULL);
+ /*Varun:guess we need to assert even if page status is pinned prior */
+  fr->status = FRAME_PINNED; 
+  lock_release (fr->lock);  
 }
 
 /* Allow locked resident page PG to be evicted from its frame.
@@ -144,7 +161,8 @@ frame_table_unpin_page (struct page *pg)
    and return the frame to you, locked.
 
    Returns NULL if all frames have their page pinned. */
-static struct frame * frame_table_make_free_frame (void)
+static struct frame * 
+frame_table_make_free_frame (void)
 {
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
@@ -156,21 +174,44 @@ static struct frame * frame_table_make_free_frame (void)
    Return the locked frame.
 
    If no candidate is identified, returns NULL. */
-static struct frame * frame_table_get_eviction_victim (void)
+static struct frame * 
+frame_table_get_eviction_victim (void)
 {
-  /* Get a global lock on table. */ 
-  /* Search for first frame whose page is not pinned (for now!) and: */
+
+   int i = 0;
+   struct frame *frames = (struct frame *) system_frame_table.entries;
+   /*no need for a bitmap as u come to evict only if map is full!*/
+   /* Search for first frame whose page is not pinned (for now!) and: */
+   while (i < FRAME_TABLE_N_FRAMES && frames[i].status == FRAME_PINNED)
+             i++;
+    
+   /*Acquiring a lock just for the frame, doing it before while loop may help        and eliminate race before eviction TODO */
+   lock_acquire (&frames[i].lock);
+    
+   if (i == FRAME_TABLE_N_FRAMES)
+       PANIC ("All frames are pinned");/*TODO: I'm not returning NULL now,will            do once eviction algo. is finalized */ 
+                                          
+   else return frames[i];      
   /* May need to panic in an unlikely scenario of all frames pinned. */
-  return NULL;
+  //return NULL;
 }
 
 /* Evict the page in locked frame FR. */
-static void frame_table_evict_page_from_frame (struct frame *fr)
+/*do not call it directly without calling eviction victim routine */
+static void 
+frame_table_evict_page_from_frame (struct frame *fr)
 {
   ASSERT (fr != NULL);
-  /* - For mmap'd file page, check if the page is dirty. 
-       If so write to file, else set the frame free and return frame.
-     - For other types of pages, call swap_table_store_page. */
+  /* - TODO For mmap'd file page, check if the page is dirty. 
+       If so write to file, else set the frame free and return frame.*/
+     
+  if (0/*mmap_check*/)
+   /* For other types of pages, call swap_table_store_page. */
+  else
+   {  
+    swap_table_store_page (fr->pg);
+   }             
+
 }
 
 /* Initialize frame FR. */
@@ -190,7 +231,8 @@ frame_table_init_frame (struct frame *fr, id_t id)
    Locate a free frame, mark it as used, lock it, and return it.
    May have to evict a page to obtain a free frame.
    If no free or evict-able frames are available, returns null. */
-static struct frame * frame_table_obtain_frame (void)
+static struct frame * 
+frame_table_obtain_frame (void)
 {
   struct frame *fr = frame_table_find_free_frame ();
   if (fr == NULL)
@@ -203,11 +245,13 @@ static struct frame * frame_table_obtain_frame (void)
    Returns NULL if no free frames are available (necessitates eviction). */
 static struct frame *
 frame_table_find_free_frame (void)
-{
+{ 
+  lock_acquire (&system_frame_table.usage_lock);
   /*do a bit map scan and retrieve the first free frame after locking the table */
-  /*release the lock, 
-    then call swap out to put the frame in swap and retuen the free index */
-  struct frame *fr = NULL;
+  size_t free_frame = bitmap_scan (system_frame_table->usage,0,1,false); 
+  /*release the lock*/
+  lock_release (&system_frame_table.usage_lock);    
+  struct frame *fr = (struct frame *) system_frame_table.entries[free_frame];
   return fr;
 }
 
