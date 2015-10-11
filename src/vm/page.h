@@ -86,6 +86,15 @@ struct segment
   struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
 };
 
+/* Tracks the file* and segment* associated with a given mapid_t. 
+   mmap_info's are stored in a thread's mmap_table so that on mmap we have the file*
+   and munmap we have the segment*. */
+struct mmap_info
+{
+  struct file *f; /* A file* for I/O to the file mapped in our address space. */
+  struct segment *seg; /* The segment* corresponding to this mapping. */
+};
+
 /* A page tracks a list of its "owners": processes that need to be notified
    if the page's location changes. 
    A page_owner_info contains enough information to update the pagedir for
@@ -128,7 +137,6 @@ void supp_page_table_destroy (struct supp_page_table *);
 /* Usage. */
 struct page * supp_page_table_find_page (void *vaddr);
 
-/* TODO Should these APIs take a mapid_t or an fd? Need to ponder control flow from mmap() and munmap(). */
 bool supp_page_table_add_mapping (mapid_t, void *vaddr, bool is_writable);
 void supp_page_table_remove_mapping (mapid_t);
 
