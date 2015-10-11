@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vector.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -527,7 +528,7 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  thread_close_all_files ();
+  process_close_all_files ();
   /* Not required, but keep user processes out of trouble if they happen to share locks. */
   thread_release_all_locks ();
 
@@ -923,8 +924,92 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
+/* Functions for files. */
+
+/* Convert fd to index in a thread's fd_table. */
+static id_t
+fd_to_ix (int fd)
+{
+  ASSERT (N_RESERVED_FILENOS <= fd);
+  return fd - N_RESERVED_FILENOS;
+}
+
+/* Convert index in a thread's fd_table to an fd. */
+static int
+ix_to_fd (id_t ix)
+{
+  ASSERT (0 <= ix);
+  return ix + N_RESERVED_FILENOS;
+}
+
+/* Open a new fd corresponding to this file. 
+   Caller must hold filesys lock. 
+
+   Returns the fd, or -1 on failure. */
+int
+process_new_file (const char *file)
+{
+  ASSERT (file != NULL);
+
+  struct file *f = filesys_open (file);
+  if (f == NULL)
+    return -1;
+  return ix_to_fd (vector_add_elt (&thread_current ()->fd_table, f));
+}
+
+/* Return the 'struct file*' associated with this fd. 
+
+   Returns NULL if there is no such fd. */ 
+struct file * 
+process_fd_lookup (int fd)
+{
+  if (fd < N_RESERVED_FILENOS)
+    return NULL;
+  return (struct file *) vector_lookup (&thread_current ()->fd_table, fd_to_ix (fd));
+}
+
+/* Close the file instance associated with this fd. 
+   Caller must hold filesys lock. 
+   If there is no such fd, does nothing. */
+void 
+process_fd_delete (int fd)
+{
+  if (fd < N_RESERVED_FILENOS)
+    return;
+  struct file *f = (struct file *) vector_delete_elt (&thread_current ()->fd_table, fd_to_ix (fd) );
+  if (f != NULL)
+    file_close (f);
+}
+
+/* Close this file. For use with vector_foreach. 
+   Acquires and releases filesys_lock. */
+static void
+process_close_file (void *elt, void *aux UNUSED)
+{
+  struct file *f = (struct file *) elt;
+  if (f == NULL)
+    return;
+
+  filesys_lock ();
+  file_close (f);
+  filesys_unlock ();
+}
+
+/* Close all open file handles and free the memory.
+   Use when a process is exiting. */
+void 
+process_close_all_files (void)
+{
+  struct vector *vec = &thread_current ()->fd_table;
+  /* Each call acquires and releases filesys_lock. */
+  vector_foreach (vec, process_close_file, NULL);
+  vector_destroy (vec);
+}
+
 /* mmap support. */
 
+/* TODO Initial implementations, but need to update based on the struct mmap_info defined in page.h. */
+#if 0
 /* Add a mapping for FD in thread's mmap_table. 
  
    Returns mapid, or -1 on failure. */ 
@@ -963,3 +1048,4 @@ void process_mmap_remove_all (void)
 {
   file_table_destroy (&thread_current ()->mmap_table); 
 }
+#endif

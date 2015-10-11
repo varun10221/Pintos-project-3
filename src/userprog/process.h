@@ -47,6 +47,12 @@ void process_activate (void);
 /* Used by syscall.c */
 void process_set_exit_status (int exit_status);
 
+/* Functions for files. */
+int process_new_file (const char *file);
+struct file * process_fd_lookup (int fd);
+void process_fd_delete (int fd);
+void process_close_all_files (void);
+
 /* mmap support. */
 mapid_t process_mmap_add (int fd);
 void process_mmap_remove (mapid_t);

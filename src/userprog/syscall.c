@@ -371,7 +371,7 @@ syscall_open (const char *file)
   ASSERT (file != NULL);
 
   filesys_lock ();
-  int fd = thread_new_file (file);
+  int fd = process_new_file (file);
   filesys_unlock ();
   return fd;
 }
@@ -382,7 +382,7 @@ syscall_filesize (int fd)
 {
   int rc = -1;
   filesys_lock ();
-  struct file *f = thread_fd_lookup (fd);
+  struct file *f = process_fd_lookup (fd);
   if (f != NULL)
     rc = file_length (f);
   filesys_unlock ();
@@ -419,7 +419,7 @@ syscall_read (int fd, void *buffer, unsigned size)
   {
     n_read = 0;
     filesys_lock ();
-    struct file *f = thread_fd_lookup (fd);
+    struct file *f = process_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
       n_read = -1;
@@ -465,7 +465,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
   {
     n_written = 0;
     filesys_lock ();
-    struct file *f = thread_fd_lookup (fd);
+    struct file *f = process_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
       n_written = -1;
@@ -484,7 +484,7 @@ static void
 syscall_seek (int fd, unsigned position)
 {
   filesys_lock ();
-  struct file *f = thread_fd_lookup (fd);
+  struct file *f = process_fd_lookup (fd);
   if (f != NULL)
     file_seek (f, position);
   filesys_unlock ();
@@ -499,7 +499,7 @@ syscall_tell (int fd)
   unsigned rc = 0;
 
   filesys_lock ();
-  struct file *f = thread_fd_lookup (fd);
+  struct file *f = process_fd_lookup (fd);
   if (f != NULL)
     rc = file_tell (f);
   filesys_unlock ();
@@ -512,7 +512,7 @@ static void
 syscall_close (int fd)
 {
   filesys_lock ();
-  thread_fd_delete (fd);
+  process_fd_delete (fd);
   filesys_unlock ();
   return;
 }

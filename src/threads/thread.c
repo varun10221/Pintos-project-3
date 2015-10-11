@@ -1144,7 +1144,7 @@ init_thread (struct thread *t, const char *name, int priority)
      userprog/process.c does all of the management for fd_table. */
   t->fd_table.n_elts = 0;
   t->fd_table.max_elts = 0;
-  t->fd_table.file_arr = NULL;
+  t->fd_table.elts = NULL;
 
   t->my_executable = NULL;
 
@@ -1294,41 +1294,6 @@ allocate_tid (void)
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 
-/* Thread interfaces to the file table. */
-
-/* Open a new fd corresponding to this file. 
-   Returns the fd, or -1 on failure. */
-int 
-thread_new_file (const char *file)
-{
-  ASSERT (file != NULL);
-  return file_table_new_entry_by_name (&thread_current ()->fd_table, file);
-}
-
-/* Return the 'struct file*' associated with this fd. 
-   Returns NULL if there is no such fd. */ 
-struct file * 
-thread_fd_lookup (int fd)
-{
-  ASSERT (0 <= fd);
-  return file_table_lookup (&thread_current ()->fd_table, fd);
-}
-
-/* Close the file instance associated with this fd. 
-   If there is no such fd, does nothing. */
-void 
-thread_fd_delete (int fd)
-{
-  file_table_delete_entry (&thread_current ()->fd_table, fd);
-}
-
-/* Close all open file handles and free the memory.
-   Use when a process is exiting. */
-void thread_close_all_files (void)
-{
-  file_table_destroy (&thread_current ()->fd_table);
-}
-
 /* Release all locks held by this thread.
    Use when a process is exiting. */
 void thread_release_all_locks (void)
@@ -1337,7 +1302,7 @@ void thread_release_all_locks (void)
   struct lock *l;
   struct list *lock_list = &thread_current ()->lock_list;
 
-  while(!list_empty (lock_list))
+  while (!list_empty (lock_list))
   {
     e = list_pop_front (lock_list);
     l = list_entry (e, struct lock, elem);

@@ -3,11 +3,11 @@
 
 #include <debug.h>
 #include <list.h>
+#include <vector.h>
 #include <priority_queue.h>
 #include <stdint.h>
 #include "lib/kernel/fpra.h"
 #include "threads/thread_priorities.h"
-#include "threads/file_table.h"
 #include "vm/page.h"
 
 /* Forward declarations. */
@@ -131,10 +131,9 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    /* Owned by userprog/process.c using APIs provided by thread.h
-       Maps fd's to struct file *s. 
-       Thread APIs are defined for the fd_table. */
-    struct file_table fd_table;
+    /* Owned by userprog/process.c. 
+       Maps fd's to struct file *s. */
+    struct vector fd_table;
     /* Owned by userprog/process.c. Used to keep the
        executable from being modified. */
     struct file *my_executable;
@@ -146,9 +145,9 @@ struct thread
 
     /* Structures for virtual memory. */
 
-    /* Maps mmap_id_t to file*. */
-    struct file_table mmap_table;
-    /* Used to determine where a given page is. */
+    /* Maps mmap_id_t to struct mmap_info*. */
+    struct vector mmap_table;
+    /* Used to map virtual addresses to pages. */
     struct supp_page_table supp_page_table;
 
     /* Owned by devices/timer.c. */
@@ -231,12 +230,6 @@ bool sleeping_queue_less(const struct list_elem *a,
 bool sleeping_queue_eq (const struct list_elem *a,
                        const struct list_elem *b,
                        void *aux UNUSED);
-
-/* Functions for interacting with a thread's open files. */
-int thread_new_file (const char *file);
-struct file * thread_fd_lookup (int fd);
-void thread_fd_delete (int fd);
-void thread_close_all_files (void);
 
 /* Functions for interacting with a thread's held locks. */
 void thread_release_all_locks (void);
