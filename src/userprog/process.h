@@ -7,6 +7,9 @@
 
 #include <stdint.h>
 
+/* Forward declarations. */
+struct mmap_info;
+
 /* Parent maintains a list of children in its 'struct thread'.
    Child has a pointer to its entry in the parent's list.
    Parent allocates each child_process_info on the heap so that they are
@@ -54,9 +57,13 @@ void process_fd_delete (int fd);
 void process_close_all_files (void);
 
 /* mmap support. */
-mapid_t process_mmap_add (int fd);
+mapid_t process_mmap_add (struct mmap_info *);
 void process_mmap_remove (mapid_t);
-struct file * process_mmap_lookup (mapid_t);
+struct mmap_info * process_mmap_lookup (mapid_t);
 void process_mmap_remove_all (void);
+
+/* Page table interaction. */
+struct mmap_info * process_add_mapping (struct file *, void *, int);
+void process_delete_mapping (struct mmap_info *mmap_info);
 
 #endif /* userprog/process.h */

@@ -134,11 +134,11 @@ frame_table_pin_page (struct page *pg)
  /*TODO:first allocate the frame for the page if not availble before */
   struct frame *fr = (struct frame *) pg->location;
   /*lock so that page doesnt get evicted before pinning */
-  lock_acquire (fr->lock);
+  lock_acquire (&fr->lock);
   ASSERT(fr!=NULL);
  /*Varun:guess we need to assert even if page status is pinned prior */
   fr->status = FRAME_PINNED; 
-  lock_release (fr->lock);  
+  lock_release (&fr->lock);  
 }
 
 /* Allow locked resident page PG to be evicted from its frame.

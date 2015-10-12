@@ -3,6 +3,20 @@
 
 #include <stddef.h>
 
+static inline int abs (int j)
+{
+  return ( 0 < j ? j : -1*j);
+}
+static inline long int labs (long int j)
+{
+  return ( 0 < j ? j : -1*j);
+}
+static inline long long int llabs (long long int j)
+{
+  return ( 0 < j ? j : -1*j);
+}
+
+
 /* Standard functions. */
 int atoi (const char *);
 void qsort (void *array, size_t cnt, size_t size,

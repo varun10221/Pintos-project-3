@@ -20,7 +20,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
-#include "threads/file_table.h"
+#include "vm/page.h"
 
 /* Structure for command-line args. */
 struct cl_args
@@ -1008,44 +1008,94 @@ process_close_all_files (void)
 
 /* mmap support. */
 
-/* TODO Initial implementations, but need to update based on the struct mmap_info defined in page.h. */
-#if 0
-/* Add a mapping for FD in thread's mmap_table. 
+/* Add an entry for this mmap_info in the process's mmap_table. 
  
    Returns mapid, or -1 on failure. */ 
-mapid_t process_mmap_add (int fd)
+mapid_t process_mmap_add (struct mmap_info *mmap_info)
 {
-  ASSERT (0 <= fd);
-  struct file *f = thread_fd_lookup (fd); 
-  if (f == NULL)
-    return -1;
-  struct file *dup = file_reopen (f);
-  if (dup == NULL)
-    return -1;
-  
-  mapid_t id = file_table_new_entry_by_file (&thread_current ()->mmap_table, dup);
-  return id;
+  ASSERT (mmap_info != NULL);
+
+  return vector_add_elt (&thread_current ()->mmap_table, (void *) mmap_info);
 }
 
-/* Remove this mapping. */
+/* Remove this mapping. 
+   Caller is responsible for freeing the memory associated with it. */
 void process_mmap_remove (mapid_t id)
 {
   ASSERT (0 <= id); 
-  file_table_delete_entry (&thread_current ()->mmap_table, id);
+  vector_delete_elt (&thread_current ()->mmap_table, id);
 }
 
 /* Find the struct file* associated with this id. 
    Returns NULL if no mapping. */
-struct file * process_mmap_lookup (mapid_t id)
+struct mmap_info * process_mmap_lookup (mapid_t id)
 {
   ASSERT (0 <= id); 
-  return file_table_lookup (&thread_current ()->mmap_table, id);
+
+  return (struct mmap_info *) vector_lookup (&thread_current ()->mmap_table, id);
+}
+
+/* Destroy this mapping. For use with vector_foreach. */
+static void
+process_mmap_destroy_mapping (void *elt, void *aux UNUSED)
+{
+  struct mmap_info *mmap_info = (struct mmap_info *) elt;
+  if (mmap_info == NULL)
+    return;
+
+  ASSERT (mmap_info->seg != NULL);
+  process_delete_mapping (mmap_info);
 }
 
 /* Remove all extant mappings from the mmap_table and free the memory.
    Use when a process is exiting. */
 void process_mmap_remove_all (void)
 {
-  file_table_destroy (&thread_current ()->mmap_table); 
+  struct vector *vec = &thread_current ()->mmap_table;
+  vector_foreach (vec, process_mmap_destroy_mapping, NULL);
+  vector_destroy (vec);
 }
-#endif
+
+/* Add a memory mapping to this process's page table 
+     for file F beginning at START with flags FLAGS.
+   Returns NULL on failure.
+
+   Caller should NOT free the mmap_info.
+   Use process_delete_mapping() to clean up the mmap_info. */
+struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
+{
+  ASSERT (f != NULL);
+  ASSERT (start != NULL);
+
+  struct segment *seg = NULL;
+  struct mmap_info *mmap_info = NULL;
+
+  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f, start, flags);
+  if (seg == NULL)
+    goto CLEANUP_AND_ERROR;
+
+  mmap_info = (struct mmap_info *) malloc (sizeof(struct mmap_info));
+  if (mmap_info == NULL)
+    goto CLEANUP_AND_ERROR;
+
+  mmap_info->seg = seg;
+
+  return mmap_info;
+
+  CLEANUP_AND_ERROR:
+    if (seg != NULL)
+      supp_page_table_remove_segment (&thread_current ()->supp_page_table, seg);
+    if (mmap_info != NULL)
+      free (mmap_info);
+    return NULL;
+}
+
+/* Remove the memory mapping specified by MMAP_INFO. */
+void process_delete_mapping (struct mmap_info *mmap_info)
+{
+  ASSERT (mmap_info != NULL);
+  ASSERT (mmap_info->seg != NULL);
+
+  supp_page_table_remove_segment (&thread_current ()->supp_page_table, mmap_info->seg);
+  free (mmap_info);
+}
