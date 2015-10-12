@@ -38,9 +38,12 @@ void supp_page_table_destroy (struct supp_page_table *spt)
    If VADDR looks like a stack growth, grow the stack and add a page.
 
    Returns NULL if no such page (i.e. illegal memory access). */
-struct page * supp_page_table_find_page (void *vaddr)
+struct page * supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
+  ASSERT (spt != NULL);
   ASSERT (vaddr != NULL);
+
+  /* TODO */
   return NULL;
 }
 
@@ -50,31 +53,42 @@ struct page * supp_page_table_find_page (void *vaddr)
  
    Returns true on success, false if VADDR is 0, is not page-aligned, or overlaps
    any already-mapped pages. */
-bool supp_page_table_add_mapping (mapid_t mapid, void *vaddr, bool is_writable)
+
+/* Add a memory mapping to supp page table SPT
+     for file F beginning at START with flags FLAGS.
+   Returns NULL on failure.
+
+   Caller should NOT free the segment.
+   Use supp_page_table_remove_segment() to clean up the segment. */
+struct segment * supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *vaddr, int flags)
 {
-  ASSERT (0 <= mapid);
+  ASSERT (spt != NULL);
+  ASSERT (f != NULL);
   ASSERT (vaddr != NULL);
 
-  return false;
+  /* TODO */
+  ASSERT (0 == 1);
 }
 
-/* Remove the mapping for mapid MAPID. 
-   All dirtied pages are written back to the file.
- 
-   MAPID must refer to a valid mapping. */
-void supp_page_table_remove_mapping (mapid_t mapid)
+/* Remove the specified segment from this page table.
+   If it's an mmap'd segment, will flush all dirty pages. 
+   Will free the memory associated with this segment
+   If it's a shared mapping, and if we're the last holder of the 
+     pages, will free that memory too. 
+   Don't forget to close the file! */
+void supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg)
 {
-  ASSERT (0 <= mapid);
+  ASSERT (spt != NULL);
+  ASSERT (seg != NULL);
+
+  /* TODO */
+  ASSERT (0 != 1);
 }
 
 
-
-#if 0
-
-how can we add and delete info about individual pages ?
-say if a page is evicted out of a frame.
-API's for that 
-
-
-#endif
-
+/*
+  QUESTION FROM VARUN:
+  how can we add and delete info about individual pages ?
+  say if a page is evicted out of a frame.
+  API's for that 
+*/

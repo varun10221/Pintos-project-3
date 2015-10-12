@@ -8,6 +8,17 @@
 #include "threads/synch.h"
 #include "devices/block.h"
 
+/* mmap flags */
+
+/* Sharing between processes. */
+const int MAP_PRIVATE = 1 << 0;
+const int MAP_SHARED  = 1 << 1;
+
+/* Access info for the segment holding the pages. */
+const int MAP_RDONLY  = 1 << 2;
+const int MAP_WRONLY  = 1 << 3; /* Unused. */
+const int MAP_RDWR    = 1 << 4;
+
 enum page_status
 {
   PAGE_RESIDENT, /* This page is in a frame. */
@@ -86,12 +97,11 @@ struct segment
   struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
 };
 
-/* Tracks the file* and segment* associated with a given mapid_t. 
-   mmap_info's are stored in a thread's mmap_table so that on mmap we have the file*
-   and munmap we have the segment*. */
+/* Tracks the segment* associated with a given mapid_t. 
+   The segment tracks the corresponding file* for loading data into a frame.
+   On munmap we use this to find the segment* whose pages need to be handled. */
 struct mmap_info
 {
-  struct file *f; /* A file* for I/O to the file mapped in our address space. */
   struct segment *seg; /* The segment* corresponding to this mapping. */
 };
 
@@ -135,9 +145,9 @@ void supp_page_table_init (struct supp_page_table *);
 void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
-struct page * supp_page_table_find_page (void *vaddr);
+struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
 
-bool supp_page_table_add_mapping (mapid_t, void *vaddr, bool is_writable);
-void supp_page_table_remove_mapping (mapid_t);
+struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int);
+void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 
 #endif /* vm/page.h */

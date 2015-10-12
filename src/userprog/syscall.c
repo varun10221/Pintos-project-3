@@ -523,16 +523,48 @@ syscall_close (int fd)
    the process. Returns -1 on failure. */
 static mapid_t syscall_mmap (int fd, void *addr)
 {
-  /* TODO */
-  ASSERT (0 == 1);
-  return -1;
+  struct file *f = NULL, *f_dup = NULL;
+  struct mmap_info *mmap_info = NULL;
+  mapid_t mapping = -1;
+
+  f = process_fd_lookup (fd);
+  if (f == NULL)
+    goto CLEANUP_AND_ERROR;
+
+  f_dup = file_reopen (f);
+  if (f_dup == NULL)
+    goto CLEANUP_AND_ERROR;
+
+  mmap_info = process_add_mapping (f_dup, addr, MAP_PRIVATE|MAP_RDWR);
+  if (mmap_info == NULL)
+    goto CLEANUP_AND_ERROR;
+
+  mapping = process_mmap_add (mmap_info);
+  if (mapping == -1)
+    goto CLEANUP_AND_ERROR;
+
+  return mapping;
+
+  CLEANUP_AND_ERROR:
+    if (mmap_info != NULL)
+      /* process_delete_mapping will close f_dup. */
+      process_delete_mapping (mmap_info);
+    else if (f_dup != NULL)
+      file_close (f_dup);
+    return -1;
 }
 
 /* Unmaps the mapping designated by MAPPING. */
 static void syscall_munmap (mapid_t mapping)
 {
-  /* TODO */
-  ASSERT (0 == 1);
+  struct mmap_info *mmap_info = process_mmap_lookup (mapping);
+
+  /* No such mapping. */
+  if (mmap_info == NULL)
+    return;
+
+  process_delete_mapping (mmap_info);
+  process_mmap_remove (mapping);
 }
 
 /* Returns true if UADDR is non-null and below kernel space. 

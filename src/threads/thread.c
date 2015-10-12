@@ -1140,13 +1140,19 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wake_me_at = 0;
 
 #ifdef USERPROG
+  t->my_executable = NULL;
+
   /* The fd_table is left uninitialized. 
      userprog/process.c does all of the management for fd_table. */
   t->fd_table.n_elts = 0;
   t->fd_table.max_elts = 0;
   t->fd_table.elts = NULL;
 
-  t->my_executable = NULL;
+  /* The mmap_table is left uninitialized. 
+     userprog/process.c does all of the management for mmap_table. */
+  t->mmap_table.n_elts = 0;
+  t->mmap_table.max_elts = 0;
+  t->mmap_table.elts = NULL;
 
   /* Initialize fields for parent/child interaction. */
   list_init(&t->child_list);
