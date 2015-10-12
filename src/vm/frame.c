@@ -85,8 +85,9 @@ frame_table_store_page (struct page *pg)
 
   /* TODO Update the page directory of each owner. */
   ASSERT (0 == 1);
-
+  // pagedir_set_page (pd ,pg, fr,  true);
   /* Page safely in frame. */
+  /*TODO: to update location in spt? may not be needed since we update pagedir, but for consistency sake */
   lock_release (&fr->lock);
 }
 

@@ -66,3 +66,15 @@ void supp_page_table_remove_mapping (mapid_t mapid)
 {
   ASSERT (0 <= mapid);
 }
+
+
+
+#if 0
+
+how can we add and delete info about individual pages ?
+say if a page is evicted out of a frame.
+API's for that 
+
+
+#endif
+
