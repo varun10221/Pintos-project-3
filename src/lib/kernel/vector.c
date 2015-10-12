@@ -138,7 +138,7 @@ vector_grow (struct vector *vec, int new_size)
   if (vec_new_elts == NULL)
     return false;
   memset (vec_new_elts, 0, sizeof(void *) * new_size);
-
+  /*TODO:should we call realloc ? */
   if (vec->elts != NULL)
   {
     /* Copy values over -- the pointers are still valid. 
