@@ -9,6 +9,7 @@
 
 /* Forward declarations. */
 struct mmap_info;
+struct page;
 
 /* Parent maintains a list of children in its 'struct thread'.
    Child has a pointer to its entry in the parent's list.
@@ -63,6 +64,7 @@ struct mmap_info * process_mmap_lookup (mapid_t);
 void process_mmap_remove_all (void);
 
 /* Page table interaction. */
+struct page * process_page_table_find_page (void *);
 struct mmap_info * process_add_mapping (struct file *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
 

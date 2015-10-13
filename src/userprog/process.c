@@ -1056,6 +1056,15 @@ void process_mmap_remove_all (void)
   vector_destroy (vec);
 }
 
+/* Page table interaction functions. */
+
+/* Return the appropriate page from supplemental page table,
+     or NULL if no such page is defined. */
+struct page * process_page_table_find_page (void *vaddr)
+{
+  return supp_page_table_find_page (&thread_current ()->supp_page_table, vaddr); 
+}
+
 /* Add a memory mapping to this process's page table 
      for file F beginning at START with flags FLAGS.
    Returns NULL on failure.
@@ -1070,7 +1079,7 @@ struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
   struct segment *seg = NULL;
   struct mmap_info *mmap_info = NULL;
 
-  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f, start, flags);
+  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f, start, flags, false);
   if (seg == NULL)
     goto CLEANUP_AND_ERROR;
 
