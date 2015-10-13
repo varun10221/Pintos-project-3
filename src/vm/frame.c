@@ -3,10 +3,12 @@
 #include <debug.h>
 #include <list.h>
 
+#include "vm/swap.h"
+#include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
-#include "vm/swap.h"
+#include "userprog/pagedir.h"
 
 /* System-wide frame table. List of entries containing the resident pages
    Processes use the functions defined in frame.h to interact with this table. */
@@ -23,7 +25,7 @@ static struct frame * frame_table_find_free_frame (void);
 static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
-static bool frame_table_validate_eviction_victim (struct frame );
+static bool frame_table_validate_eviction_victim (struct frame *);
 static void frame_table_init_frame (struct frame *, id_t);
 
 /* Basic life cycle. */
@@ -99,27 +101,49 @@ void
 frame_table_release_page (struct page *pg) 
 { 
   ASSERT (pg != NULL);
-  /* Get the frame from  pg->location */
+  ASSERT (pg->status == PAGE_RESIDENT);
+  /* Only the final owner can release a page. */
+  ASSERT (list_size (&pg->owners) == 1);
+
+  /* TODO Hmm? I think that:
+       Since we've locked the page, we shouldn't need to lock the frame too. 
+       The eviction function should lock frame first, then page. By holding 
+       the lock on the page we "skip" the frame locking step. 
+       TODO This means that in eviction we must double-check that the page is still
+       resident before we actually evict. */
   struct frame * fr = (struct frame *) pg->location;
-  /*revert  the frame parameters, probably a  frame_init */
-  if (fr != NULL)
-    {
-      fr->status = FRAME_EMPTY;
-      fr->pg = NULL;
-      pg->location = NULL;
-      fr->popularity = POPULARITY_START;
-    }
-  /*acquire lock and do a bitflip */
-   lock_acquire (&system_frame_table.usage_lock);
-   bitmap_flip (system_frame_table.usage , fr->id);
-   lock_release (&system_frame_table.usage_lock);
- /*TODO:Can we have a separate function for writing mmap file? 
+  ASSERT (fr != NULL);
+  ASSERT (fr->status != FRAME_OCCUPIED);
+  ASSERT (fr->pg == pg);
+
+  struct page_owner_info *poi = list_entry (list_front (&pg->owners), struct page_owner_info, elem);
+  ASSERT (poi != NULL);
+  bool need_to_write_back = (pg->smi->mmap_file && pagedir_is_dirty (poi->owner->pagedir, fr->paddr));
+
+  if (need_to_write_back)
+  {
+    /* TODO mmap: Write page to file. Should call the same function used by
+        frame_table_evict_page_from_frame (victim). */
+  }
+
+ /*TODO Can we have a separate function for writing mmap file? 
    Im assuming writing back mmap file involves block_write and some other support 
    infra needed 
    
    JD: Yes, I agree. I think separate functions for evicting mmap and non-mmap pages are needed.
    Please add declarations for these.
    */
+
+  /* Update frame. */
+  fr->status = FRAME_EMPTY;
+  fr->pg = NULL;
+  fr->popularity = POPULARITY_START;
+  lock_release (&fr->lock);
+
+  /* Mark frame as available in the bitmap. */
+  lock_acquire (&system_frame_table.usage_lock);
+  bitmap_flip (system_frame_table.usage, fr->id);
+  lock_release (&system_frame_table.usage_lock);
 }
 
 /* (Put locked page PG into a frame and) pin it there. 
@@ -186,14 +210,14 @@ static struct frame *
 frame_table_get_eviction_victim (void)
 {
 
-   int i = 0;
+   uint32_t i = 0;
    struct frame *frames = (struct frame *) system_frame_table.entries;
    /*no need for a bitmap as u come to evict only if map is full!*/
    /* Search for first frame whose page is not pinned (for now!) and: */
    while (i < FRAME_TABLE_N_FRAMES && frames[i].status == FRAME_PINNED)
              i++;
    
-  /* Suggested change in search algorithm:
+  /* TODO Suggested change in search algorithm:
    for (i = 0; i < FRAME...; i++)
    {
      if (is victim) : in this case, if (status == FRAME_PINNED)
@@ -215,7 +239,7 @@ frame_table_get_eviction_victim (void)
    /*Acquiring a lock just for the frame, using an 'optimistic' approach  */
    lock_acquire (&frames[i].lock);
   /*validating if the frame is still unpinned */
-   if (frame_table_validate_eviction_victim (frames[i]))
+   if (frame_table_validate_eviction_victim (&frames[i]))
         return &frames[i];
 
   /*shall we return NULL and use NULL as an identifier to re-call function ? */
@@ -227,15 +251,14 @@ frame_table_get_eviction_victim (void)
 }
 
 
-/*validates and returns if the locked frame is still unpinned*/
+/* Returns true if the locked FR is a valid eviction victim
+     (i.e. is not pinned). */
 static bool 
-frame_table_validate_eviction_victim (struct frame fr)
+frame_table_validate_eviction_victim (struct frame *fr)
 {
-  if (fr.status != FRAME_PINNED)
-       return true;
-  
-  else false;
-
+  ASSERT (fr != NULL);
+  bool is_pinned = (fr->status == FRAME_PINNED);
+  return !is_pinned;
 }
 
 /* Evict the page in locked frame FR. */
@@ -292,19 +315,18 @@ frame_table_obtain_frame (void)
 static struct frame *
 frame_table_find_free_frame (void)
 { 
+  /* Do a bit map scan and retrieve the first free frame. */
   lock_acquire (&system_frame_table.usage_lock);
-  /*do a bit map scan and retrieve the first free frame after locking the table */
   size_t free_frame = bitmap_scan (system_frame_table.usage,0,1,false); 
-  /*release the lock*/
   lock_release (&system_frame_table.usage_lock);
-  /*check if there is no free_frame */
-  if (free_frame != FRAME_TABLE_N_FRAMES)
-      {
-        struct frame *fr = &system_frame_table.entries[free_frame];
-        return fr;
-      }
-  else return NULL;
 
+  /* Was a free frame found? */
+  if (free_frame != FRAME_TABLE_N_FRAMES)
+  {
+    struct frame *frames = (struct frame *) system_frame_table.entries;
+    return &frames[free_frame];
+  }
+  return NULL;
 }
 
 /*

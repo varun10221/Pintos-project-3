@@ -531,7 +531,9 @@ static mapid_t syscall_mmap (int fd, void *addr)
   if (f == NULL)
     goto CLEANUP_AND_ERROR;
 
+  filesys_lock ();
   f_dup = file_reopen (f);
+  filesys_unlock ();
   if (f_dup == NULL)
     goto CLEANUP_AND_ERROR;
 

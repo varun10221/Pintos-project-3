@@ -1,4 +1,4 @@
-#ifndef VM_PAGE_H
+#ifndef VM_PAGE_H 
 #define VM_PAGE_H
 
 #include <list.h>
@@ -8,16 +8,18 @@
 #include "threads/synch.h"
 #include "devices/block.h"
 
+/* TODO Move the "implementation-level" declarations to page.c. Prefer an opaque interface where possible. */
+
 /* mmap flags */
 
 /* Sharing between processes. */
-const int MAP_PRIVATE = 1 << 0;
-const int MAP_SHARED  = 1 << 1;
+static const int MAP_PRIVATE = 1 << 0;
+static const int MAP_SHARED  = 1 << 1;
 
 /* Access info for the segment holding the pages. */
-const int MAP_RDONLY  = 1 << 2;
-const int MAP_WRONLY  = 1 << 3; /* Unused. */
-const int MAP_RDWR    = 1 << 4;
+static const int MAP_RDONLY  = 1 << 2;
+static const int MAP_WRONLY  = 1 << 3; /* Unused. */
+static const int MAP_RDWR    = 1 << 4;
 
 enum page_status
 {
@@ -31,7 +33,7 @@ enum page_status
 enum segment_type
 {
   SEGMENT_PRIVATE, /* Not shared between multiple processes. */
-  SEGMENT_SHARED_RO /* RO shared segment. */
+  SEGMENT_SHARED /* RO shared segment. */
 };
 
 enum popularity_range
@@ -45,39 +47,18 @@ enum popularity_range
 /* Maps all virtual addresses known to this process. */
 struct supp_page_table
 {
-  struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends just below PHYS_BASE). */
+  struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends at PHYS_BASE). */
 };
 
-/* Pages that may be shared between multiple processes. 
-   Each process maintains its own concept of what the page number means. */
-struct shared_pages
+/* Info needed to:
+     - map 'relative page numbers' to 'pages'
+     - evict and replace such pages. 
+   A segment points to either one of these or to a struct shared_mappings*. */
+struct segment_mapping_info
 {
-  struct lock lock; /* For atomic update of the mappings. */
-  struct hash *page_mappings; /* Maps from page number to page. */
-};
-
-/* Container for a segment shared between multiple processes.
- 
-   Allocated by the first process to access the shared segment.
-   Cleaned up by the last process to release the shared segment. 
-   
-   A pointer to the page_mappings element can be cast to the ro_shared_segment itself. */
-struct ro_shared_segment
-{
-  struct shared_pages page_mappings; /* Maps relative page number to page. */
-  block_sector_t inode_sector; /* Sector of the inode to which the file is mapped; unique in the FS across the lifetime of the executable. */
-
-  int ref_count; /* How many processes are using this shared segment? Last one done has to clean up. */
-  struct lock ref_count_lock; /* Atomic modifications. */
-
-  struct hash_elem elem; /* For storage in the ro_segment_table. Hash on inode_start. */
-};
-
-/* A single global structure is defined to allow the sharing of the RO pages of executables. */
-struct ro_shared_segment_table
-{
-  struct hash inode_to_segment; /* Hash inode number to an ro_shared_segment. */
-  struct lock hash_lock; /* Lock before modifying the hash. */
+  struct hash mappings; /* Maps relative page number to page. */
+  struct file *mmap_file; /* If not NULL, segment is backed by this file. */
+  int flags;
 };
 
 /* Tracks a particular address range for a process. */
@@ -85,19 +66,49 @@ struct segment
 {
   /* An address belongs to this segment if (start <= addr && addr < end). */
   void *start; /* Starting address of this segment (virtual address). */
-  void *end; /* One address past the final address of this segment (virtual address). */
+  void *end; /* One byte past the final address of this segment (virtual address). i.e., the beginning of the first page NOT in this segment. */
 
-  struct shared_pages *page_mappings; /* Maps from segment page number to page. Can be shared with other processes. */
-
-  /* SEGMENT_PRIVATE: We are the only one using page_mappings.
-     SEGMENT_SHARED_RO: page_mappings is shared. Need to acquire lock before 
-       defining new mappings. Can be cast to a 'struct ro_shared_segment *' if needed. */
+  /* Allows us to map from segment page number to page. 
+     Points to either a struct segment_mapping_info* or to a struct shared_mappings*. 
+     The pointer type is determined by segment.type. */
+  void *mappings; 
+  /* SEGMENT_PRIVATE: We are the only one using mappings. mappings points to a struct segment_mapping_info*
+     SEGMENT_SHARED: We share mappings. mappings points to a struct shared_mappings*. */
   enum segment_type type; 
-  
+
   struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
 };
 
+/* Container for mappings shared between multiple processes.
+   Only supports mappings for mmap'd files, but I think it should
+   generalize pretty easily if need be.
+ 
+   Allocated by the first process to access the shared segment.
+   Cleaned up by the last process to release the shared segment. */
+struct shared_mappings
+{
+  /* Sector of the inode to which the file is mapped; unique in the FS across 
+       the lifetime of the executable. Used as the hash field in ro_shared_mappings_table. */
+  block_sector_t inumber; 
+
+  struct segment_mapping_info smi; /* All processes share this mapping info. */ 
+  struct lock segment_mapping_info_lock; /* Protects smi. */
+
+  int ref_count; /* How many processes are using this shared segment? Last one done has to clean up. */
+  struct lock ref_count_lock; /* Protects ref_count. */
+
+  struct hash_elem elem; /* For storage in the ro_segment_table. */ 
+};
+
+/* A single global structure is defined to allow the sharing of the RO pages of executables. */
+struct ro_shared_mappings_table
+{
+  struct hash inumber_to_segment; /* Hash inode number to a shared_mappings. */
+  struct lock hash_lock; /* Lock before modifying the hash. */
+};
+
 /* Tracks the segment* associated with a given mapid_t. 
+   Stored in a thread's mmap_table.
    The segment tracks the corresponding file* for loading data into a frame.
    On munmap we use this to find the segment* whose pages need to be handled. */
 struct mmap_info
@@ -124,30 +135,32 @@ struct page
      by the frame table. The SPT itself should not modify the pagedir at all. */
   struct list owners; 
 
-  int32_t segment_page; /* Which page in its segment is this? */
-
   void *location; /* struct frame* or struct slot* in which this page resides. */
   unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */
 
   enum page_status status; /* Status of this page. */
 
-  struct file *mmap_file; /* For loading and evicting pages in PAGE_IN_FILE state. */
+  struct segment_mapping_info *smi; /* Info for mmap and knowledge about rw status. */
+  int32_t segment_page; /* Which page in its segment is this? Segments hash pages by segment_page. */
 
   struct lock mapping_lock; /* TODO Is this how SPT and FT should communicate w.r.t. eviction? */
   struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
 };
 
-void ro_shared_segment_table_init (void);
-void ro_shared_segment_table_destroy (void);
+/* Read-only shared segment table: Basic life cycle. */
+void ro_shared_mappings_table_init (void);
+void ro_shared_mappings_table_destroy (void);
 
-/* Basic life cycle. */
+struct shared_mappings * ro_shared_mappings_table_get (struct file *, int);
+void ro_shared_mappings_table_remove (struct file *);
+
+/* Supplemental page table: Basic life cycle. */
 void supp_page_table_init (struct supp_page_table *);
 void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
 struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
-
-struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int);
+struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 
 #endif /* vm/page.h */

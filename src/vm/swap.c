@@ -85,7 +85,6 @@ swap_table_store_page (struct page *pg)
 
   /* Make sure PG is in a correct state. */
   ASSERT (pg->status == PAGE_RESIDENT);
-  ASSERT (pg->mmap_file == NULL); /* TODO probably refactor away the mmap_file anyway and put that in the segment for permission checking? */
   struct frame *curr_frame = (struct frame *) pg->location;
 
   /* Find a free slot. */
@@ -148,8 +147,7 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
   pg->status = PAGE_RESIDENT;
 } 
 
-/* Free up the swap slot used by page PG.
-   Caller must hold lock on PG. */
+/* Free up the swap slot used by locked page PG. */
 void 
 swap_table_discard_page (struct page *pg)
 {
@@ -157,7 +155,7 @@ swap_table_discard_page (struct page *pg)
 
   /* Page must be swapped out. */
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
-  /* Page must not be shared with any other processes. */
+  /* Only the final owner can release a page. */
   ASSERT (list_size (&pg->owners) == 1);
 
   ASSERT (pg->location != NULL);

@@ -114,7 +114,7 @@ main (void)
 
   /* Initialize virtual memory system. */
   frame_table_init ();
-  ro_shared_segment_table_init ();
+  ro_shared_mappings_table_init ();
 
   /* Initialize interrupt handlers. */
   intr_init ();

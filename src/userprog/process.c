@@ -1069,6 +1069,9 @@ struct page * process_page_table_find_page (void *vaddr)
      for file F beginning at START with flags FLAGS.
    Returns NULL on failure.
 
+   F must be a "dup"; process will close it when the mapping 
+     is destroyed. 
+
    Caller should NOT free the mmap_info.
    Use process_delete_mapping() to clean up the mmap_info. */
 struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)

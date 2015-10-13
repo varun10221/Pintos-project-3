@@ -1,10 +1,16 @@
-#include "vm/page.h"
-
+#include "vm/page.h" 
 #include <debug.h>
 #include <round.h>
 #include <stdlib.h>
 
+#include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "filesys/file.h"
+#include "filesys/inode.h"
+#include "filesys/filesys.h"
+
+#include "vm/frame.h"
+#include "vm/swap.h"
 
 /* Maximum distance from stack we can be in order to count as
    stack growth rather than an invalid memory access. */
@@ -13,63 +19,195 @@
 /* System-wide table of read-only shared segments.
    Processes can share entries in this table instead of maintaining
    their own copy of all of the pages they use. */
-struct ro_shared_segment_table ro_shared_segment_table;
+struct ro_shared_mappings_table ro_shared_mappings_table;
 
 /* Private function declarations. */
-bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
-bool supp_page_table_is_stack_growth (struct supp_page_table *, void *);
+/* TODO for X_init() functions that are really X_create() functions, change the names. 
+   I think that might be all of these. */
+
+/* Supp page table. */
+static bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
+static bool supp_page_table_is_stack_growth (struct supp_page_table *, void *);
+
+/* Segment. */
+static struct segment * segment_init (void *, void *, struct file *, int, enum segment_type); 
+static void segment_destroy (struct segment *);
+
+static struct page * segment_get_page (struct segment *, int32_t);
+static int32_t segment_calc_page_num (struct segment *, void *);
+static bool segment_list_less_func (const struct list_elem *, const struct list_elem *, void *);
+
+/* Page. */
+static struct page * page_init (struct segment_mapping_info *, int32_t);
+static void page_destroy (struct page *);
+static void page_destroy_hash_func (struct hash_elem *, void *);
+static void page_set_hash (struct page *, unsigned);
+static unsigned page_hash_func (const struct hash_elem *, void *);
+static bool page_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
+
+/* Shared mappings. */
+static void shared_mappings_init (struct shared_mappings *, struct file *, int);
+static void shared_mappings_destroy (struct shared_mappings *);
+static void shared_mappings_destroy_hash_func (struct hash_elem *, void *);
+static void shared_mappings_incr_ref_count (struct shared_mappings *);
+static void shared_mappings_decr_ref_count (struct shared_mappings *);
+static void shared_mappings_set_hash (struct shared_mappings *, unsigned);
+static unsigned shared_mappings_hash_func (const struct hash_elem *, void *);
+static bool shared_mappings_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
+
+/* ro_shared_mappings_table. */
+static struct shared_mappings *ro_shared_mappings_table_add (struct file *, int); 
 
 /* Initialize the ro shared segment table. Not thread safe. Should be called once. */
 void 
-ro_shared_segment_table_init (void)
+ro_shared_mappings_table_init (void)
 {
-  /* TODO */
+  hash_init (&ro_shared_mappings_table.inumber_to_segment, shared_mappings_hash_func, shared_mappings_hash_less_func, NULL);
+  lock_init (&ro_shared_mappings_table.hash_lock);
 }
 
 /* Destroy the ro shared segment table. Not thread safe. Should be called once. */
 void 
-ro_shared_segment_table_destroy (void)
+ro_shared_mappings_table_destroy (void)
 {
-  /* TODO */
+  hash_destroy (&ro_shared_mappings_table.inumber_to_segment, shared_mappings_destroy_hash_func);
+}
+
+/* Get the shared_mappings associated with INODE.
+   If no such segment yet exists, one is created. */
+struct shared_mappings * 
+ro_shared_mappings_table_get (struct file *f, int flags)
+{
+  ASSERT (f != NULL);
+
+  struct shared_mappings *match = NULL;
+
+  struct shared_mappings dummy;
+  block_sector_t inumber = inode_get_inumber (file_get_inode (f));
+  shared_mappings_set_hash (&dummy, inumber);
+
+  lock_acquire (&ro_shared_mappings_table.hash_lock);
+
+  struct hash_elem *e = hash_find (&ro_shared_mappings_table.inumber_to_segment, &dummy.elem);
+  if (e)
+    match = hash_entry (e, struct shared_mappings, elem);
+  else
+    match = ro_shared_mappings_table_add (f, flags);
+
+  /* Increment ref count while we hold hash_lock to avoid race with ro_shared_mappings_table_remove. */
+  shared_mappings_incr_ref_count (match);
+
+  lock_release (&ro_shared_mappings_table.hash_lock);
+
+  return match;
+}
+
+/* Add a new shared_mappings to ro_shared_mappings_table.
+   Caller must have locked ro_shared_mappings_table. 
+   Returns the shared segment we add. It has ref_count 0. 
+
+   F must be a "private" file*: a dup of whatever the original
+     file was. */
+struct shared_mappings *
+ro_shared_mappings_table_add (struct file *f, int flags)
+{
+  ASSERT (f != NULL);
+
+  struct shared_mappings *new_sm = (struct shared_mappings *) malloc (sizeof(struct shared_mappings));
+  ASSERT (new_sm != NULL);
+
+  shared_mappings_init (new_sm, f, flags);
+  hash_insert (&ro_shared_mappings_table.inumber_to_segment, &new_sm->elem);
+
+  return new_sm;
+}
+
+/* Remove the (unlocked) shared_mappings associated with F.
+   (unless there is a reference to it). 
+
+   Beware of race conditions; see comments inside. */
+void 
+ro_shared_mappings_table_remove (struct file *f)
+{
+  ASSERT (f != NULL);
+  struct shared_mappings *match = NULL;
+
+  block_sector_t inumber = inode_get_inumber (file_get_inode (f));
+  struct shared_mappings dummy;
+  shared_mappings_set_hash (&dummy, inumber);
+
+  lock_acquire (&ro_shared_mappings_table.hash_lock);
+
+  struct hash_elem *e = hash_find (&ro_shared_mappings_table.inumber_to_segment, &dummy.elem);
+  /* If another process has established a mapping between when we were
+     called and now, and has finished and called this function, then
+     e may be NULL. */
+  if (e)
+  {
+    match = hash_entry (e, struct shared_mappings, elem);
+    /* If another process has established a mapping between when we were 
+       called and now, then the shared_mappings may have a non-zero ref count. */
+    if (match->ref_count == 0)
+      shared_mappings_destroy (match);
+  }
+
+  lock_release (&ro_shared_mappings_table.hash_lock);
 }
 
 /* Initialize a supplemental page table.
    This SPT begins with only a stack segment. */
-void supp_page_table_init (struct supp_page_table *spt)
+void 
+supp_page_table_init (struct supp_page_table *spt)
 {
   ASSERT (spt != NULL);
-  /* TODO */
+
+  list_init (&spt->segment_list);
+
+  /* Create a stack segment. */
+  struct segment *stack_seg = segment_init (PHYS_BASE - PGSIZE, PHYS_BASE, NULL, 0, SEGMENT_PRIVATE);
+  list_insert_ordered (&spt->segment_list, &stack_seg->elem, segment_list_less_func, NULL);
 }
 
 /* Destroy this supplemental page table, releasing
-   all resources it holds. */
-void supp_page_table_destroy (struct supp_page_table *spt)
+     all resources it holds. 
+   Caller is responsible for freeing the memory
+     associated with the spt, if dynamic. */
+void 
+supp_page_table_destroy (struct supp_page_table *spt)
 {
   ASSERT (spt != NULL);
-  /* TODO */
+
+  while (!list_empty (&spt->segment_list))
+  {
+    struct list_elem *e = list_pop_front (&spt->segment_list);
+    ASSERT (e != NULL);
+    segment_destroy (list_entry (e, struct segment, elem));
+  }
 }
 
 /* Return the page associated with virtual address VADDR.
    If VADDR looks like a stack growth, grow the stack and add a page.
 
    Returns NULL if no such page (i.e. illegal memory access). */
-struct page * supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
+struct page * 
+supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
   ASSERT (spt != NULL);
   ASSERT (vaddr != NULL);
 
-  void *vpgaddr = ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
   struct segment *seg = NULL;
   struct page *ret = NULL;
 
   /* Find the segment to which this address belongs. */
   struct segment *tmp_seg = NULL;
   struct list_elem *e = NULL;
+  size_t list_size = 0;
   for (e = list_begin (&spt->segment_list); e != list_end (&spt->segment_list);
        e = list_next (e))
   {
+    list_size++;
     tmp_seg = list_entry (e, struct segment, elem);
-    if (tmp_seg->start <= vpgaddr && vpgaddr < tmp_seg->end)
+    if (tmp_seg->start <= vaddr && vaddr < tmp_seg->end)
     {
       seg = tmp_seg;
       break;
@@ -79,85 +217,69 @@ struct page * supp_page_table_find_page (struct supp_page_table *spt, void *vadd
   /* Found a matching segment. */
   if (seg)
   {
-    /* page_mappings is keyed by page number. */
-    int page_num = (vpgaddr - seg->start) / PGSIZE;
-    
-    /* If shared, lock so that we don't race on lookup/modification. */
-    if (seg->type == SEGMENT_SHARED_RO)
-      lock_acquire (&seg->page_mappings->lock);
-
-    /* TODO Need to init the hash with hash and equals function, and 
-       define a hash_elem that will hash appropriately.
-    struct hash_elem *e = hash_find (seg->page_mappings->page_mappings, 
-    ret = hash_entry (e, struct page, elem);
-    */
-
-    /* Not currently present? Need to add a page. */
-    if (ret == NULL)
-    {
-      /* TODO */
-      ASSERT (0 == 1);
-      ret = NULL;
-    }
-
-    /* Done with this segment. */
-    if (seg->type == SEGMENT_SHARED_RO)
-      lock_release (&seg->page_mappings->lock);
+    /* mappings is keyed by page number. */
+    int32_t page_num = segment_calc_page_num (seg, vaddr);
+    return segment_get_page (seg, page_num);
   }
   /* Did not find a matching segment. Could still be stack growth. */
   else
   {
     bool is_stack_growth = supp_page_table_is_stack_growth (spt, vaddr);
-      /* Stack growth? Need to add a page. */
-
-      /* Check if we can do so safely without creeping onto our predecessor. 
-         No need to worry about racing with adding or deleting a mapping because
-           we don't support process-level threads. */
-      if ( is_stack_growth )
-      {
-        /* TODO */
-      }
+    /* Stack growth? Need to add a page. 
+       We know we aren't overlapping our predecessor because if we were, we would
+         not have page faulted. Behavior in such a case is undefined. */
+    if (is_stack_growth)
+    {
+      seg->start -= PGSIZE;
+      /* mappings is keyed by page number. */
+      int32_t page_num = segment_calc_page_num (seg, vaddr);
+      ret = segment_get_page (seg, page_num);
+      ASSERT (ret != NULL);
+    }
   }
 
   return ret;
 }
 
-/* Add a {read_only | writable} mapping for mapid MAPID starting at address VADDR.
-
-   MAPID must refer to a valid mapping.
- 
-   Returns true on success, false if VADDR is 0, is not page-aligned, or overlaps
-   any already-mapped pages. */
-
 /* Add a memory mapping to supp page table SPT
      for file F beginning at START with flags FLAGS.
    Returns NULL on failure.
 
-   Caller should NOT free the segment.
+   F must be a "private" file*: a dup of whatever the original
+     file was.
+
+   Returns the new segment on success.
+   Returns NULL if range is not valid or on failure.
+
    Use supp_page_table_remove_segment() to clean up the segment. */
-struct segment * supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *vaddr, int flags)
+struct segment * 
+supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *start, int flags, bool is_shared)
 {
   ASSERT (spt != NULL);
   ASSERT (f != NULL);
-  ASSERT (vaddr != NULL);
 
-  /* TODO */
-  ASSERT (0 == 1);
+  void *end = (void *) ((uint32_t) start + file_length (f));
+  if (!supp_page_table_is_range_valid (spt, start, end))
+    return NULL;
+
+  struct segment *ret = segment_init (start, end, f, flags, is_shared ? SEGMENT_SHARED : SEGMENT_PRIVATE);
+  list_insert_ordered (&spt->segment_list, &ret->elem, segment_list_less_func, NULL);
+  return ret;
 }
 
 /* Remove the specified segment from this page table.
    If it's an mmap'd segment, will flush all dirty pages. 
    Will free the memory associated with this segment
    If it's a shared mapping, and if we're the last holder of the 
-     pages, will free that memory too. 
-   Don't forget to close the file! */
-void supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg)
+     pages, will free that memory too. */
+void 
+supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg)
 {
   ASSERT (spt != NULL);
   ASSERT (seg != NULL);
 
-  /* TODO */
-  ASSERT (0 != 1);
+  list_remove (&seg->elem);
+  segment_destroy (seg);
 }
 
 /* Determine whether or not this range is valid:
@@ -167,7 +289,8 @@ void supp_page_table_remove_segment (struct supp_page_table *spt, struct segment
     - must not overlap with any existing segments in SPT
     
    Returns true if valid, false else. */
-bool supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *end)
+bool 
+supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *end)
 {
   ASSERT (spt != NULL);
 
@@ -181,7 +304,7 @@ bool supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, v
   if (start_addr == 0)
     return false;
   /* - must be in user-space (below PHYS_BASE) */
-  if (PHYS_BASE < end_addr)
+  if (PHYS_BASE < end)
     return false;
   /* - must be page-aligned */
   if (start_addr % PGSIZE != 0)
@@ -207,7 +330,8 @@ bool supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, v
 }
 
 /* Return true if this address is stack growth, false else. */
-bool supp_page_table_is_stack_growth (struct supp_page_table *spt, void *vaddr)
+bool 
+supp_page_table_is_stack_growth (struct supp_page_table *spt, void *vaddr)
 {
   ASSERT (spt != NULL);
 
@@ -219,6 +343,372 @@ bool supp_page_table_is_stack_growth (struct supp_page_table *spt, void *vaddr)
   if (llabs (distance_from_stack) <= MAX_VALID_STACK_DISTANCE)
     return true;
   return false;
+}
+
+/* Initialize a segment. Destroy with segment_destroy(). */
+struct segment * 
+segment_init (void *start, void *end, struct file *mmap_file, int flags, enum segment_type type)
+{
+  struct segment *seg = (struct segment *) malloc (sizeof(struct segment));
+  ASSERT (seg != NULL);
+
+  ASSERT ((uint32_t) start < (uint32_t) end);
+
+  seg->start = start;
+  seg->end = end;
+  seg->type = type;
+
+  if (seg->type == SEGMENT_PRIVATE)
+  {
+    /* Initialize and set mappings to a struct hash*. */
+    seg->mappings = malloc (sizeof(struct segment_mapping_info));
+    ASSERT (seg->mappings != NULL);
+
+    struct segment_mapping_info *smi = (struct segment_mapping_info *) seg->mappings;
+    hash_init (&smi->mappings, page_hash_func, page_hash_less_func, NULL);
+    smi->mmap_file = mmap_file;
+    smi->flags = flags;
+  }
+  else if (seg->type == SEGMENT_SHARED)
+  {
+    /* We only support shared segments for mmap'd files. */
+    ASSERT (mmap_file != NULL);
+    /* Set mappings to the appropriate struct shared_mappings*. */
+    seg->mappings = (void *) ro_shared_mappings_table_get (mmap_file, flags);
+  }
+  else
+    NOT_REACHED ();
+
+  return seg;
+}
+
+/* Destroy segment SEG created by segment_init(). 
+   Acquires and releases filesys_lock. */
+void 
+segment_destroy (struct segment *seg)
+{
+  ASSERT (seg != NULL);
+
+  if (seg->type == SEGMENT_PRIVATE)
+  {
+    struct segment_mapping_info *smi = (struct segment_mapping_info *) seg->mappings;
+    hash_destroy (&smi->mappings, page_destroy_hash_func);
+    if (smi->mmap_file)
+    {
+      filesys_lock ();
+      file_close (smi->mmap_file);
+      filesys_unlock ();
+    }
+  }
+  else
+  {
+    /* Shared mappings, so decrement ref count. */
+    shared_mappings_decr_ref_count ((struct shared_mappings *) seg->mappings);
+  }
+
+  free (seg);
+}
+
+/* Retrieve the specified page from SEG. 
+   Adds a page if no such page has yet been defined. */ 
+struct page * 
+segment_get_page (struct segment *seg, int32_t relative_page_num)
+{
+  ASSERT (seg != NULL);
+  ASSERT (seg->mappings != NULL);
+
+  int32_t seg_n_pages = ((uint32_t) seg->end - (uint32_t) seg->start) / PGSIZE;
+  ASSERT (0 <= relative_page_num && relative_page_num < seg_n_pages);
+
+  struct page *ret = NULL;
+
+  struct page dummy;
+  page_set_hash (&dummy, relative_page_num);
+
+  /* Test this to see if we need to lock. */
+  struct shared_mappings *sm = NULL;
+
+  /* Get pointer to the smi and the mappings hash. */
+  struct segment_mapping_info *smi = NULL;
+  struct hash *h = NULL;
+  if (seg->type == SEGMENT_PRIVATE)
+  {
+    smi = (struct segment_mapping_info *) seg->mappings;
+    h = &smi->mappings;
+  }
+  else
+  {
+    sm = (struct shared_mappings *) seg->mappings;
+    smi = &sm->smi;
+    h = &sm->smi.mappings;
+  }
+  ASSERT (smi != NULL);
+  ASSERT (h != NULL);
+
+  if (sm)
+    lock_acquire (&sm->segment_mapping_info_lock);
+
+  /* Find the page. Add a new one if there isn't one yet. */
+  struct hash_elem *e = hash_find (h, &dummy.elem);
+  if (e)
+    ret = hash_entry (e, struct page, elem);
+  else
+  {
+    /* Add a new page. */
+    ret = page_init (smi, relative_page_num);
+    hash_insert (h, &ret->elem);
+  }
+
+  if (sm)
+    lock_release (&sm->segment_mapping_info_lock);
+
+  return ret;
+}
+
+/* Calculate the relative page number of VADDR in segment SEG. */
+int32_t 
+segment_calc_page_num (struct segment *seg, void *vaddr)
+{
+  ASSERT (seg != NULL);
+  ASSERT ((uint32_t) seg->start <= (uint32_t) vaddr && (uint32_t) vaddr < (uint32_t) seg->end);
+
+  uint32_t *vpgaddr = ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
+
+  /* If segment grows up (all segments but stack), then we calculate
+       page number based on seg->start. seg->end is fixed.
+     If segment grows down (stack segment), then we calculate
+       page number based on seg->end. seg->start is fixed.
+
+     NB If we need to grow mmap'd files in P4, make growth direction
+       a member of a segment.
+
+     We do not handle segments that can grow in both directions. */
+  bool segment_grows_up = (seg->end < PHYS_BASE ? true : false);
+
+  int32_t page_no;
+  if (segment_grows_up)
+    page_no = ((uint32_t) vpgaddr - (uint32_t) seg->start) / PGSIZE;
+  else
+    page_no = ((uint32_t) seg->end - (uint32_t) vpgaddr) / PGSIZE;
+  return page_no;
+}
+
+/* Segment list_less_func. */
+bool 
+segment_list_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  ASSERT (a != NULL);
+  ASSERT (b != NULL);
+
+  struct segment *a_seg = list_entry (a, struct segment, elem);
+  struct segment *b_seg = list_entry (b, struct segment, elem);
+
+  return (uint32_t) a_seg->start < (uint32_t) b_seg->start;
+}
+
+/* Page functions. */
+
+/* Initialize a page with no owners.
+   Destroy with page_destroy(). */
+struct page * 
+page_init (struct segment_mapping_info *smi, int32_t segment_page)
+{
+  ASSERT (smi != NULL);
+  ASSERT (0 <= segment_page);
+
+  struct page *pg = (struct page *) malloc (sizeof(struct page));
+  ASSERT (pg != NULL);
+
+  list_init (&pg->owners);
+  pg->location = NULL;
+  pg->stamp = 0;
+  pg->status = PAGE_NEVER_ACCESSED;
+  pg->smi = smi;
+  pg->segment_page = segment_page;
+  lock_init (&pg->mapping_lock);
+
+  return pg;
+}
+
+/* Destroy page PG created by page_init(). */
+void 
+page_destroy (struct page *pg)
+{
+  ASSERT (pg != NULL);
+
+  lock_acquire (&pg->mapping_lock);
+
+  /* TODO I shouldn't know that the swap table exists. Add a bool to struct page for frame's use,
+     and just call frame_table_release_page? Or is this needlessly circuitous? */
+  if (pg->status == PAGE_RESIDENT)
+    frame_table_release_page (pg);
+  else if (pg->status == PAGE_SWAPPED_OUT)
+    swap_table_discard_page (pg);
+
+  pg->status = PAGE_DISCARDED;
+  lock_release (&pg->mapping_lock);
+
+  free (pg);
+}
+
+/* For use with hash_destroy. 
+ 
+   We only destroy a page if we are the sole owner of it.
+   For mmap'd resident pages, write back to disk. */
+void 
+page_destroy_hash_func (struct hash_elem *elem, void *aux UNUSED)
+{
+  ASSERT (elem != NULL);
+
+  struct page *pg = hash_entry (elem, struct page, elem);
+  ASSERT (pg != NULL);
+
+  page_destroy (pg);
+}
+
+/* Set PG's fields to hash to KEY. */
+void 
+page_set_hash (struct page *pg, unsigned key)
+{
+  ASSERT (pg != NULL);
+  pg->segment_page = (int32_t) key;
+} 
+
+/* Hash this page. */
+unsigned 
+page_hash_func (const struct hash_elem *e, void *aux UNUSED)
+{
+  ASSERT (e != NULL);
+  struct page *pg = hash_entry (e, struct page, elem);
+  ASSERT (pg != NULL);
+  return pg->segment_page;
+}
+
+/* Which page is the lesser? */ 
+bool 
+page_hash_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux)
+{
+  ASSERT (a != NULL);
+  ASSERT (b != NULL);
+  
+  /* KISS. */
+  return page_hash_func (a, aux) < page_hash_func (b, aux);
+}
+
+/* Shared mappings functions. */
+
+/* Initialize SS with F and ref_count 0. */
+void 
+shared_mappings_init (struct shared_mappings *sm, struct file *f, int flags)
+{
+  ASSERT (sm != NULL);
+  ASSERT (f != NULL);
+
+  block_sector_t inumber = inode_get_inumber (file_get_inode (f));
+  sm->inumber = inumber;
+
+  hash_init (&sm->smi.mappings, shared_mappings_hash_func, shared_mappings_hash_less_func, NULL);
+  sm->smi.mmap_file = f;
+  sm->smi.flags = flags;
+  lock_init (&sm->segment_mapping_info_lock);
+
+  sm->ref_count = 0;
+  lock_init (&sm->ref_count_lock);
+}
+
+/* Destroy this shared mappings. 
+ 
+   Only call if we are the last referrers and are guaranteed that no new 
+   referrers will race with us. */
+void 
+shared_mappings_destroy (struct shared_mappings *sm)
+{
+  ASSERT (sm != NULL);
+  ASSERT (sm->ref_count == 0);
+
+  hash_destroy (&sm->smi.mappings, shared_mappings_destroy_hash_func);
+  /* Must do this after destroying the hash table, so that frame table still 
+       has the file to work with. */
+  if (sm->smi.mmap_file != NULL)
+  {
+    filesys_lock ();
+    file_close (sm->smi.mmap_file);
+    filesys_unlock ();
+  }
+}
+
+/* For use with hash_destroy. */
+void 
+shared_mappings_destroy_hash_func (struct hash_elem *e, void *aux UNUSED)
+{
+  ASSERT (e != NULL);
+
+  struct shared_mappings *sm = hash_entry (e, struct shared_mappings, elem);
+  ASSERT (sm != NULL);
+
+  shared_mappings_destroy (sm);
+}
+
+/* Atomically decrement the ref count of SS.
+   If we are the last user, destroy SS. */ 
+void 
+shared_mappings_decr_ref_count (struct shared_mappings * ss)
+{
+  ASSERT (ss != NULL);
+
+  lock_acquire (&ss->ref_count_lock);
+  ASSERT (0 < ss->ref_count);
+  ss->ref_count--;
+  lock_release (&ss->ref_count_lock);
+
+  /* If it looks like we're the last user, ask the ro shared segment table
+     to remove this segment. */
+  if (ss->ref_count == 0)
+    ro_shared_mappings_table_remove (ss->smi.mmap_file);
+}
+
+/* Atomically increment the ref count of SS.
+   If we are the last user, destroy SS. */ 
+void 
+shared_mappings_incr_ref_count (struct shared_mappings *sm)
+{
+  ASSERT (sm != NULL);
+
+  lock_acquire (&sm->ref_count_lock);
+  /* Could be zero if the last referrer is in the procesm of requesting that 
+       ro_shared_mappings_table destroy SS. */
+  ASSERT (0 <= sm->ref_count);
+  sm->ref_count++;
+  lock_release (&sm->ref_count_lock);
+}
+
+/* Set SS's fields to hash to KEY. */
+void 
+shared_mappings_set_hash (struct shared_mappings *sm, unsigned key)
+{
+  ASSERT (sm != NULL);
+  sm->inumber = (block_sector_t) key;
+}
+
+/* Hash this shared segment. */
+unsigned 
+shared_mappings_hash_func (const struct hash_elem *e, void *aux UNUSED)
+{
+  ASSERT (e != NULL);
+  struct shared_mappings *sm = hash_entry (e, struct shared_mappings, elem);
+  ASSERT (sm != NULL);
+  return sm->inumber;
+}
+
+/* Which shared_mappings is the lesser? */
+bool 
+shared_mappings_hash_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux)
+{
+  ASSERT (a != NULL);
+  ASSERT (b != NULL);
+  
+  /* KISS. */
+  return shared_mappings_hash_func (a, aux) < shared_mappings_hash_func (b, aux);
 }
 
 /*
