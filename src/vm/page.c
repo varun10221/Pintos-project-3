@@ -84,7 +84,7 @@ struct page * supp_page_table_find_page (struct supp_page_table *spt, void *vadd
     
     /* If shared, lock so that we don't race on lookup/modification. */
     if (seg->type == SEGMENT_SHARED_RO)
-      lock_acquire (&seg->shared_mappings->lock);
+      lock_acquire (&seg->page_mappings->lock);
 
     /* TODO Need to init the hash with hash and equals function, and 
        define a hash_elem that will hash appropriately.
@@ -102,7 +102,7 @@ struct page * supp_page_table_find_page (struct supp_page_table *spt, void *vadd
 
     /* Done with this segment. */
     if (seg->type == SEGMENT_SHARED_RO)
-      lock_release (&seg->shared_mappings->lock);
+      lock_release (&seg->page_mappings->lock);
   }
   /* Did not find a matching segment. Could still be stack growth. */
   else
@@ -113,7 +113,10 @@ struct page * supp_page_table_find_page (struct supp_page_table *spt, void *vadd
       /* Check if we can do so safely without creeping onto our predecessor. 
          No need to worry about racing with adding or deleting a mapping because
            we don't support process-level threads. */
-      if ( 
+      if ( is_stack_growth )
+      {
+        /* TODO */
+      }
   }
 
   return ret;
