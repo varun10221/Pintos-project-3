@@ -23,7 +23,7 @@ static struct frame * frame_table_find_free_frame (void);
 static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
-static bool frame_table_validate_eviction_victim (struct frame *);
+static bool frame_table_validate_eviction_victim (struct frame );
 static void frame_table_init_frame (struct frame *, id_t);
 
 /* Basic life cycle. */
@@ -71,7 +71,7 @@ frame_table_store_page (struct page *pg)
   ASSERT (pg != NULL);
 
   /* Page must not be in a page already. */
-  ASERT (pg->status != PAGE_RESIDENT);
+  ASSERT (pg->status != PAGE_RESIDENT);
 
   struct frame *fr = frame_table_obtain_frame ();
   if (fr == NULL)
@@ -200,8 +200,8 @@ frame_table_get_eviction_victim (void)
    /*Acquiring a lock just for the frame, using an 'optimistic' approach  */
    lock_acquire (&frames[i].lock);
   /*validating if the frame is still unpinned */
-   if (frame_table_validate_eviction_victim (frames[i])
-        return frames[i];
+   if (frame_table_validate_eviction_victim (frames[i]))
+        return &frames[i];
 
   /*shall we return NULL and use NULL as an identifier to re-call function ? */
   /*calling it recursively in else might not be a good idea */   
@@ -228,18 +228,21 @@ frame_table_validate_eviction_victim (struct frame fr)
 static void 
 frame_table_evict_page_from_frame (struct frame *fr)
 {
+  bool a = false; /*dummy variable for compilation */
   ASSERT (fr != NULL);
   /* - TODO For mmap'd file page, check if the page is dirty. 
        If so write to file, else set the frame free and return frame.*/
      
-  if (0/*mmap_check*/)
-   /* For other types of pages, call swap_table_store_page. */
+  if (a) /*mmap check*/
+    {   /* For other types of pages, call swap_table_store_page. */
+     
+     }
   else
    {  
     swap_table_store_page (fr->pg);
    } 
     /*relase the lock on the locked frame_obtained */         
-    lock_release (&fr.lock);
+    lock_release (&fr->lock);
 }
 
 /* Initialize frame FR. */
@@ -276,14 +279,13 @@ frame_table_find_free_frame (void)
 { 
   lock_acquire (&system_frame_table.usage_lock);
   /*do a bit map scan and retrieve the first free frame after locking the table */
-  size_t free_frame = bitmap_scan (system_frame_table->usage,0,1,false); 
+  size_t free_frame = bitmap_scan (system_frame_table.usage,0,1,false); 
   /*release the lock*/
   lock_release (&system_frame_table.usage_lock);
   /*check if there is no free_frame */
   if (free_frame != FRAME_TABLE_N_FRAMES)
       {
-        struct frame *fr = (struct frame *)
-                               system_frame_table.entries[free_frame];
+        struct frame *fr = &system_frame_table.entries[free_frame];
         return fr;
       }
   else return NULL;
