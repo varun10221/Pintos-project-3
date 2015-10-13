@@ -171,16 +171,18 @@ page_fault (struct intr_frame *f)
   /*TODO: Does the address should be checked, whether its in valid range? */
   /*supp. Table checks for valid range, will that do ? */
   /*Find the page from SPT ,FT infrastructure */
-  struct page *p = page_table_find_page (fault_addr);// should i call_sup_page table_find page ?
+  struct page *p = process_page_table_find_page (fault_addr);
   
   /*P will be NULL if we cannot find the page */
    if (p)
-    /* call the exit system call to delete process, TODO check error code */
-    exit (-1);
+   {
+    /* TODO */
+    PANIC ("Error, need to figure out how to terminate just the calling process.");
+   }
    
    else
     /*should load page as well as its contents */
-    is_loaded = frame_table_load_page (p);
+    is_loaded = frame_table_store_page (p);
     
    if(!is_loaded)     
       /*Used for handling this exception of failed load */ 
