@@ -169,8 +169,9 @@ page_fault (struct intr_frame *f)
           user ? "user" : "kernel");*/
   
   /*TODO: Does the address should be checked, whether its in valid range? */
+  /*supp. Table checks for valid range, will that do ? */
   /*Find the page from SPT ,FT infrastructure */
-  struct page *p = page_table_find_page (fault_addr);
+  struct page *p = page_table_find_page (fault_addr);// should i call_sup_page table_find page ?
   
   /*P will be NULL if we cannot find the page */
    if (p)
@@ -182,6 +183,7 @@ page_fault (struct intr_frame *f)
     is_loaded = frame_table_load_page (p);
     
    if(!is_loaded)     
-       kill (f);
+      /*Used for handling this exception of failed load */ 
+      kill (f);
 }
 

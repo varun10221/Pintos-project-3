@@ -23,7 +23,7 @@ static struct frame * frame_table_find_free_frame (void);
 static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
-
+static bool frame_table_validate_eviction_victim (struct frame *);
 static void frame_table_init_frame (struct frame *, id_t);
 
 /* Basic life cycle. */
@@ -76,18 +76,19 @@ frame_table_store_page (struct page *pg)
   struct frame *fr = frame_table_obtain_frame ();
   if (fr == NULL)
     PANIC ("frame_table_store_page: Could not allocate a frame."); 
-
+/*TODO:should we lock the page also? */
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
   fr->pg = pg;
   pg->location = fr;
   fr->popularity = POPULARITY_START;
-
+  pg->status = PAGE_RESIDENT;
   /* TODO Update the page directory of each owner. */
   ASSERT (0 == 1);
-  // pagedir_set_page (pd ,pg, fr,  true);
+  // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
   /* Page safely in frame. */
   /*TODO: to update location in spt? may not be needed since we update pagedir, but for consistency sake */
+  
   lock_release (&fr->lock);
 }
 
@@ -132,6 +133,9 @@ frame_table_pin_page (struct page *pg)
   ASSERT (pg != NULL);
  /*change the frame_status to pinned */
  /*TODO:first allocate the frame for the page if not availble before */
+  if (pg->location == NULL)
+        frame_table_store_page (pg);
+       
   struct frame *fr = (struct frame *) pg->location;
   /*lock so that page doesnt get evicted before pinning */
   lock_acquire (&fr->lock);
@@ -142,7 +146,7 @@ frame_table_pin_page (struct page *pg)
 }
 
 /* Allow locked resident page PG to be evicted from its frame.
-   TODO. */
+    */
 void 
 frame_table_unpin_page (struct page *pg)
 {
@@ -161,7 +165,7 @@ frame_table_unpin_page (struct page *pg)
 
 /* This function will evict the page from a frame
    and return the frame to you, locked.
-
+ 
    Returns NULL if all frames have their page pinned. */
 static struct frame * 
 frame_table_make_free_frame (void)
@@ -169,6 +173,8 @@ frame_table_make_free_frame (void)
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
     frame_table_evict_page_from_frame (victim);
+  else frame_table_get_eviction_victim ();//TODO:put this in a loop may be?
+ 
   return victim;
 }
 
@@ -186,16 +192,35 @@ frame_table_get_eviction_victim (void)
    /* Search for first frame whose page is not pinned (for now!) and: */
    while (i < FRAME_TABLE_N_FRAMES && frames[i].status == FRAME_PINNED)
              i++;
-    
+   
+  /*since we panic if i is frame_table_size, we need worry about seg fault */ 
    if (i == FRAME_TABLE_N_FRAMES)
        PANIC ("All frames are pinned");/*TODO: I'm not returning NULL now,will            do once eviction algo. is finalized */ 
     
-   /*Acquiring a lock just for the frame, doing it before while loop may help        and eliminate race before eviction TODO */
+   /*Acquiring a lock just for the frame, using an 'optimistic' approach  */
    lock_acquire (&frames[i].lock);
-                                          
-   else return frames[i];      
+  /*validating if the frame is still unpinned */
+   if (frame_table_validate_eviction_victim (frames[i])
+        return frames[i];
+
+  /*shall we return NULL and use NULL as an identifier to re-call function ? */
+  /*calling it recursively in else might not be a good idea */   
+   else return NULL; 
+         
   /* May need to panic in an unlikely scenario of all frames pinned. */
   //return NULL;
+}
+
+
+/*validates and returns if the locked frame is still unpinned*/
+static bool 
+frame_table_validate_eviction_victim (struct frame fr)
+{
+  if (fr.status != FRAME_PINNED)
+       return true;
+  
+  else false;
+
 }
 
 /* Evict the page in locked frame FR. */
@@ -212,8 +237,9 @@ frame_table_evict_page_from_frame (struct frame *fr)
   else
    {  
     swap_table_store_page (fr->pg);
-   }             
-
+   } 
+    /*relase the lock on the locked frame_obtained */         
+    lock_release (&fr.lock);
 }
 
 /* Initialize frame FR. */
@@ -252,10 +278,16 @@ frame_table_find_free_frame (void)
   /*do a bit map scan and retrieve the first free frame after locking the table */
   size_t free_frame = bitmap_scan (system_frame_table->usage,0,1,false); 
   /*release the lock*/
-  /*TODO:check for a condition if no frame is free and then proceed */
-  lock_release (&system_frame_table.usage_lock);    
-  struct frame *fr = (struct frame *) system_frame_table.entries[free_frame];
-  return fr;
+  lock_release (&system_frame_table.usage_lock);
+  /*check if there is no free_frame */
+  if (free_frame != FRAME_TABLE_N_FRAMES)
+      {
+        struct frame *fr = (struct frame *)
+                               system_frame_table.entries[free_frame];
+        return fr;
+      }
+  else return NULL;
+
 }
 
 /*
