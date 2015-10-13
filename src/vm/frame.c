@@ -193,6 +193,21 @@ frame_table_get_eviction_victim (void)
    while (i < FRAME_TABLE_N_FRAMES && frames[i].status == FRAME_PINNED)
              i++;
    
+  /* Suggested change in search algorithm:
+   for (i = 0; i < FRAME...; i++)
+   {
+     if (is victim) : in this case, if (status == FRAME_PINNED)
+     {
+       lock
+       if still pinned
+         break
+       else
+         unlock
+     }
+   }
+
+  This seems cleaner than recursively calling this function. */
+   
   /*since we panic if i is frame_table_size, we need worry about seg fault */ 
    if (i == FRAME_TABLE_N_FRAMES)
        PANIC ("All frames are pinned");/*TODO: I'm not returning NULL now,will            do once eviction algo. is finalized */ 
