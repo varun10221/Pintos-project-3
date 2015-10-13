@@ -2,9 +2,11 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "userprog/gdt.h"
+#include "userprog/process.h"
+#include "vm/page.h"
+#include "vm/frame.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-#include "vm/page.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -182,7 +184,10 @@ page_fault (struct intr_frame *f)
    
    else
     /*should load page as well as its contents */
+    frame_table_store_page (p);
+    /* TODO ?? frame_table_store_page returns void?
     is_loaded = frame_table_store_page (p);
+    */
     
    if(!is_loaded)     
       /*Used for handling this exception of failed load */ 
