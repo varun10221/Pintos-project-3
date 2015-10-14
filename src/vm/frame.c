@@ -210,7 +210,6 @@ frame_table_make_free_frame (void)
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
     frame_table_evict_page_from_frame (victim);
-  
  
   return victim;
 }
@@ -225,50 +224,23 @@ frame_table_get_eviction_victim (void)
 
    uint32_t i;
    struct frame *frames = (struct frame *) system_frame_table.entries;
-   /*no need for a bitmap as u come to evict only if map is full!*/
-   /* Search for first frame whose page is not pinned (for now!) and: */
-   /*while (i < FRAME_TABLE_N_FRAMES && frames[i].status == FRAME_PINNED)
-             i++;*/
-   
+
+   /* Preliminary eviction algorithm: Evict the first frame whose page is not pinned. */
    for (i = 0; i <  FRAME_TABLE_N_FRAMES ; i++)
-    {
-      if (frames[i].status != FRAME_PINNED )
-         {
-            lock_acquire (&frames[i].lock);
-            if (frame_table_validate_eviction_victim (&frames[i]))
-                 break;
-            else lock_release (&frames[i].lock);
-          }
-     }              
-   
-   
-    
-  /*  Suggested change in search algorithm:
-   for (i = 0; i < FRAME...; i++)
    {
-     if (is victim) : in this case, if (status == FRAME_PINNED)
+     /* Optimistic search: search without locks, then lock to verify that it's valid. */
+     if (frames[i].status != FRAME_PINNED )
      {
-       lock
-       if still pinned
-         break
-       else
-         unlock
+        lock_acquire (&frames[i].lock);
+        if (frame_table_validate_eviction_victim (&frames[i]))
+          return &frames[i];
+        else 
+          lock_release (&frames[i].lock);
      }
    }
-
-  This seems cleaner than recursively calling this function. */
    
-  /*since we panic if i is frame_table_size, we need worry about seg fault */ 
-   if (i == FRAME_TABLE_N_FRAMES)
-       PANIC ("All frames are pinned");/*TODO: I'm not returning NULL now,will            do once eviction algo. is finalized */ 
-    
-   /*Acquiring a lock just for the frame, using an 'optimistic' approach  */
-   
-      
-   else return &frames[i]; 
-     
-  
-
+   /*TODO: I'm not returning NULL now, will do once eviction algo. is finalized */ 
+   PANIC ("All frames are pinned");
 }
 
 
