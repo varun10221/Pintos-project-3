@@ -23,15 +23,13 @@
 struct ro_shared_mappings_table ro_shared_mappings_table;
 
 /* Private function declarations. */
-/* TODO for X_init() functions that are really X_create() functions, change the names. 
-   I think that might be all of these. */
 
 /* Supp page table. */
 static bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
 static bool supp_page_table_is_stack_growth (struct supp_page_table *, void *);
 
 /* Segment. */
-static struct segment * segment_init (void *, void *, struct file *, int, enum segment_type); 
+static struct segment * segment_create (void *, void *, struct file *, int, enum segment_type); 
 static void segment_destroy (struct segment *);
 
 static struct page * segment_get_page (struct segment *, int32_t);
@@ -40,7 +38,7 @@ static void * segment_calc_vaddr (struct segment *, int32_t);
 static bool segment_list_less_func (const struct list_elem *, const struct list_elem *, void *);
 
 /* Page. */
-static struct page * page_init (struct segment_mapping_info *, int32_t);
+static struct page * page_create (struct segment_mapping_info *, int32_t);
 static void page_destroy (struct page *);
 static void page_set_hash (struct page *, unsigned);
 static unsigned page_hash_func (const struct hash_elem *, void *);
@@ -48,7 +46,7 @@ static bool page_hash_less_func (const struct hash_elem *, const struct hash_ele
 static bool page_remove_owner (struct page *, struct segment *);
 
 /* Shared mappings. */
-static void shared_mappings_init (struct shared_mappings *, struct file *, int);
+static struct shared_mappings * shared_mappings_create (struct file *, int);
 static void shared_mappings_destroy (struct shared_mappings *);
 static void shared_mappings_destroy_hash_func (struct hash_elem *, void *);
 static void shared_mappings_incr_ref_count (struct shared_mappings *);
@@ -118,10 +116,7 @@ ro_shared_mappings_table_add (struct file *f, int flags)
 {
   ASSERT (f != NULL);
 
-  struct shared_mappings *new_sm = (struct shared_mappings *) malloc (sizeof(struct shared_mappings));
-  ASSERT (new_sm != NULL);
-
-  shared_mappings_init (new_sm, f, flags);
+  struct shared_mappings *new_sm = shared_mappings_create (f, flags);
   hash_insert (&ro_shared_mappings_table.inumber_to_segment, &new_sm->elem);
 
   return new_sm;
@@ -191,7 +186,7 @@ supp_page_table_init (struct supp_page_table *spt)
   list_init (&spt->segment_list);
 
   /* Create a stack segment. */
-  struct segment *stack_seg = segment_init (PHYS_BASE - PGSIZE, PHYS_BASE, NULL, 0, SEGMENT_PRIVATE);
+  struct segment *stack_seg = segment_create (PHYS_BASE - PGSIZE, PHYS_BASE, NULL, 0, SEGMENT_PRIVATE);
   list_insert_ordered (&spt->segment_list, &stack_seg->elem, segment_list_less_func, NULL);
 }
 
@@ -289,7 +284,7 @@ supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *
   if (!supp_page_table_is_range_valid (spt, start, end))
     return NULL;
 
-  struct segment *ret = segment_init (start, end, f, flags, is_shared ? SEGMENT_SHARED : SEGMENT_PRIVATE);
+  struct segment *ret = segment_create (start, end, f, flags, is_shared ? SEGMENT_SHARED : SEGMENT_PRIVATE);
   list_insert_ordered (&spt->segment_list, &ret->elem, segment_list_less_func, NULL);
   return ret;
 }
@@ -375,7 +370,7 @@ supp_page_table_is_stack_growth (struct supp_page_table *spt, void *vaddr)
 
 /* Initialize a segment. Destroy with segment_destroy(). */
 struct segment * 
-segment_init (void *start, void *end, struct file *mmap_file, int flags, enum segment_type type)
+segment_create (void *start, void *end, struct file *mmap_file, int flags, enum segment_type type)
 {
   struct segment *seg = (struct segment *) malloc (sizeof(struct segment));
   ASSERT (seg != NULL);
@@ -410,7 +405,7 @@ segment_init (void *start, void *end, struct file *mmap_file, int flags, enum se
   return seg;
 }
 
-/* Destroy segment SEG created by segment_init(). 
+/* Destroy segment SEG created by segment_create(). 
    Acquires and releases filesys_lock. */
 void 
 segment_destroy (struct segment *seg)
@@ -534,7 +529,7 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   else
   {
     /* Add a new page. */
-    ret = page_init (smi, relative_page_num);
+    ret = page_create (smi, relative_page_num);
     hash_insert (h, &ret->elem);
   }
 
@@ -638,7 +633,7 @@ segment_list_less_func (const struct list_elem *a, const struct list_elem *b, vo
 /* Initialize a page with no owners.
    Destroy with page_destroy(). */
 struct page * 
-page_init (struct segment_mapping_info *smi, int32_t segment_page)
+page_create (struct segment_mapping_info *smi, int32_t segment_page)
 {
   ASSERT (smi != NULL);
   ASSERT (0 <= segment_page);
@@ -657,7 +652,7 @@ page_init (struct segment_mapping_info *smi, int32_t segment_page)
   return pg;
 }
 
-/* Destroy locked page PG created by page_init(). */
+/* Destroy locked page PG created by page_create(). */
 void 
 page_destroy (struct page *pg)
 {
@@ -735,10 +730,12 @@ page_remove_owner (struct page *pg, struct segment *seg)
 
 /* Shared mappings functions. */
 
-/* Initialize SS with F and ref_count 0. */
-void 
-shared_mappings_init (struct shared_mappings *sm, struct file *f, int flags)
+/* Create a new shared_mappings with F and ref_count 0. */
+struct shared_mappings *
+shared_mappings_create (struct file *f, int flags)
 {
+  struct shared_mappings *sm = (struct shared_mappings *) malloc (sizeof(struct shared_mappings));
+
   ASSERT (sm != NULL);
   ASSERT (f != NULL);
 
@@ -752,6 +749,8 @@ shared_mappings_init (struct shared_mappings *sm, struct file *f, int flags)
 
   sm->ref_count = 0;
   lock_init (&sm->ref_count_lock);
+
+  return sm;
 }
 
 /* Destroy this shared mappings. 
