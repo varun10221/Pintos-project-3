@@ -27,14 +27,13 @@ enum frame_status
 struct frame
 {
   id_t id; /* Index into the frame table. */
+  void *paddr; /* Physical address of this frame. */
+  enum frame_status status; /* Status of this frame. */
 
   struct page *pg; /* Page resident in this frame. */
-  void *paddr; /* Physical address of this frame. */
-
   int8_t popularity; /* For LRU algorithm. Defaults to POPULARITY_START, incremented/decremented based on access bit. */
 
-  struct lock lock; /* Lock to control this FTE. */
-  enum frame_status status; /* Status of this frame. */
+  struct lock lock; /* For mutex. */
 };
 
 /* Frame table and swap table have the same structure. */
