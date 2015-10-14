@@ -26,6 +26,7 @@ struct ro_shared_mappings_table ro_shared_mappings_table;
 /* Private function declarations. */
 
 /* Supp page table. */
+static struct segment * supp_page_table_find_segment (struct supp_page_table *, void *);
 static bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
 static bool supp_page_table_is_stack_growth (struct supp_page_table *, void *);
 
@@ -218,24 +219,9 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
   ASSERT (spt != NULL);
   ASSERT (vaddr != NULL);
+  ASSERT (vaddr < PHYS_BASE);
 
-  struct segment *seg = NULL;
-
-  /* Find the segment to which this address belongs. */
-  struct segment *tmp_seg = NULL;
-  struct list_elem *e = NULL;
-  size_t list_size = 0;
-  for (e = list_begin (&spt->segment_list); e != list_end (&spt->segment_list);
-       e = list_next (e))
-  {
-    list_size++;
-    tmp_seg = list_entry (e, struct segment, elem);
-    if (tmp_seg->start <= vaddr && vaddr < tmp_seg->end)
-    {
-      seg = tmp_seg;
-      break;
-    }
-  }
+  struct segment *seg = supp_page_table_find_segment (spt, vaddr);
 
   struct page *ret = NULL;
   /* Found a matching segment. */
@@ -250,11 +236,11 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
   else
   {
     bool is_stack_growth = supp_page_table_is_stack_growth (spt, vaddr);
-    /* Stack growth? Need to add a page. 
-       We know we aren't overlapping our predecessor because if we were, we would
-         not have page faulted. Behavior in such a case is undefined. */
     if (is_stack_growth)
     {
+      /* Stack growth? Need to add a page. 
+         We know we aren't overlapping our predecessor because if we were, we would
+           not have page faulted. Behavior in such a case is undefined. */
       seg->start -= PGSIZE;
       /* mappings is keyed by page number. */
       int32_t page_num = segment_calc_page_num (seg, vaddr);
@@ -307,6 +293,27 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
   list_remove (&seg->elem);
   segment_destroy (seg);
 }
+
+/* Returns the segment to which vaddr belongs, or NULL.
+   If NULL, could still be stack growth. */
+static struct segment * 
+supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
+{
+  ASSERT (spt != NULL);
+
+  struct list_elem *e = NULL;
+  struct segment *seg = NULL;
+
+  for (e = list_begin (&spt->segment_list); e != list_end (&spt->segment_list);
+       e = list_next (e))
+  {
+    seg = list_entry (e, struct segment, elem);
+    if (seg->start <= vaddr && vaddr < seg->end)
+      return seg;
+  }
+  return NULL;
+}
+
 
 /* Determine whether or not this range is valid:
     - must start above 0
