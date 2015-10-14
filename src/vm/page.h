@@ -92,7 +92,7 @@ struct shared_mappings
   block_sector_t inumber; 
 
   struct segment_mapping_info smi; /* All processes share this mapping info. */ 
-  struct lock segment_mapping_info_lock; /* Protects smi. */
+  struct lock segment_mapping_info_lock; /* Protects smi. Must acquire this to add or remove pages from this mapping. */
 
   int ref_count; /* How many processes are using this shared segment? Last one done has to clean up. */
   struct lock ref_count_lock; /* Protects ref_count. */
@@ -107,23 +107,14 @@ struct ro_shared_mappings_table
   struct lock hash_lock; /* Lock before modifying the hash. */
 };
 
-/* Tracks the segment* associated with a given mapid_t. 
-   Stored in a thread's mmap_table.
-   The segment tracks the corresponding file* for loading data into a frame.
-   On munmap we use this to find the segment* whose pages need to be handled. */
-struct mmap_info
-{
-  struct segment *seg; /* The segment* corresponding to this mapping. */
-};
-
 /* A page tracks a list of its "owners": processes that need to be notified
    if the page's location changes. 
    A page_owner_info contains enough information to update the pagedir for
    each owning process. */
 struct page_owner_info
 {
-  struct thread *owner;
-  void *vaddr;
+  struct thread *owner; /* This thread has a reference to this page. */
+  void *vpg_addr; /* This is the virtual page address in the owner's address space. */
   struct list_elem elem;
 };
 
@@ -132,7 +123,9 @@ struct page
 {
   /* List of page_owner_info's of the processes that use this page. 
      NB The pagedirs (HW page tables) of the owners are updated and invalidated
-     by the frame table. The SPT itself should not modify the pagedir at all. */
+     by the frame table. The SPT itself should not modify the pagedir at all. 
+
+     Use lock to control access to this field. */
   struct list owners; 
 
   void *location; /* struct frame* or struct slot* in which this page resides. */
@@ -143,8 +136,17 @@ struct page
   struct segment_mapping_info *smi; /* Info for mmap and knowledge about rw status. */
   int32_t segment_page; /* Which page in its segment is this? Segments hash pages by segment_page. */
 
-  struct lock mapping_lock; /* TODO Is this how SPT and FT should communicate w.r.t. eviction? */
+  struct lock lock; /* Used for owners (and for eviction?) -- could use two separate locks I guess? */
   struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
+};
+
+/* Tracks the segment* associated with a given mapid_t. 
+   Stored in a thread's mmap_table.
+   The segment tracks the corresponding file* for loading data into a frame.
+   On munmap we use this to find the segment* whose pages need to be handled. */
+struct mmap_info
+{
+  struct segment *seg; /* The segment* corresponding to this mapping. */
 };
 
 /* Read-only shared segment table: Basic life cycle. */

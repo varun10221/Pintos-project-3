@@ -493,6 +493,29 @@ list_unique (struct list *list, struct list *duplicates,
       elem = next;
 }
 
+/* Like list_insert_ordered, but a conditional insert: 
+   only insert ELEM if it is not already present. 
+   Return true if we insert and false if ELEM is already present. */
+bool 
+list_insert_ordered_unique (struct list *list, struct list_elem *elem,
+                                 list_less_func *less, void *aux)
+{
+  ASSERT (list != NULL);
+  ASSERT (elem != NULL);
+  ASSERT (less != NULL);
+
+  struct list_elem *e = list_begin (list);
+  /* Skip until we've reached the point where elem belongs. */
+  while (less (e, elem, aux))
+    e = list_next (e);
+  /* If !less (e, elem, aux) and !less (elem, e, aux), then e == elem and we don't insert it. */
+  if (less (elem, e, aux))
+    return false;
+
+  list_insert (e, elem);
+  return true;
+}
+
 /* Returns the element in LIST with the largest value according
    to LESS given auxiliary data AUX.  If there is more than one
    maximum, returns the one that appears earlier in the list.  If
@@ -510,6 +533,61 @@ list_max (struct list *list, list_less_func *less, void *aux)
           max = e; 
     }
   return max;
+}
+
+/* Remove ELEM from ordered LIST if it is present. 
+   (in other words, ELEM is a dummy element that "looks like" 
+   an element in LIST based on LESS.) 
+   
+   Returns the removed elem, or null. */
+struct list_elem *
+list_remove_ordered (struct list *list, struct list_elem *elem,
+                     list_less_func *less, void *aux)
+{
+  ASSERT (list != NULL); 
+  ASSERT (elem != NULL); 
+  ASSERT (less != NULL);
+
+  struct list_elem *e = list_begin (list);
+  /* Skip until we've reached the point where elem belongs. */
+  while (less (e, elem, aux))
+    e = list_next (e);
+  /* If !less (e, elem, aux) and !less (elem, e, aux), then e == elem and we remove it. */
+  if (!less (elem, e, aux))
+  {
+    list_remove (e);
+    return e;
+  }
+  return NULL;
+}
+
+/* Returns true if sorted LIST contains ELEM and false else. 
+   Two items a, b are equal if !less(a, b) && !less(b, a). 
+
+   This operation is O(N) and should be avoided. */
+bool
+list_contains (struct list *list, struct list_elem *elem,
+               list_less_func *less, void *aux)
+{
+  ASSERT (list != NULL);
+  ASSERT (elem != NULL);
+  ASSERT (less != NULL);
+
+  struct list_elem *e;
+  for (e = list_begin (list); e != list_end (list); e = list_next (e))
+  {
+    /* Skip too-small elements. */
+    if (less (e, elem, aux))
+      continue;
+    /* If we've come too far, we can short-circuit our search. */
+    else if (less (elem, e, aux))
+      return false;
+    else
+    /* So !less (e, elem, aux) and !less (elem, e, aux) -- the two must be equal. */
+      return true;
+  }
+
+  return false;
 }
 
 /* Returns the element in LIST with the smallest value according
