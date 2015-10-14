@@ -12,12 +12,13 @@
 
 /* System-wide frame table. List of entries containing the resident pages
    Processes use the functions defined in frame.h to interact with this table. */
+typedef struct frame_swap_table frame_table_t;
 frame_table_t system_frame_table;
 
 /* Private function declarations. */
 
 /* Nice way to get a frame. */
-static struct frame * frame_table_obtain_frame (void);
+static struct frame * frame_table_obtain_locked_frame (void);
 
 static struct frame * frame_table_find_free_frame (void);
 
@@ -76,15 +77,15 @@ frame_table_store_page (struct page *pg)
   /* Page must not be in a page already. */
   ASSERT (pg->status != PAGE_RESIDENT);
 
-  struct frame *fr = frame_table_obtain_frame ();
+  struct frame *fr = frame_table_obtain_locked_frame ();
   if (fr == NULL)
     PANIC ("frame_table_store_page: Could not allocate a frame."); 
 
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
   fr->pg = pg;
-  pg->location = fr;
   fr->popularity = POPULARITY_START;
+  pg->location = fr;
   pg->status = PAGE_RESIDENT;
 
   /* TODO Update the page directory of each owner. */
@@ -103,8 +104,12 @@ void
 frame_table_release_page (struct page *pg) 
 { 
   ASSERT (pg != NULL);
-  ASSERT (pg->status == PAGE_RESIDENT);
-  /* Only the final owner can release a page. */
+  ASSERT (pg->status != PAGE_DISCARDED);
+  /* TODO handle possible page status.
+     HOWEVER Make sure you lock the frame if it is resident. 
+     Coordinate with frame_table_evict_page_from_frame. */
+  /* Only the final owner can release a page.*/
+  /* TODO  0 ? */
   ASSERT (list_size (&pg->owners) == 1);
 
   /* TODO Hmm? I think that:
@@ -156,6 +161,7 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
 {
   ASSERT (fr != NULL);
 }
+/* TODO have  a read mmap from file API */
 
 /* (Put locked page PG into a frame and) pin it there. 
    It will not be evicted until a call to 
@@ -166,18 +172,20 @@ void
 frame_table_pin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
- /*change the frame_status to pinned */
- /*first allocate the frame for the page if not availble before */
+  /*first allocate the frame for the page if not availble before */
   if (pg->location == NULL)
-        frame_table_store_page (pg);
+    frame_table_store_page (pg);
+
+  /* NB: frame_table_evict_page_from_frame locks page, so there's
+     no risk of the page being evicted before we can mark the frame
+     as pinned. */
        
   struct frame *fr = (struct frame *) pg->location;
-  /*lock so that page doesnt get evicted before pinning */
   ASSERT (fr != NULL);
-  lock_acquire (&fr->lock);
-  /*Varun:guess we need to assert even if page status is pinned prior */
+  /*TODO valid assert? Or can it be FRAME_PINNED? */
+  ASSERT (fr->status == FRAME_OCCUPIED);
+  /* Change the frame_status to pinned. */
   fr->status = FRAME_PINNED; 
-  lock_release (&fr->lock);  
 }
 
 /* Allow locked resident page PG to be evicted from its frame.
@@ -239,8 +247,7 @@ frame_table_get_eviction_victim (void)
      }
    }
    
-   /*TODO: I'm not returning NULL now, will do once eviction algo. is finalized */ 
-   PANIC ("All frames are pinned");
+   return NULL;
 }
 
 
@@ -260,6 +267,8 @@ frame_table_evict_page_from_frame (struct frame *fr)
 {
   ASSERT (fr != NULL);
 
+  /* TODO Coordinate with frame_table_release_page. */
+
   /* If this frame is empty, nothing to do. */
   if (fr->status == FRAME_EMPTY)
     return;
@@ -269,8 +278,12 @@ frame_table_evict_page_from_frame (struct frame *fr)
        If so write to file, else set the frame free and return frame.*/
   struct page *pg = fr->pg;   
 
+  /* Synchronize with frame_table_pin_page. */
   lock_acquire (&pg->lock);
   ASSERT (pg->status == PAGE_RESIDENT);
+
+  /* TODO Need to update each owner's pagedir so that they page fault when they next access this page. 
+     Do this FIRST so that the owners will page fault on access and have to wait for us. */
 
   if (pg->smi->mmap_file != NULL) /*mmap check by checking if there is a file associated*/
   {   
@@ -291,7 +304,6 @@ frame_table_evict_page_from_frame (struct frame *fr)
   else
     swap_table_store_page (pg);
 
-  /* TODO Also need to update each owner's pagedir so that they page fault when they next access this page. */
 
   /* TODO make sure pg->status is set appropriately by swap_table_store_page and frame_table_write_mmap_page_to_file. */
   ASSERT (pg->status != PAGE_RESIDENT);
@@ -321,7 +333,7 @@ frame_table_init_frame (struct frame *fr, id_t id)
    May have to evict a page to obtain a free frame.
    If no free or evict-able frames are available, returns null. */
 static struct frame * 
-frame_table_obtain_frame (void)
+frame_table_obtain_locked_frame (void)
 {
   struct frame *fr = frame_table_find_free_frame ();
   if (fr == NULL)
@@ -330,7 +342,7 @@ frame_table_obtain_frame (void)
   return fr;
 }
 
-/* Searches the system frame table and retieves a free locked frame. 
+/* Searches the system frame table and retrieves a free locked frame. 
    Returns NULL if no free frames are available (necessitates eviction). */
 static struct frame *
 frame_table_find_free_frame (void)
@@ -341,21 +353,10 @@ frame_table_find_free_frame (void)
   lock_release (&system_frame_table.usage_lock);
 
   /* Was a free frame found? */
-  if (free_frame != FRAME_TABLE_N_FRAMES)
+  if (0 <= free_frame && free_frame < FRAME_TABLE_N_FRAMES)
   {
     struct frame *frames = (struct frame *) system_frame_table.entries;
     return &frames[free_frame];
   }
   return NULL;
 }
-
-/*
-Just an overview of functions so far, 
-(to make sure if we have API's to handle all scenario)
-i)frame table init and frame init.
-ii)functions to store and evict a frame
-iii)function to discard frames
-iv)functions to pin, unpin.
-v)bit map_updation as a part of store and evict.
-vi)connecting swap and frame, for reading from swap, we can define the logic from spt, for storing , we can use the functions in frame.c
-*/
