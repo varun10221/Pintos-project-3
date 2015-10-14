@@ -79,19 +79,20 @@ frame_table_store_page (struct page *pg)
   struct frame *fr = frame_table_obtain_frame ();
   if (fr == NULL)
     PANIC ("frame_table_store_page: Could not allocate a frame."); 
-/*TODO:should we lock the page also? */
+
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
   fr->pg = pg;
   pg->location = fr;
   fr->popularity = POPULARITY_START;
   pg->status = PAGE_RESIDENT;
+
   /* TODO Update the page directory of each owner. */
   ASSERT (0 == 1);
   // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
   /* Page safely in frame. */
   /*TODO: to update location in spt? may not be needed since we update pagedir, but for consistency sake */
-  
+
   lock_release (&fr->lock);
 }
 
@@ -153,10 +154,7 @@ frame_table_release_page (struct page *pg)
 static void
 frame_table_write_mmap_page_to_file (struct frame *fr)
 {
-
-
-
-
+  ASSERT (fr != NULL);
 }
 
 /* (Put locked page PG into a frame and) pin it there. 
@@ -209,7 +207,9 @@ frame_table_make_free_frame (void)
 {
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
+  {
     frame_table_evict_page_from_frame (victim);
+  }
  
   return victim;
 }
@@ -255,37 +255,52 @@ frame_table_validate_eviction_victim (struct frame *fr)
 }
 
 /* Evict the page in locked frame FR. */
-/*do not call it directly without calling eviction victim routine */
 static void 
 frame_table_evict_page_from_frame (struct frame *fr)
 {
-  bool a = false; /*dummy variable for compilation */
   ASSERT (fr != NULL);
-  /* -  For mmap'd file page, check if the page is dirty. 
+
+  /* If this frame is empty, nothing to do. */
+  if (fr->status == FRAME_EMPTY)
+    return;
+  ASSERT (fr->status == FRAME_OCCUPIED);
+
+  /*   For mmap'd file page, check if the page is dirty. 
        If so write to file, else set the frame free and return frame.*/
-  struct page *p = fr->pg;   
-  if (p->smi->mmap_file != NULL) /*mmap check by checking if there is a file associated*/
-    {   
-      struct page_owner_info *poi = list_entry (list_front (&p->owners),
-                                                struct page_owner_info, elem);
-      
-      if (pagedir_is_dirty (poi->owner->pagedir, fr->paddr))/*TODO:it must be vaddress for pagedir */   
-        {
-          
-            frame_table_write_mmap_page_to_file (fr);
-         }
-      else
-         {
-           fr->status = FRAME_EMPTY;
-           fr->pg = NULL;
-         }
-    }  
+  struct page *pg = fr->pg;   
+
+  lock_acquire (&pg->lock);
+  ASSERT (pg->status == PAGE_RESIDENT);
+
+  if (pg->smi->mmap_file != NULL) /*mmap check by checking if there is a file associated*/
+  {   
+    /* TODO Need to check EVERY owner's pagedir. Review
+       4.1.5.1 Accessed and Dirty Bits. */
+    bool page_dirty = false;
+    struct page_owner_info *poi = list_entry (list_front (&pg->owners),
+                                              struct page_owner_info, elem);
+    
+    if (pagedir_is_dirty (poi->owner->pagedir, fr->paddr)) /*TODO:it must be vaddress for pagedir */   
+    {
+      page_dirty = true;
+    }
+
+    if (page_dirty)
+      frame_table_write_mmap_page_to_file (fr);
+  }  
   else
-   {  
-    swap_table_store_page (fr->pg);
-   } 
-    /*relase the lock on the locked frame_obtained */         
-    lock_release (&fr->lock);
+    swap_table_store_page (pg);
+
+  /* TODO Also need to update each owner's pagedir so that they page fault when they next access this page. */
+
+  /* TODO make sure pg->status is set appropriately by swap_table_store_page and frame_table_write_mmap_page_to_file. */
+  ASSERT (pg->status != PAGE_RESIDENT);
+
+  /* Now this frame is empty. */
+  fr->status = FRAME_EMPTY;
+  fr->pg = NULL;
+
+  lock_release (&pg->lock);
 }
 
 /* Initialize frame FR. */
