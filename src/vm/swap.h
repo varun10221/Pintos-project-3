@@ -16,8 +16,6 @@
 /* Forward declarations. */
 struct frame;
 
-typedef struct frame_swap_table swap_table_t;
-
 enum swap_slot_status
 {
   SWAP_SLOT_EMPTY, /* There is no page occupying this slot swap. */

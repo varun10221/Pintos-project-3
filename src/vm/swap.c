@@ -8,18 +8,19 @@
 
 /* System swap table. Serves as an extension of the frame table. 
    List of pages that are stored on disk instead of in memory. */
+typedef struct frame_swap_table swap_table_t;
 swap_table_t system_swap_table;
 
 /* DIV_ROUND_UP in case PGSIZE is not evenly divisible by BLOCK_SECTOR_SIZE. 
    Overestimate the number of sectors we need, since we can't share sectors
    between two slots. Yes, this is needlessly paranoid. */
 const uint32_t BLOCK_SECTORS_PER_PAGE = DIV_ROUND_UP (PGSIZE, BLOCK_SECTOR_SIZE);
-
+/*TODO private function API */
 /* Globals set in swap_table_init. */
 uint32_t SWAP_TABLE_N_SLOTS = 0;
 struct block *SWAP_BLOCK = NULL;
-
-static inline uint32_t 
+/*TODO comment */
+static uint32_t 
 get_swap_table_n_slots (void)
 { 
   struct block *blk = block_get_role (BLOCK_SWAP);
@@ -51,13 +52,13 @@ swap_table_init (void)
   ASSERT (SWAP_BLOCK != NULL);
 
   /* Bitmap. */
-  system_swap_table.n_free_entries = SWAP_TABLE_N_SLOTS;
   system_swap_table.usage = bitmap_create (SWAP_TABLE_N_SLOTS);
   ASSERT (system_swap_table.usage != NULL);
 
   lock_init (&system_swap_table.usage_lock);
 
   /* Slots. */
+  /* TODO malloc */
   system_swap_table.entries = (struct swap_slot *) calloc (SWAP_TABLE_N_SLOTS, sizeof(struct swap_slot));
   ASSERT (system_swap_table.entries != NULL);
 
@@ -144,6 +145,8 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
   bitmap_set (system_swap_table.usage, s->id, false);
   lock_release (&system_swap_table.usage_lock);
 
+  /* Update page info. */
+  pg->location = fr;
   pg->status = PAGE_RESIDENT;
 } 
 
@@ -156,10 +159,10 @@ swap_table_discard_page (struct page *pg)
   /* Page must be swapped out. */
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
   /* Only the final owner can release a page. */
+  /* TODO change the compare to 0? */
   ASSERT (list_size (&pg->owners) == 1);
 
   ASSERT (pg->location != NULL);
-
   struct swap_slot *s = (struct swap_slot *) pg->location;
 
   /* Page and slot must agree. */
@@ -172,11 +175,12 @@ swap_table_discard_page (struct page *pg)
 
   /* Toggle bitmap status. */
   lock_acquire (&system_swap_table.usage_lock);
+  /* TODO assert should match */
   ASSERT (bitmap_test (system_swap_table.usage, s->id) == 1);
   bitmap_flip (system_swap_table.usage, s->id);
   lock_release (&system_swap_table.usage_lock);
 
   /* Update page info. */
-  pg->status = PAGE_DISCARDED; 
   pg->location = NULL;
+  pg->status = PAGE_DISCARDED; 
 }
