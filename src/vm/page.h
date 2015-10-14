@@ -136,7 +136,7 @@ struct page
   struct segment_mapping_info *smi; /* Info for mmap and knowledge about rw status. */
   int32_t segment_page; /* Which page in its segment is this? Segments hash pages by segment_page. */
 
-  struct lock lock; /* Used for owners (and for eviction?) -- could use two separate locks I guess? */
+  struct lock lock; /* Used for owners (and for eviction?). */ 
   struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
 };
 
