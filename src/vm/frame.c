@@ -209,21 +209,20 @@ frame_table_unpin_page (struct page *pg)
 /* This function will evict the page from a frame
    and return the frame to you, locked.
  
-   Returns NULL if all frames have their page pinned. */
+   Returns NULL if all frames have their page pinned
+     or no victims could be identified. See frame_table_get_eviction_victim. */
 static struct frame * 
 frame_table_make_free_frame (void)
 {
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
-  {
     frame_table_evict_page_from_frame (victim);
-  }
  
   return victim;
 }
 
-/* Identify a victim frame whose page can be evicted.
-   Return the locked frame.
+/* Identify a victim frame whose resident page (if any) is locked and can be evicted.
+   Return the locked frame containing its locked page (if any).
 
    If no candidate is identified, returns NULL. */
 static struct frame * 
@@ -234,18 +233,36 @@ frame_table_get_eviction_victim (void)
    struct frame *frames = (struct frame *) system_frame_table.entries;
 
    /* Preliminary eviction algorithm: Evict the first frame whose page is not pinned. */
-   for (i = 0; i <  FRAME_TABLE_N_FRAMES ; i++)
+   int counter;
+   for (counter = 0; counter < 5; counter++)
    {
-     /* Optimistic search: search without locks, then lock to verify that it's valid. */
-     if (frames[i].status != FRAME_PINNED )
+     for (i = 0; i <  FRAME_TABLE_N_FRAMES ; i++)
      {
-        lock_acquire (&frames[i].lock);
-        if (frame_table_validate_eviction_victim (&frames[i]))
-          return &frames[i];
-        else 
-          lock_release (&frames[i].lock);
-     }
-   }
+       /* Optimistic search: search without locks, then lock to verify that it's valid. */
+       if (frames[i].status != FRAME_PINNED )
+       {
+          struct frame *fr = &frames[i];
+          lock_acquire (&fr->lock);
+
+          /* Can only evict non-pinned pages. */
+          if (fr->status != FRAME_PINNED)
+          {
+            /* If occupied, can only evict if we can lock the page. */
+            if (fr->status == FRAME_OCCUPIED)
+            {
+              if (lock_try_acquire (&fr->pg->lock))
+                return fr;
+            }
+            /* No resident, so an empty frame. */
+            else
+              return fr;
+          }
+          /* OK, guess we didn't find a candidate. Release and try again. */
+          lock_release (&fr->lock);
+       }
+
+     } /* Loop over all frames. */
+   } /* Loop from 0 to 5. */
    
    return NULL;
 }
@@ -261,7 +278,11 @@ frame_table_validate_eviction_victim (struct frame *fr)
   return !is_pinned;
 }
 
-/* Evict the page in locked frame FR. */
+/* Evict the page in locked frame FR. 
+   FR may be empty.
+   FR may have a resident page, in which case the page
+     is also locked and should be unlocked before returning.  */
+     /* TODO rewrite based on new interface */
 static void 
 frame_table_evict_page_from_frame (struct frame *fr)
 {
@@ -279,7 +300,6 @@ frame_table_evict_page_from_frame (struct frame *fr)
   struct page *pg = fr->pg;   
 
   /* Synchronize with frame_table_pin_page. */
-  lock_acquire (&pg->lock);
   ASSERT (pg->status == PAGE_RESIDENT);
 
   /* TODO Need to update each owner's pagedir so that they page fault when they next access this page. 
@@ -328,28 +348,8 @@ frame_table_init_frame (struct frame *fr, id_t id)
 }
 
 /* Allocate a frame for a page. 
- 
+ *
    Locate a free frame, mark it as used, lock it, and return it.
-   May have to evict a page to obtain a free frame.
-   If no free or evict-able frames are available, returns null. */
-static struct frame * 
-frame_table_obtain_locked_frame (void)
-{
-  struct frame *fr = frame_table_find_free_frame ();
-  if (fr == NULL)
-    fr = frame_table_make_free_frame ();
-
-  return fr;
-}
-
-/* Searches the system frame table and retrieves a free locked frame. 
-   Returns NULL if no free frames are available (necessitates eviction). */
-static struct frame *
-frame_table_find_free_frame (void)
-{ 
-  /* Do a bit map scan and retrieve the first free frame. */
-  lock_acquire (&system_frame_table.usage_lock);
-  size_t free_frame = bitmap_scan (system_frame_table.usage,0,1,false); 
   lock_release (&system_frame_table.usage_lock);
 
   /* Was a free frame found? */
