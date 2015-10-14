@@ -179,6 +179,28 @@ hash_apply (struct hash *h, hash_action_func *action)
     }
 }
 
+/* Same as hash_apply, but with dynamic AUX. 
+   Can be done with the hash iterator instead. */
+void
+hash_apply_custom (struct hash *h, hash_action_func *action, void *aux) 
+{
+  size_t i;
+  
+  ASSERT (action != NULL);
+
+  for (i = 0; i < h->bucket_cnt; i++) 
+    {
+      struct list *bucket = &h->buckets[i];
+      struct list_elem *elem, *next;
+
+      for (elem = list_begin (bucket); elem != list_end (bucket); elem = next) 
+        {
+          next = list_next (elem);
+          action (list_elem_to_hash_elem (elem), aux);
+        }
+    }
+}
+
 /* Initializes I for iterating hash table H.
 
    Iteration idiom:
