@@ -126,7 +126,6 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
-  bool is_loaded;
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
      data.  It is not necessarily the address of the instruction
@@ -158,6 +157,7 @@ page_fault (struct intr_frame *f)
     return;
   }
 
+  /* TODO Use 'write' to see if this access was legal. Check flags of the smi of pg? */
   struct page *pg = NULL;
   if (fault_addr < PHYS_BASE)
     pg = process_page_table_find_page (fault_addr);
