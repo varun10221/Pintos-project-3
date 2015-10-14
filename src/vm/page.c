@@ -3,6 +3,7 @@
 #include <round.h>
 #include <stdlib.h>
 
+#include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
 #include "filesys/file.h"
@@ -35,15 +36,16 @@ static void segment_destroy (struct segment *);
 
 static struct page * segment_get_page (struct segment *, int32_t);
 static int32_t segment_calc_page_num (struct segment *, void *);
+static void * segment_calc_vaddr (struct segment *, int32_t);
 static bool segment_list_less_func (const struct list_elem *, const struct list_elem *, void *);
 
 /* Page. */
 static struct page * page_init (struct segment_mapping_info *, int32_t);
 static void page_destroy (struct page *);
-static void page_destroy_hash_func (struct hash_elem *, void *);
 static void page_set_hash (struct page *, unsigned);
 static unsigned page_hash_func (const struct hash_elem *, void *);
 static bool page_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
+static bool page_remove_owner (struct page *, struct segment *);
 
 /* Shared mappings. */
 static void shared_mappings_init (struct shared_mappings *, struct file *, int);
@@ -57,6 +59,9 @@ static bool shared_mappings_hash_less_func (const struct hash_elem *, const stru
 
 /* ro_shared_mappings_table. */
 static struct shared_mappings *ro_shared_mappings_table_add (struct file *, int); 
+
+/* page_owner_info. */
+static bool page_owner_info_list_less_func (const struct list_elem *, const struct list_elem *, void *);
 
 /* Initialize the ro shared segment table. Not thread safe. Should be called once. */
 void 
@@ -120,6 +125,28 @@ ro_shared_mappings_table_add (struct file *f, int flags)
   hash_insert (&ro_shared_mappings_table.inumber_to_segment, &new_sm->elem);
 
   return new_sm;
+}
+
+/* page_owner_info functions. */
+
+/* Return true if less, false else. 
+   If there's a tie on tid, use vaddr. */
+static bool page_owner_info_list_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  ASSERT (a != NULL);
+  ASSERT (b != NULL);
+
+  struct page_owner_info *a_info = list_entry (a, struct page_owner_info, elem);
+  struct page_owner_info *b_info = list_entry (b, struct page_owner_info, elem);
+
+  bool is_same_tid = (a_info->owner->tid == b_info->owner->tid);
+  if (is_same_tid)
+    /* Tie goes to the vpg_addr. This allows a single process to have multiple shared
+       memory mappings to the same underlying place (e.g. two shared mappings of the same
+       file). */
+    return a_info->vpg_addr < b_info->vpg_addr;
+  else
+    return a_info->owner->tid < b_info->owner->tid;
 }
 
 /* Remove the (unlocked) shared_mappings associated with F.
@@ -389,10 +416,60 @@ segment_destroy (struct segment *seg)
 {
   ASSERT (seg != NULL);
 
+  struct segment_mapping_info *smi = NULL;
+  struct shared_mappings *sm = NULL;
+
+  if (seg->type == SEGMENT_PRIVATE)
+    smi = (struct segment_mapping_info *) seg->mappings;
+  else
+  {
+    sm = (struct shared_mappings *) seg->mappings;
+    smi = &sm->smi;
+  }
+
+  /* Iterate over the mappings, removing ourselves from the list of owners for each. 
+     We must be the sole modifier of the hash at this time, hence the lock in the case
+     of a shared mapping. */
+  if (sm)
+    lock_acquire (&sm->segment_mapping_info_lock);
+
+  struct hash *h = &smi->mappings;
+  struct hash_iterator hi;
+  hash_first (&hi, h);
+  struct hash_elem *he = hash_cur (&hi);
+  struct hash_elem *next = NULL;
+  while (he != NULL)
+  {
+    next = hash_next (&hi);
+    struct page *pg = (struct page *) hash_entry (he, struct page, elem);
+    lock_acquire (&pg->lock);
+    bool was_sole_owner = page_remove_owner (pg, seg);
+    if (seg->type == SEGMENT_PRIVATE)
+    {
+      ASSERT (was_sole_owner);
+    }
+    if (was_sole_owner)
+    {
+      hash_delete (h, &pg->elem);
+      page_destroy (pg);
+    }
+    else
+    {
+      lock_release (&pg->lock);
+    }
+    he = next;
+  }
+
+  if (sm)
+    lock_release (&sm->segment_mapping_info_lock);
+
+  /* Remaining cleanup for private segments. */
   if (seg->type == SEGMENT_PRIVATE)
   {
-    struct segment_mapping_info *smi = (struct segment_mapping_info *) seg->mappings;
-    hash_destroy (&smi->mappings, page_destroy_hash_func);
+    /* Private mapping, so hash should be empty now. */
+    ASSERT (hash_size (&smi->mappings) == 0);
+    /* Destroy the hash. */
+    hash_destroy (&smi->mappings, NULL);
     if (smi->mmap_file)
     {
       filesys_lock ();
@@ -400,9 +477,10 @@ segment_destroy (struct segment *seg)
       filesys_unlock ();
     }
   }
+  /* Remaining cleanup for shared segments. */
   else
   {
-    /* Shared mappings, so decrement ref count. */
+    /* We are now no longer using these mappings, so decrement ref count. */
     shared_mappings_decr_ref_count ((struct shared_mappings *) seg->mappings);
   }
 
@@ -459,13 +537,36 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
     hash_insert (h, &ret->elem);
   }
 
+  /* TODO Refactor this into a page_add_owner matching page_remove_owner. */
+  /* Now that we've got a page, we need to make sure we are on the list of owners of the page. 
+     In the event that it's a shared page, we may or may not already be on the list. 
+     If it's a new page, we're definitely not on the list (and the list is empty). 
+     
+     We hold sm->segment_mapping_info_lock, so the page we found/created is not going to disappear
+     out from under us.  */
+
+  /* Lock page so that the owners member is fixed. */
+  lock_acquire (&ret->lock);
+
+  struct page_owner_info *poi = (struct page_owner_info *) malloc (sizeof(struct page_owner_info));
+  ASSERT (poi != NULL);
+  poi->owner = thread_current ();
+  poi->vpg_addr = segment_calc_vaddr (seg, relative_page_num);
+
+  /* If insertion fails, a matching poi is already present and we can just free the memory. */
+  if (!list_insert_ordered_unique (&ret->owners, &poi->elem, page_owner_info_list_less_func, NULL))
+    free (poi);
+
+  lock_release (&ret->lock);
+
   if (sm)
     lock_release (&sm->segment_mapping_info_lock);
 
   return ret;
 }
 
-/* Calculate the relative page number of VADDR in segment SEG. */
+/* Calculate the relative page number of VADDR in segment SEG.
+   This is the inverse of segment_calc_vaddr. */
 int32_t 
 segment_calc_page_num (struct segment *seg, void *vaddr)
 {
@@ -489,8 +590,32 @@ segment_calc_page_num (struct segment *seg, void *vaddr)
   if (segment_grows_up)
     page_no = ((uint32_t) vpgaddr - (uint32_t) seg->start) / PGSIZE;
   else
-    page_no = ((uint32_t) seg->end - (uint32_t) vpgaddr) / PGSIZE;
+    /* 1 <= (end - vpgaddr)/PGSIZE, so to get indexing from 0 we subtract 1. */
+    page_no = (((uint32_t) seg->end - (uint32_t) vpgaddr) / PGSIZE) - 1;
   return page_no;
+}
+
+/* Calculate the virtual page offset of relative page RELATIVE_PAGE_NUM in segment SEG. 
+   This is the inverse of segment_calc_page_num. */
+static void * 
+segment_calc_vaddr (struct segment *seg, int32_t relative_page_num)
+{
+  ASSERT (seg != NULL);
+
+  uint32_t max_page_num = (seg->end - seg->start) / PGSIZE;
+  ASSERT (relative_page_num < max_page_num);
+
+  /* Just like in segment_calc_page_num: 
+       - determine if segment grows up or down
+       - calculate based on seg->start or seg->end as appropriate */
+  bool segment_grows_up = (seg->end < PHYS_BASE ? true : false);
+
+  uint32_t page_addr;
+  if (segment_grows_up)
+    page_addr = seg->start + relative_page_num*PGSIZE;
+  else
+    page_addr = seg->end - (relative_page_num + 1)*PGSIZE;
+  return (void *) page_addr;
 }
 
 /* Segment list_less_func. */
@@ -525,18 +650,20 @@ page_init (struct segment_mapping_info *smi, int32_t segment_page)
   pg->status = PAGE_NEVER_ACCESSED;
   pg->smi = smi;
   pg->segment_page = segment_page;
-  lock_init (&pg->mapping_lock);
+  lock_init (&pg->lock);
 
   return pg;
 }
 
-/* Destroy page PG created by page_init(). */
+/* Destroy locked page PG created by page_init(). */
 void 
 page_destroy (struct page *pg)
 {
   ASSERT (pg != NULL);
 
-  lock_acquire (&pg->mapping_lock);
+  /* Only the last owner should be destroying this page. 
+     In this case, pg->owners is empty. */
+  ASSERT (list_size (&pg->owners) == 0);
 
   /* TODO I shouldn't know that the swap table exists. Add a bool to struct page for frame's use,
      and just call frame_table_release_page? Or is this needlessly circuitous? */
@@ -546,24 +673,8 @@ page_destroy (struct page *pg)
     swap_table_discard_page (pg);
 
   pg->status = PAGE_DISCARDED;
-  lock_release (&pg->mapping_lock);
 
   free (pg);
-}
-
-/* For use with hash_destroy. 
- 
-   We only destroy a page if we are the sole owner of it.
-   For mmap'd resident pages, write back to disk. */
-void 
-page_destroy_hash_func (struct hash_elem *elem, void *aux UNUSED)
-{
-  ASSERT (elem != NULL);
-
-  struct page *pg = hash_entry (elem, struct page, elem);
-  ASSERT (pg != NULL);
-
-  page_destroy (pg);
 }
 
 /* Set PG's fields to hash to KEY. */
@@ -595,6 +706,31 @@ page_hash_less_func (const struct hash_elem *a, const struct hash_elem *b, void 
   return page_hash_func (a, aux) < page_hash_func (b, aux);
 }
 
+/* Remove self from this locked page's list of owners. 
+   If we were the last owner, return true. */
+static bool 
+page_remove_owner (struct page *pg, struct segment *seg)
+{
+  ASSERT (pg != NULL);
+  ASSERT (seg != NULL);
+
+  /* A page_owner_info matching what this process would have put into PG->owners were
+     it registered as an owner of PG. */
+  struct page_owner_info dummy;
+  dummy.owner = thread_current ();
+  dummy.vpg_addr = segment_calc_vaddr (seg, pg->segment_page);
+  struct list_elem *removed_poi_elem = list_remove_ordered (&pg->owners, &dummy.elem, page_owner_info_list_less_func, NULL);
+
+  /* If we were a registered owner, free the poi we allocated. */
+  if (removed_poi_elem != NULL)
+  {
+    struct page_owner_info *poi = list_entry (removed_poi_elem, struct page_owner_info, elem);
+    free (poi);
+  }
+
+  return (list_size (&pg->owners) == 0);
+}
+
 /* Shared mappings functions. */
 
 /* Initialize SS with F and ref_count 0. */
@@ -618,15 +754,17 @@ shared_mappings_init (struct shared_mappings *sm, struct file *f, int flags)
 
 /* Destroy this shared mappings. 
  
-   Only call if we are the last referrers and are guaranteed that no new 
-   referrers will race with us. */
+   Only call if there are no remaining referrers and we are 
+     guaranteed that no new referrers will race with us. 
+   This means that all pages must have no owners left. */
 void 
 shared_mappings_destroy (struct shared_mappings *sm)
 {
   ASSERT (sm != NULL);
   ASSERT (sm->ref_count == 0);
 
-  hash_destroy (&sm->smi.mappings, shared_mappings_destroy_hash_func);
+  ASSERT (hash_size (&sm->smi.mappings) == 0);
+  hash_destroy (&sm->smi.mappings, NULL);
   /* Must do this after destroying the hash table, so that frame table still 
        has the file to work with. */
   if (sm->smi.mmap_file != NULL)
