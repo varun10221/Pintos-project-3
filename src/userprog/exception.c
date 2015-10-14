@@ -75,10 +75,7 @@ static void
 kill (struct intr_frame *f) 
 {
   /* This interrupt is one (probably) caused by a user process.
-     For example, the process might have tried to access unmapped
-     virtual memory (a page fault).  For now, we simply kill the
-     user process.  Later, we'll want to handle page faults in
-     the kernel.  Real Unix-like operating systems pass most
+     Real Unix-like operating systems pass most
      exceptions back to the process via signals, but we don't
      implement them. */
      
@@ -161,38 +158,14 @@ page_fault (struct intr_frame *f)
     return;
   }
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
- /* printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");*/
+  struct page *pg = NULL;
+  if (fault_addr < PHYS_BASE)
+    pg = process_page_table_find_page (fault_addr);
   
-  /*TODO: Does the address should be checked, whether its in valid range? */
-  /*supp. Table checks for valid range, will that do ? */
-  /*Find the page from SPT ,FT infrastructure */
-  struct page *p = process_page_table_find_page (fault_addr);
-  
-  /*P will be NULL if we cannot find the page */
-   if (p)
-   {
-    /* TODO */
-    PANIC ("Error, need to figure out how to terminate just the calling process.");
-   }
-   
+   if (pg)
+     frame_table_store_page (pg);
    else
-    /*should load page as well as its contents */
-    frame_table_store_page (p);
-    /* TODO ?? frame_table_store_page returns void?
-    is_loaded = frame_table_store_page (p);
-    */
-   /*now the page is loaded, in frame */ 
-   /*TODO:how do i continue the operation out of page fault ?*/
-    /*should we load the interrupt frame again */
-   if(!is_loaded)     
-      /*Used for handling this exception of failed load */ 
-      kill (f);
+     /* Default exit status is -1. */
+     thread_exit ();
 }
 
