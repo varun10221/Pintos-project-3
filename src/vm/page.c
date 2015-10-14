@@ -298,6 +298,7 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *
   uint32_t end_addr = (uint32_t) end;
 
   /* start must precede end. */
+  /*should we have start <= end * TODO*/
   ASSERT (start < end);
 
   /* - must start above 0 */
@@ -470,6 +471,7 @@ int32_t
 segment_calc_page_num (struct segment *seg, void *vaddr)
 {
   ASSERT (seg != NULL);
+  /*TODO can we have vaddr as start and end segement numbers */
   ASSERT ((uint32_t) seg->start <= (uint32_t) vaddr && (uint32_t) vaddr < (uint32_t) seg->end);
 
   uint32_t *vpgaddr = ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);

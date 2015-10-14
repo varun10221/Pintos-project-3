@@ -188,7 +188,9 @@ page_fault (struct intr_frame *f)
     /* TODO ?? frame_table_store_page returns void?
     is_loaded = frame_table_store_page (p);
     */
-    
+   /*now the page is loaded, in frame */ 
+   /*TODO:how do i continue the operation out of page fault ?*/
+    /*should we load the interrupt frame again */
    if(!is_loaded)     
       /*Used for handling this exception of failed load */ 
       kill (f);
