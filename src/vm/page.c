@@ -27,6 +27,7 @@ struct ro_shared_mappings_table ro_shared_mappings_table;
 
 /* Supp page table. */
 static struct segment * supp_page_table_find_segment (struct supp_page_table *, void *);
+static struct segment * supp_page_table_get_stack_segment (struct supp_page_table *);
 static bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
 static bool supp_page_table_is_stack_growth (struct supp_page_table *, void *);
 
@@ -241,6 +242,7 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
       /* Stack growth? Need to add a page. 
          We know we aren't overlapping our predecessor because if we were, we would
            not have page faulted. Behavior in such a case is undefined. */
+      seg = supp_page_table_get_stack_segment (spt);
       seg->start -= PGSIZE;
       /* mappings is keyed by page number. */
       int32_t page_num = segment_calc_page_num (seg, vaddr);
@@ -314,6 +316,18 @@ supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
   return NULL;
 }
 
+/* Return the stack segment of SPT. */
+static struct segment * 
+supp_page_table_get_stack_segment (struct supp_page_table *spt)
+{
+  ASSERT (spt != NULL);
+  struct list_elem *e = list_back (&spt->segment_list);
+  ASSERT (e != NULL);
+  struct segment *stack_seg = list_entry (e, struct segment, elem);
+  ASSERT (stack_seg->end == PHYS_BASE);
+  return stack_seg;
+}
+
 
 /* Determine whether or not this range is valid:
     - must start above 0
@@ -368,11 +382,11 @@ supp_page_table_is_stack_growth (struct supp_page_table *spt, void *vaddr)
 {
   ASSERT (spt != NULL);
 
-  /* SPT's list of segments is sorted, so stack is the final element. */
-  struct segment *seg = list_entry (list_back (&spt->segment_list), struct segment, elem);
-  ASSERT (seg != NULL);
+  struct segment *stack_seg = supp_page_table_get_stack_segment (spt);
+  ASSERT (stack_seg != NULL);
+
   /* Use casting to make sure we have a valid number for abs. */
-  int64_t distance_from_stack = (uint64_t) seg->start - (uint64_t) vaddr;
+  int64_t distance_from_stack = (uint64_t) stack_seg->start - (uint64_t) vaddr;
   if (llabs (distance_from_stack) <= MAX_VALID_STACK_DISTANCE)
     return true;
   return false;
