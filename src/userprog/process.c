@@ -1082,7 +1082,7 @@ struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
   struct segment *seg = NULL;
   struct mmap_info *mmap_info = NULL;
 
-  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f, start, flags, false);
+  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f, start, flags, flags & MAP_SHARED);
   if (seg == NULL)
     goto CLEANUP_AND_ERROR;
 

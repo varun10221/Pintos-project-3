@@ -9,6 +9,7 @@
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "filesys/filesys.h"
+#include "userprog/pagedir.h"
 
 #include "vm/frame.h"
 #include "vm/swap.h"
@@ -44,6 +45,7 @@ static void page_set_hash (struct page *, unsigned);
 static unsigned page_hash_func (const struct hash_elem *, void *);
 static bool page_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
 static bool page_remove_owner (struct page *, struct segment *);
+static bool page_add_owner (struct page *, struct segment *);
 
 /* Shared mappings. */
 static struct shared_mappings * shared_mappings_create (struct file *, int);
@@ -218,7 +220,6 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
   ASSERT (vaddr != NULL);
 
   struct segment *seg = NULL;
-  struct page *ret = NULL;
 
   /* Find the segment to which this address belongs. */
   struct segment *tmp_seg = NULL;
@@ -236,12 +237,14 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
     }
   }
 
+  struct page *ret = NULL;
   /* Found a matching segment. */
   if (seg)
   {
     /* mappings is keyed by page number. */
     int32_t page_num = segment_calc_page_num (seg, vaddr);
-    return segment_get_page (seg, page_num);
+    ret = segment_get_page (seg, page_num);
+    ASSERT (ret != NULL);
   }
   /* Did not find a matching segment. Could still be stack growth. */
   else
@@ -258,6 +261,7 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
       ret = segment_get_page (seg, page_num);
       ASSERT (ret != NULL);
     }
+    /* Else, apparently it wasn't stack growth. Return NULL. */
   }
 
   return ret;
@@ -319,8 +323,7 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *
   uint32_t start_addr = (uint32_t) start;
   uint32_t end_addr = (uint32_t) end;
 
-  /* start must precede end. */
-  /*should we have start <= end * TODO*/
+  /* Start must precede end. See page.h for definition of end. */
   ASSERT (start < end);
 
   /* - must start above 0 */
@@ -494,8 +497,7 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   int32_t seg_n_pages = ((uint32_t) seg->end - (uint32_t) seg->start) / PGSIZE;
   ASSERT (0 <= relative_page_num && relative_page_num < seg_n_pages);
 
-  struct page *ret = NULL;
-
+  /* Create a dummy page for searching the mappings hash. */
   struct page dummy;
   page_set_hash (&dummy, relative_page_num);
 
@@ -522,6 +524,7 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   if (sm)
     lock_acquire (&sm->segment_mapping_info_lock);
 
+  struct page *ret = NULL;
   /* Find the page. Add a new one if there isn't one yet. */
   struct hash_elem *e = hash_find (h, &dummy.elem);
   if (e)
@@ -533,25 +536,28 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
     hash_insert (h, &ret->elem);
   }
 
-  /* TODO Refactor this into a page_add_owner matching page_remove_owner. */
+  /* Lock page so that the owners member is fixed. */
+  lock_acquire (&ret->lock);
+
   /* Now that we've got a page, we need to make sure we are on the list of owners of the page. 
      In the event that it's a shared page, we may or may not already be on the list. 
      If it's a new page, we're definitely not on the list (and the list is empty). 
      
-     We hold sm->segment_mapping_info_lock, so the page we found/created is not going to disappear
-     out from under us.  */
-
-  /* Lock page so that the owners member is fixed. */
-  lock_acquire (&ret->lock);
-
-  struct page_owner_info *poi = (struct page_owner_info *) malloc (sizeof(struct page_owner_info));
-  ASSERT (poi != NULL);
-  poi->owner = thread_current ();
-  poi->vpg_addr = segment_calc_vaddr (seg, relative_page_num);
-
-  /* If insertion fails, a matching poi is already present and we can just free the memory. */
-  if (!list_insert_ordered_unique (&ret->owners, &poi->elem, page_owner_info_list_less_func, NULL))
-    free (poi);
+     If a shared page, we hold sm->segment_mapping_info_lock, so the page we found/created is 
+       not going to disappear out from under us.
+       
+     If a shared page, it may be resident, in which case we can update our pagedir. */
+  bool did_add = page_add_owner (ret, seg);
+  if (sm && did_add)
+  {
+    if (ret->status == PAGE_RESIDENT)
+    {
+    /* Resident shared page and we just added ourselves to it. Update our pagedir. 
+       NB This implies that frame needs to lock its page before eviction. */
+      struct frame *fr = (struct frame *) ret->location;
+      pagedir_set_page (thread_current ()->pagedir, segment_calc_vaddr (seg, ret->segment_page), fr->paddr, smi->flags & MAP_RDWR);
+    }
+  }
 
   lock_release (&ret->lock);
 
@@ -567,7 +573,7 @@ int32_t
 segment_calc_page_num (struct segment *seg, void *vaddr)
 {
   ASSERT (seg != NULL);
-  /*TODO can we have vaddr as start and end segement numbers */
+  /* TODO @Jamie: Can we have vaddr as start and end segement numbers? */
   ASSERT ((uint32_t) seg->start <= (uint32_t) vaddr && (uint32_t) vaddr < (uint32_t) seg->end);
 
   uint32_t *vpgaddr = ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
@@ -727,6 +733,32 @@ page_remove_owner (struct page *pg, struct segment *seg)
 
   return (list_size (&pg->owners) == 0);
 }
+
+/* Attempt to add self to this locked page's list of owners. 
+   We may or may not already be present.
+   Returns true if we added ourself, else false. */ 
+static bool 
+page_add_owner (struct page *pg, struct segment *seg)
+{
+  ASSERT (pg != NULL);
+  ASSERT (seg != NULL);
+
+  struct page_owner_info *poi = (struct page_owner_info *) malloc (sizeof(struct page_owner_info));
+  ASSERT (poi != NULL);
+  poi->owner = thread_current ();
+  poi->vpg_addr = segment_calc_vaddr (seg, pg->segment_page);
+
+  /* If insertion succeeeds, no matching poi was already present. */ 
+  if (list_insert_ordered_unique (&pg->owners, &poi->elem, page_owner_info_list_less_func, NULL))
+    return true;
+  else
+  {
+    /* On failure, there's a duplicate poi. Throw away this one. */
+    free (poi);
+    return false;
+  }
+}
+
 
 /* Shared mappings functions. */
 
