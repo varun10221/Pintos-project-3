@@ -827,8 +827,8 @@ shared_mappings_destroy_hash_func (struct hash_elem *e, void *aux UNUSED)
   shared_mappings_destroy (sm);
 }
 
-/* Atomically decrement the ref count of SS.
-   If we are the last user, destroy SS. */ 
+/* Atomically decrement the ref count of SM.
+   If we are the last user, destroy SM. */ 
 void 
 shared_mappings_decr_ref_count (struct shared_mappings * ss)
 {
@@ -845,8 +845,8 @@ shared_mappings_decr_ref_count (struct shared_mappings * ss)
     ro_shared_mappings_table_remove (ss->smi.mmap_file);
 }
 
-/* Atomically increment the ref count of SS.
-   If we are the last user, destroy SS. */ 
+/* Atomically increment the ref count of SM.
+   If we are the last user, destroy SM. */ 
 void 
 shared_mappings_incr_ref_count (struct shared_mappings *sm)
 {
@@ -854,13 +854,13 @@ shared_mappings_incr_ref_count (struct shared_mappings *sm)
 
   lock_acquire (&sm->ref_count_lock);
   /* Could be zero if the last referrer is in the procesm of requesting that 
-       ro_shared_mappings_table destroy SS. */
+       ro_shared_mappings_table destroy SM. */
   ASSERT (0 <= sm->ref_count);
   sm->ref_count++;
   lock_release (&sm->ref_count_lock);
 }
 
-/* Set SS's fields to hash to KEY. */
+/* Set SM's fields to hash to KEY. */
 void 
 shared_mappings_set_hash (struct shared_mappings *sm, unsigned key)
 {
