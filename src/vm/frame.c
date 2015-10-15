@@ -15,8 +15,6 @@
 typedef struct frame_swap_table frame_table_t;
 frame_table_t system_frame_table;
 
-/*lock for locking filesystems */
-struct lock filesys_lock;
 
 /* Private function declarations. */
 
@@ -32,7 +30,7 @@ static void frame_table_evict_page_from_frame (struct frame *);
 static bool frame_table_validate_eviction_victim (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct frame *);
 static void frame_table_init_frame (struct frame *, id_t);
-
+static void frame_table_read_mmap_page_from_file (struct frame *);
 /* Basic life cycle. */
 
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
@@ -46,7 +44,6 @@ frame_table_init (void)
   ASSERT (system_frame_table.usage != NULL);
     
   lock_init (&system_frame_table.usage_lock);
-  lock_init (&filesys_lock);
   system_frame_table.entries = malloc (FRAME_TABLE_N_FRAMES * sizeof(struct frame));
   ASSERT (system_frame_table.entries != NULL);
 
@@ -168,33 +165,69 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
   struct page *pg = fr->pg;
   
   /* Find the length of the mmap file */
-  size_t file_length = file_length (pg->smi->mmap_file);
+  size_t file_lnt = file_length (pg->smi->mmap_file);
   size_t size;
 
   /*if file_length is a multiple of page size, then last page in file is of page size */
  
-  if (file_length % PG_SIZE != 0)
+  if (file_lnt % PG_SIZE != 0)
     {
       /*condition to check if the page is last page in file or not */
-     bool is_last_page_infile = (file_length - (pg->segment_page)*PG_SIZE 
+     bool is_last_page_infile = (file_lnt - (pg->segment_page)*PG_SIZE 
                                                     < PG_SIZE) ? true : false;
                                     
      /*check if its last page in file, as the last page's size may  less than pg size;*/
      if (is_last_page_infile)
-       size = file_length % PG_SIZE;
+       size = file_lnt % PG_SIZE;
      else size = PG_SIZE;  
     }
   /*Determine the size to write in file, PGsize */ 
   else size = PG_SIZE;
 /*write the mmap page to file , in the page's respective position in the file */
-  lock_acquire (&filesys_lock);
+  filesys_lock ();
   file_write_at (pg->smi->mmap_file, fr->paddr, size,
                              (pg->segment_page)*PG_SIZE);
-  lock_release (&filesys_lock);
+  filesys_unlock ();
   pg->status = PAGE_IN_FILE;
   pg->location = pg->smi->mmap_file;   
 }
-/* TODO have  a read mmap from file API */
+/* TODO have  a read mmap from file API ,check implementation and find who is the caller for read mmap*/
+
+static void
+frame_table_read_mmap_page_from_file (struct frame *fr)
+{
+  ASSERT (fr != NULL);
+  ASSERT (fr->pg != NULL);
+
+  struct page *pg = fr->pg;
+
+  /* Find the length of the mmap file */
+  size_t file_lnt = file_length (pg->smi->mmap_file);
+  size_t size;
+
+  /*if file_length is a multiple of page size, then last page in file is of page size */
+
+  if (file_lnt % PG_SIZE != 0)
+    {
+      /*condition to check if the page is last page in file or not */
+     bool is_last_page_infile = (file_lnt - (pg->segment_page)*PG_SIZE
+                                                    < PG_SIZE) ? true : false;
+
+     /*check if its last page in file, as the last page's size may  less than pg size;*/
+     if (is_last_page_infile)
+       size = file_lnt % PG_SIZE;
+     else size = PG_SIZE;
+    }
+  /*Determine the size to write in file, PGsize */
+  else size = PG_SIZE;
+/*write the mmap page to file , in the page's respective position in the file */
+  filesys_lock ();
+  file_read_at (pg->smi->mmap_file, fr->paddr, size,
+                             (pg->segment_page)*PG_SIZE);
+  filesys_unlock ();
+  pg->status = PAGE_RESIDENT;
+  pg->location = fr->paddr;
+}
 
 /* (Put locked page PG into a frame and) pin it there. 
    It will not be evicted until a call to 
