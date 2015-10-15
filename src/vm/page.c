@@ -81,8 +81,10 @@ ro_shared_mappings_table_destroy (void)
   hash_destroy (&ro_shared_mappings_table.inumber_to_segment, shared_mappings_destroy_hash_func);
 }
 
-/* Get the shared_mappings associated with INODE.
-   If no such segment yet exists, one is created. */
+/* Get the shared_mappings associated with file F.
+   If no such segment yet exists, one is created. 
+   If such a segment exists already, we close F. 
+     In this case, acquires and releases filesys_lock. */
 struct shared_mappings * 
 ro_shared_mappings_table_get (struct file *f, int flags)
 {
@@ -98,7 +100,13 @@ ro_shared_mappings_table_get (struct file *f, int flags)
 
   struct hash_elem *e = hash_find (&ro_shared_mappings_table.inumber_to_segment, &dummy.elem);
   if (e)
+  {
     match = hash_entry (e, struct shared_mappings, elem);
+    /* An open pointer to F is already in the table, so we can close this one. */
+    filesys_lock ();
+    file_close (f);
+    filesys_unlock ();
+  }
   else
     match = ro_shared_mappings_table_add (f, flags);
 
@@ -426,7 +434,8 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
   {
     /* We only support shared segments for mmap'd files. */
     ASSERT (mmap_file != NULL);
-    /* Set mappings to the appropriate struct shared_mappings*. */
+    /* Set mappings to the appropriate struct shared_mappings*.
+       This will close mmap_file if we use an existing mapping. */
     seg->mappings = (void *) ro_shared_mappings_table_get (mmap_file, flags);
   }
   else
