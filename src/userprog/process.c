@@ -366,6 +366,10 @@ start_process (void *thr_args)
   char *file_name = cl_args->args;
   struct intr_frame if_;
 
+  /* Initialize our supplemental page table.
+     Must occur prior to loading the executable. */
+  process_page_table_init ();
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -1076,6 +1080,12 @@ void process_mmap_remove_all (void)
 }
 
 /* Page table interaction functions. */
+
+/* Initialize this process's supplemental page table. */
+void process_page_table_init (void)
+{
+  supp_page_table_init (&thread_current ()->supp_page_table);
+}
 
 /* Return the appropriate page from supplemental page table,
      or NULL if no such page is defined. */

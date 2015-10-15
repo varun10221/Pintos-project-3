@@ -64,6 +64,7 @@ struct mmap_info * process_mmap_lookup (mapid_t);
 void process_mmap_remove_all (void);
 
 /* Virtual memory interaction. */
+void process_page_table_init (void);
 struct page * process_page_table_find_page (void *);
 void process_pin_page (struct page *);
 void process_unpin_page (struct page *);
