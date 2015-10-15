@@ -365,7 +365,8 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *
   {
     seg = list_entry (e, struct segment, elem);
     ASSERT (seg != NULL);
-    /* We don't overlap if: segment ends before we begin, or we end before segment begins. */
+    /* We don't overlap if: segment ends before we begin, or we end before segment begins. 
+       TODO <= because end is not actually IN the segment? */
     bool does_not_overlap = ((uint32_t) seg->end < start_addr || end_addr < (uint32_t) seg->start);
     if (does_not_overlap)
       continue;

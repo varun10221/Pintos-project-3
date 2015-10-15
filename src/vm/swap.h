@@ -18,19 +18,21 @@ struct frame;
 
 typedef struct frame_swap_table swap_table_t;
 
+#if 0
 enum swap_slot_status
 {
-  SWAP_SLOT_EMPTY, /* There is no page occupying this slot swap. */
+  SWAP_SLOT_EMPTY,  /*There is no page occupying this slot swap. */
   SWAP_SLOT_OCCUPIED, /* There is a page resident in this slot swap. */
 };
 
+#endif
+ 
 /* Entry in the swap table: "swap slot". */
 struct swap_slot
 {
   id_t id; /* Index into the swap table. */
-  /* TODO Eliminate status entirely, since it's only got two values and pg is either NULL or not NULL? */
   struct page *pg; /* Page resident in this swap slot, or NULL if no page. */
-  enum swap_slot_status status; /* Status of this swap slot. */
+ // enum swap_slot_status status; /* Status of this swap slot. */
 };
 
 /* Basic life cycle. */
