@@ -33,7 +33,6 @@ test_main (void)
   /* mmap. */
   for (i = 0; i < n_mappings; i++)
   {
-    printf ("mmap (%i, %p)\n", handle, addrs[i]);
     CHECK ((maps[i] = mmap (handle, addrs[i])) != MAP_FAILED, "mmap \"sample.txt\"");
   }
 
