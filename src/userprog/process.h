@@ -69,4 +69,8 @@ void process_grow_stack (void);
 struct mmap_info * process_add_mapping (struct file *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
 
+/* Syscall handling. */
+void * process_get_scratch_page (void);
+void process_free_scratch_page (void);
+
 #endif /* userprog/process.h */

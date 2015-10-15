@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <syscall-nr.h>
+#include <limits.h>
+#include <string.h>
 #include "userprog/stack.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
@@ -341,9 +343,17 @@ syscall_create (const char *file, unsigned initial_size)
 {
   ASSERT (file != NULL);
 
+  /* Copy file into process's scratch page so that it will be safe from page fault. */
+  char *sp = (char *) process_get_scratch_page ();
+  ASSERT (PATH_MAX <= PGSIZE);
+  size_t len = strlcpy (sp, file, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return false;
+
   bool success = false;
   filesys_lock ();
-  success = filesys_create (file, initial_size);
+  success = filesys_create (sp, initial_size);
   filesys_unlock ();
   return success;
 }
@@ -354,10 +364,18 @@ syscall_remove (const char *file)
 {
   ASSERT (file != NULL);
 
+  /* Copy file into process's scratch page so that it will be safe from page fault. */
+  char *sp = (char *) process_get_scratch_page ();
+  ASSERT (PATH_MAX <= PGSIZE);
+  size_t len = strlcpy (sp, file, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return false;
+
   bool success = false;
   filesys_lock ();
-  /* Note that this has no effect on outstanding fd's in this process's fd_table. */
-  success = filesys_remove (file);
+  /* Note that this has no effect on outstanding fds in this process's fd_table. */
+  success = filesys_remove (sp);
   filesys_unlock ();
   return success;
 }
@@ -370,8 +388,16 @@ syscall_open (const char *file)
 {
   ASSERT (file != NULL);
 
+  /* Copy file into process's scratch page so that it will be safe from page fault. */
+  char *sp = (char *) process_get_scratch_page ();
+  ASSERT (PATH_MAX <= PGSIZE);
+  size_t len = strlcpy (sp, file, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return -1;
+
   filesys_lock ();
-  int fd = process_new_file (file);
+  int fd = process_new_file (sp);
   filesys_unlock ();
   return fd;
 }

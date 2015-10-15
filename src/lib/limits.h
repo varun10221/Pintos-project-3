@@ -31,4 +31,6 @@
 #define LLONG_MIN (-LLONG_MAX - 1)
 #define ULLONG_MAX 18446744073709551615ULL
 
+#define PATH_MAX 4096 /* # chars in a path name including nul */
+
 #endif /* lib/limits.h */
