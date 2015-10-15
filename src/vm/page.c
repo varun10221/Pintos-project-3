@@ -603,7 +603,7 @@ segment_calc_page_num (struct segment *seg, void *vaddr)
   /* TODO @Jamie: Can we have vaddr as start and end segement numbers? */
   ASSERT ((uint32_t) seg->start <= (uint32_t) vaddr && (uint32_t) vaddr < (uint32_t) seg->end);
 
-  uint32_t *vpgaddr = ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
+  void *vpgaddr = (void *) ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
 
   /* If segment grows up (all segments but stack), then we calculate
        page number based on seg->start. seg->end is fixed.
@@ -677,10 +677,14 @@ page_create (struct segment_mapping_info *smi, int32_t segment_page)
   list_init (&pg->owners);
   pg->location = NULL;
   pg->stamp = 0;
-  pg->status = PAGE_NEVER_ACCESSED;
   pg->smi = smi;
   pg->segment_page = segment_page;
   lock_init (&pg->lock);
+
+  if (pg->smi->mmap_file)
+    pg->status = PAGE_IN_FILE;
+  else
+    pg->status = PAGE_NEVER_ACCESSED;
 
   return pg;
 }
