@@ -272,7 +272,7 @@ supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
    Returns NULL on failure.
 
    F must be a "private" file*: a dup of whatever the original
-     file was.
+     file was. We will close F when we are done with it.
 
    Returns the new segment on success.
    Returns NULL if range is not valid or on failure.

@@ -1105,20 +1105,28 @@ void process_grow_stack (void)
      for file F beginning at START with flags FLAGS.
    Returns NULL on failure.
 
-   F must be a "dup"; process will close it when the mapping 
-     is destroyed. 
+   We create a "dup" of F. We will close it when the mapping 
+     is destroyed. Consequently we need to acquire filesys_lock().
 
-   Caller should NOT free the mmap_info.
+   Caller should NOT free the returned mmap_info.
    Use process_delete_mapping() to clean up the mmap_info. */
 struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
 {
   ASSERT (f != NULL);
   ASSERT (start != NULL);
 
+  struct file *f_dup;
+
+  filesys_lock ();
+  f_dup = file_reopen (f);
+  filesys_unlock ();
+  if (f_dup == NULL)
+    goto CLEANUP_AND_ERROR;
+
   struct segment *seg = NULL;
   struct mmap_info *mmap_info = NULL;
 
-  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f, start, flags, flags & MAP_SHARED);
+  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f_dup, start, flags, flags & MAP_SHARED);
   if (seg == NULL)
     goto CLEANUP_AND_ERROR;
 
@@ -1131,6 +1139,12 @@ struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
   return mmap_info;
 
   CLEANUP_AND_ERROR:
+    if (f_dup != NULL)
+    {
+      filesys_lock ();
+      file_close (f_dup);
+      filesys_unlock ();
+    }
     if (seg != NULL)
       supp_page_table_remove_segment (&thread_current ()->supp_page_table, seg);
     if (mmap_info != NULL)
