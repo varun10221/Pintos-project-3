@@ -1050,6 +1050,20 @@ process_mmap_destroy_mapping (void *elt, void *aux UNUSED)
   process_delete_mapping (mmap_info);
 }
 
+/* Pin this page to the frame table. */
+void process_pin_page (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  return frame_table_pin_page (pg);
+}
+
+/* Unpin this page in the frame table. */
+void process_unpin_page (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  return frame_table_unpin_page (pg);
+}
+
 /* Remove all extant mappings from the mmap_table and free the memory.
    Use when a process is exiting. */
 void process_mmap_remove_all (void)
