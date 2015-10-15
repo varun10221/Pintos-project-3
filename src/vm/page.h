@@ -8,6 +8,8 @@
 #include "threads/synch.h"
 #include "devices/block.h"
 
+#define PG_SIZE 4096
+
 /* TODO Move the "implementation-level" declarations to page.c. Prefer an opaque interface where possible. */
 
 /* mmap flags */
