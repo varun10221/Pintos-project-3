@@ -85,7 +85,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <"threads/thread.h">
 /* List element. */
 struct list_elem 
   {

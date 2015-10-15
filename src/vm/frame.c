@@ -97,10 +97,10 @@ frame_table_store_page (struct page *pg)
       frame_table_read_mmap_page_from_file (fr);
    
    else if (pg->status = PAGE_SWAPPED_OUT)
-      swap_table_retieve_page (pg , fr);
+      swap_table_retrieve_page (pg , fr);
    
-   else if (pg->status = PAGE_NEVER_ACCESSED)
-      memset (fr->paddr, 0 , PG_SIZE);
+   else if (pg->status = PAGE_STACK_NEVER_ACCESSED)
+      memset (fr->paddr, 0 , PGSIZE);
   
    else PANIC ("invalid page state for store_frame"); 
 
@@ -487,10 +487,9 @@ frame_table_find_free_frame (void)
 static void
 frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
 {
-  struct list_elem elem;
-  bool 
+  struct list_elem *e;
   for (e = list_begin (&pg->owners); e = list_end (&pg->owners);
-       elem =  list_next (e))
+       e =  list_next (e))
       {
         struct page_owner_info * poi = list_entry (e, struct page_owner_info,            elem);
          pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
