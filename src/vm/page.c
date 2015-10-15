@@ -462,7 +462,7 @@ segment_destroy (struct segment *seg)
   struct hash *h = &smi->mappings;
   struct hash_iterator hi;
   hash_first (&hi, h);
-  struct hash_elem *he = hash_cur (&hi);
+  struct hash_elem *he = hash_next (&hi);
   struct hash_elem *next = NULL;
   while (he != NULL)
   {
