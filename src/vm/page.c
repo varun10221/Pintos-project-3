@@ -128,7 +128,7 @@ ro_shared_mappings_table_add (struct file *f, int flags)
 
 /* page_owner_info functions. */
 
-/* Return true if less, false else. 
+/* Return true if a < b, false else. 
    If there's a tie on tid, use vaddr. */
 static bool page_owner_info_list_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
@@ -137,6 +137,13 @@ static bool page_owner_info_list_less_func (const struct list_elem *a, const str
 
   struct page_owner_info *a_info = list_entry (a, struct page_owner_info, elem);
   struct page_owner_info *b_info = list_entry (b, struct page_owner_info, elem);
+
+  /* If a is NULL, a < b. */
+  if (a_info->owner == NULL)
+    return true;
+  /* If b is NULL, b < a. */
+  if (b_info->owner == NULL)
+    return false;
 
   bool is_same_tid = (a_info->owner->tid == b_info->owner->tid);
   if (is_same_tid)
