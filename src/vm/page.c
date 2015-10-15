@@ -2,6 +2,7 @@
 #include <debug.h>
 #include <round.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "threads/thread.h"
 #include "threads/malloc.h"
@@ -708,6 +709,7 @@ void
 page_set_hash (struct page *pg, unsigned key)
 {
   ASSERT (pg != NULL);
+  memset (pg, 0, sizeof(struct page));
   pg->segment_page = (int32_t) key;
 } 
 
@@ -881,6 +883,7 @@ void
 shared_mappings_set_hash (struct shared_mappings *sm, unsigned key)
 {
   ASSERT (sm != NULL);
+  memset (sm, 0, sizeof(struct shared_mappings));
   sm->inumber = (block_sector_t) key;
 }
 
