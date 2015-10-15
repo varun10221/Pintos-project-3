@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <debug.h>
 #include <list.h>
+#include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "vm/swap.h"
 #include "threads/thread.h"
@@ -15,23 +16,19 @@
 typedef struct frame_swap_table frame_table_t;
 frame_table_t system_frame_table;
 
-
 /* Private function declarations. */
+static void frame_table_init_frame (struct frame *, id_t);
 
 /* Nice way to get a frame. */
 static struct frame * frame_table_obtain_locked_frame (void);
 
-static struct frame * frame_table_find_free_frame (void);
-
 /* Henchmen for the 'nice way'. */
+static struct frame * frame_table_find_free_frame (void);
 static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
-static bool frame_table_validate_eviction_victim (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct frame *);
-static void frame_table_init_frame (struct frame *, id_t);
 static void frame_table_read_mmap_page_from_file (struct frame *);
-/* Basic life cycle. */
 
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
@@ -68,6 +65,7 @@ frame_table_destroy (void)
 /* Storing and releasing pages. */
 
 /* Put locked page PG into a frame.
+   (includes loading the page's contents into the frame).
    Update the page directory for each of its owners. */
 void 
 frame_table_store_page (struct page *pg)
@@ -80,6 +78,9 @@ frame_table_store_page (struct page *pg)
   struct frame *fr = frame_table_obtain_locked_frame ();
   if (fr == NULL)
     PANIC ("frame_table_store_page: Could not allocate a frame."); 
+  ASSERT (lock_held_by_current_thread (&fr->lock));
+
+  /* TODO Load page contents into frame (swap in, zero out frame, mmap in, etc. depending on pg->status). */
 
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
@@ -90,9 +91,9 @@ frame_table_store_page (struct page *pg)
 
   /* TODO Update the page directory of each owner. */
   ASSERT (0 == 1);
+
   // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
   /* Page safely in frame. */
-  /*TODO: to update location in spt? may not be needed since we update pagedir, but for consistency sake */
 
   lock_release (&fr->lock);
 }
@@ -103,6 +104,8 @@ frame_table_store_page (struct page *pg)
 void 
 frame_table_release_page (struct page *pg) 
 { 
+  ASSERT (0 == 1);
+
   ASSERT (pg != NULL);
   ASSERT (pg->status != PAGE_DISCARDED);
   /* TODO handle possible page status.
@@ -154,8 +157,8 @@ frame_table_release_page (struct page *pg)
   lock_release (&system_frame_table.usage_lock);
 }
 
-
-/*TODO writes the frames pg back to mmap file in the disk */
+/* TODO writes the frames pg back to mmap file in the disk */
+/* TODO Document this API. Is the frame locked? Is the page locked? etc. */
 static void
 frame_table_write_mmap_page_to_file (struct frame *fr)
 {
@@ -165,34 +168,34 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
   struct page *pg = fr->pg;
   
   /* Find the length of the mmap file */
-  size_t file_lnt = file_length (pg->smi->mmap_file);
+  size_t file_len = file_length (pg->smi->mmap_file);
   size_t size;
 
-  /*if file_length is a multiple of page size, then last page in file is of page size */
- 
-  if (file_lnt % PG_SIZE != 0)
+  /* If file_length is a multiple of page size, then last page in file is of page size */
+  if (file_len % PGSIZE != 0)
     {
-      /*condition to check if the page is last page in file or not */
-     bool is_last_page_infile = (file_lnt - (pg->segment_page)*PG_SIZE 
-                                                    < PG_SIZE) ? true : false;
+      /* Condition to check if the page is last page in file or not */
+     bool is_last_page_infile = (file_len - (pg->segment_page)*PGSIZE 
+                                                    < PGSIZE) ? true : false;
                                     
-     /*check if its last page in file, as the last page's size may  less than pg size;*/
+     /* Check if its last page in file, as the last page's size may  less than pg size;*/
      if (is_last_page_infile)
-       size = file_lnt % PG_SIZE;
-     else size = PG_SIZE;  
+       size = file_len % PGSIZE;
+     else size = PGSIZE;  
     }
-  /*Determine the size to write in file, PGsize */ 
-  else size = PG_SIZE;
-/*write the mmap page to file , in the page's respective position in the file */
+  /* Determine the size to write in file, PGSIZE */ 
+  else size = PGSIZE;
+/* Write the mmap page to file , in the page's respective position in the file */
   filesys_lock ();
   file_write_at (pg->smi->mmap_file, fr->paddr, size,
-                             (pg->segment_page)*PG_SIZE);
+                             (pg->segment_page)*PGSIZE);
   filesys_unlock ();
   pg->status = PAGE_IN_FILE;
   pg->location = pg->smi->mmap_file;   
 }
-/* TODO have  a read mmap from file API ,check implementation and find who is the caller for read mmap*/
 
+/* TODO have a read mmap from file API, check implementation and find who is the caller for read mmap (@Varun: It's frame_table_store_page) */
+/* TODO Document this API. Is the frame locked? Is the page locked? etc. */
 static void
 frame_table_read_mmap_page_from_file (struct frame *fr)
 {
@@ -202,28 +205,29 @@ frame_table_read_mmap_page_from_file (struct frame *fr)
   struct page *pg = fr->pg;
 
   /* Find the length of the mmap file */
-  size_t file_lnt = file_length (pg->smi->mmap_file);
+  size_t file_len = file_length (pg->smi->mmap_file);
   size_t size;
 
-  /*if file_length is a multiple of page size, then last page in file is of page size */
+  /* If file_length is a multiple of page size, then last page in file is of page size */
 
-  if (file_lnt % PG_SIZE != 0)
+  if (file_len % PGSIZE != 0)
     {
-      /*condition to check if the page is last page in file or not */
-     bool is_last_page_infile = (file_lnt - (pg->segment_page)*PG_SIZE
-                                                    < PG_SIZE) ? true : false;
+      /* Condition to check if the page is last page in file or not */
+     bool is_last_page_infile = (file_len - (pg->segment_page)*PGSIZE
+                                                    < PGSIZE) ? true : false;
 
-     /*check if its last page in file, as the last page's size may  less than pg size;*/
+     /* Check if its last page in file, as the last page's size may  less than pg size;*/
      if (is_last_page_infile)
-       size = file_lnt % PG_SIZE;
-     else size = PG_SIZE;
+       size = file_len % PGSIZE;
+     else size = PGSIZE;
     }
-  /*Determine the size to write in file, PGsize */
-  else size = PG_SIZE;
-/*write the mmap page to file , in the page's respective position in the file */
+  /* Determine the size to write in file, PGSIZE */
+  else 
+    size = PGSIZE;
+  /* Write the mmap page to file , in the page's respective position in the file */
   filesys_lock ();
   file_read_at (pg->smi->mmap_file, fr->paddr, size,
-                             (pg->segment_page)*PG_SIZE);
+                             (pg->segment_page)*PGSIZE);
   filesys_unlock ();
   pg->status = PAGE_RESIDENT;
   pg->location = fr->paddr;
@@ -238,7 +242,7 @@ void
 frame_table_pin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
-  /*first allocate the frame for the page if not availble before */
+  /* First allocate the frame for the page if not availble before */
   if (pg->location == NULL)
     frame_table_store_page (pg);
 
@@ -248,7 +252,7 @@ frame_table_pin_page (struct page *pg)
        
   struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
-  /*TODO valid assert? Or can it be FRAME_PINNED? */
+  /* TODO valid assert? Or can it be FRAME_PINNED? */
   ASSERT (fr->status == FRAME_OCCUPIED);
   /* Change the frame_status to pinned. */
   fr->status = FRAME_PINNED; 
@@ -282,7 +286,10 @@ frame_table_make_free_frame (void)
 {
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
+  {
+    ASSERT (lock_held_by_current_thread (&victim->lock));
     frame_table_evict_page_from_frame (victim);
+  }
  
   return victim;
 }
@@ -299,6 +306,10 @@ frame_table_get_eviction_victim (void)
    struct frame *frames = (struct frame *) system_frame_table.entries;
 
    /* Preliminary eviction algorithm: Evict the first frame whose page is not pinned. */
+
+   /* Try up to 5 times. We skip frames that contain a locked page, even if the page is evictable.
+      So "try again". In practice this is unlikely to affect us, since a process can have at most
+      one locked page at a time and there are far more frames than (expected) processes. */
    int counter;
    for (counter = 0; counter < 5; counter++)
    {
@@ -334,16 +345,6 @@ frame_table_get_eviction_victim (void)
 }
 
 
-/* Returns true if the locked FR is a valid eviction victim
-     (i.e. is not pinned). */
-static bool 
-frame_table_validate_eviction_victim (struct frame *fr)
-{
-  ASSERT (fr != NULL);
-  bool is_pinned = (fr->status == FRAME_PINNED);
-  return !is_pinned;
-}
-
 /* Evict the page in locked frame FR. 
    FR may be empty.
    FR may have a resident page, in which case the page
@@ -371,7 +372,7 @@ frame_table_evict_page_from_frame (struct frame *fr)
   /* TODO Need to update each owner's pagedir so that they page fault when they next access this page. 
      Do this FIRST so that the owners will page fault on access and have to wait for us. */
 
-  if (pg->smi->mmap_file != NULL) /*mmap check by checking if there is a file associated*/
+  if (pg->smi->mmap_file != NULL) /* mmap check by checking if there is a file associated*/
   {   
     /* TODO Need to check EVERY owner's pagedir. Review
        4.1.5.1 Accessed and Dirty Bits. */
@@ -379,7 +380,7 @@ frame_table_evict_page_from_frame (struct frame *fr)
     struct page_owner_info *poi = list_entry (list_front (&pg->owners),
                                               struct page_owner_info, elem);
     
-    if (pagedir_is_dirty (poi->owner->pagedir, fr->paddr)) /*TODO:it must be vaddress for pagedir */   
+    if (pagedir_is_dirty (poi->owner->pagedir, fr->paddr)) /* TODO It must be vaddress for pagedir */   
     {
       page_dirty = true;
     }
@@ -424,6 +425,11 @@ frame_table_obtain_locked_frame (void)
   struct frame *fr = frame_table_find_free_frame ();
   if (fr == NULL)
     fr = frame_table_make_free_frame ();
+
+  if (fr != NULL)
+  {
+    ASSERT (lock_held_by_current_thread (&fr->lock));
+  }
 
   return fr;
 }
