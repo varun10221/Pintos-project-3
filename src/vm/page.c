@@ -684,7 +684,7 @@ page_create (struct segment_mapping_info *smi, int32_t segment_page)
   if (pg->smi->mmap_file)
     pg->status = PAGE_IN_FILE;
   else
-    pg->status = PAGE_NEVER_ACCESSED;
+    pg->status = PAGE_STACK_NEVER_ACCESSED;
 
   return pg;
 }

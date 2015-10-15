@@ -26,7 +26,7 @@ enum page_status
   PAGE_RESIDENT, /* This page is in a frame. */
   PAGE_SWAPPED_OUT, /* This page is in a swap slot. */
   PAGE_IN_FILE, /* This page is in a file (mmap). */
-  PAGE_NEVER_ACCESSED, /* This page has never been accessed. */
+  PAGE_STACK_NEVER_ACCESSED, /* This stack page has never been accessed. Zero it out before storing in frame please. */
   PAGE_DISCARDED /* This page has been discarded by its owner and is going to be deleted. */
 };
 
