@@ -65,6 +65,7 @@ void process_mmap_remove_all (void);
 
 /* Page table interaction. */
 struct page * process_page_table_find_page (void *);
+void process_grow_stack (void);
 struct mmap_info * process_add_mapping (struct file *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
 

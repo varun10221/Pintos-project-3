@@ -1065,6 +1065,13 @@ struct page * process_page_table_find_page (void *vaddr)
   return supp_page_table_find_page (&thread_current ()->supp_page_table, vaddr); 
 }
 
+/* Grow the stack. Called by page_fault when it looks like the 
+   page fault was due to stack growth. */
+void process_grow_stack (void)
+{
+  return supp_page_table_grow_stack (&thread_current ()->supp_page_table);
+}
+
 /* Add a memory mapping to this process's page table 
      for file F beginning at START with flags FLAGS.
    Returns NULL on failure.
