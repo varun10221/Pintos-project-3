@@ -10,6 +10,7 @@
 #include "threads/palloc.h"
 #include "threads/malloc.h"
 #include "userprog/pagedir.h"
+#include "vm/page.h"
 
 /* System-wide frame table. List of.frames containing the resident pages
    Processes use the functions defined in frame.h to interact with this table. */
@@ -28,7 +29,7 @@ static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct frame *);
 static void frame_table_read_mmap_page_from_file (struct frame *);
-
+static void frame_table_update_page_owner_info (struct page *,struct frame *);     
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
 frame_table_init (size_t n_frames)
@@ -89,6 +90,21 @@ frame_table_store_page (struct page *pg)
 
   /* TODO Load page contents into frame (swap in, zero out frame, mmap in, etc. depending on pg->status). */
 
+/*TODO add a condition for never accessed */
+
+  /* To check if its an mmap file */
+   if (pg->status == PAGE_IN_FILE)
+      frame_table_read_mmap_page_from_file (fr);
+   
+   else if (pg->status = PAGE_SWAPPED_OUT)
+      swap_table_retieve_page (pg , fr);
+   
+   else if (pg->status = PAGE_NEVER_ACCESSED)
+      memset (fr->paddr, 0 , PG_SIZE);
+  
+   else PANIC ("invalid page state for store_frame"); 
+
+  
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
   fr->pg = pg;
@@ -97,8 +113,8 @@ frame_table_store_page (struct page *pg)
   pg->status = PAGE_RESIDENT;
 
   /* TODO Update the page directory of each owner. */
-  ASSERT (0 == 1);
-
+  frame_table_update_page_owner_info (pg,fr);     
+  
   // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
   /* Page safely in frame. */
 
@@ -201,8 +217,8 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
   pg->location = pg->smi->mmap_file;   
 }
 
-/* TODO have a read mmap from file API, check implementation and find who is the caller for read mmap (@Varun: It's frame_table_store_page) */
-/* TODO Document this API. Is the frame locked? Is the page locked? etc. */
+/* Read the mmap page from file in to the frame */
+/*Requires that both page and frame are locked */
 static void
 frame_table_read_mmap_page_from_file (struct frame *fr)
 {
@@ -464,3 +480,25 @@ frame_table_find_free_frame (void)
 
   return NULL;
 }
+
+
+/*Updates the page directory of the each page_owner about the frame address */
+/*receives a locked_page */
+static void
+frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
+{
+  struct list_elem elem;
+  bool 
+  for (e = list_begin (&pg->owners); e = list_end (&pg->owners);
+       elem =  list_next (e))
+      {
+        struct page_owner_info * poi = list_entry (e, struct page_owner_info,            elem);
+         pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
+        }
+}
+    
+
+
+
+
+
