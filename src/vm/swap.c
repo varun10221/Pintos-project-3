@@ -4,10 +4,12 @@
 
 #include "vm/frame.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
 #include "devices/block.h"
 
 /* System swap table. Serves as an extension of the frame table. 
    List of pages that are stored on disk instead of in memory. */
+typedef struct frame_swap_table swap_table_t;
 swap_table_t system_swap_table;
 
 /* DIV_ROUND_UP in case PGSIZE is not evenly divisible by BLOCK_SECTOR_SIZE. 
@@ -19,7 +21,9 @@ const uint32_t BLOCK_SECTORS_PER_PAGE = DIV_ROUND_UP (PGSIZE, BLOCK_SECTOR_SIZE)
 uint32_t SWAP_TABLE_N_SLOTS = 0;
 struct block *SWAP_BLOCK = NULL;
 
-static inline uint32_t 
+/* TODO Declare private function APIs. */
+
+static uint32_t 
 get_swap_table_n_slots (void)
 { 
   struct block *blk = block_get_role (BLOCK_SWAP);
@@ -50,7 +54,6 @@ swap_table_init (void)
   ASSERT (SWAP_BLOCK != NULL);
 
   /* Bitmap. */
-  system_swap_table.n_free_entries = SWAP_TABLE_N_SLOTS;
   system_swap_table.usage = bitmap_create (SWAP_TABLE_N_SLOTS);
   ASSERT (system_swap_table.usage != NULL);
 
@@ -115,12 +118,12 @@ swap_table_store_page (struct page *pg)
   pg->status = PAGE_SWAPPED_OUT;
 }
 
-/* Retrieve PG from its swap slot. Put the page contents into frame FR. 
-   Caller must hold lock on PG. */
+/* Retrieve locked PG from its swap slot. Put the page contents into frame FR. */
 void 
 swap_table_retrieve_page (struct page *pg, struct frame *fr)
 {
   ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
   ASSERT (fr != NULL);
 
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
@@ -141,6 +144,8 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
   bitmap_set (system_swap_table.usage, s->id, false);
   lock_release (&system_swap_table.usage_lock);
 
+  /* Update page info. */
+  pg->location = fr;
   pg->status = PAGE_RESIDENT;
 } 
 
@@ -149,6 +154,7 @@ void
 swap_table_discard_page (struct page *pg)
 {
   ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
 
   /* Page must be swapped out. */
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
@@ -172,6 +178,6 @@ swap_table_discard_page (struct page *pg)
   lock_release (&system_swap_table.usage_lock);
 
   /* Update page info. */
-  pg->status = PAGE_DISCARDED; 
   pg->location = NULL;
+  pg->status = PAGE_DISCARDED; 
 }

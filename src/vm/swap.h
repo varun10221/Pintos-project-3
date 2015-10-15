@@ -16,10 +16,6 @@
 /* Forward declarations. */
 struct frame;
 
-
-typedef struct frame_swap_table swap_table_t;
-
- 
 /* Entry in the swap table: "swap slot". */
 struct swap_slot
 {
