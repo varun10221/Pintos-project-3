@@ -81,8 +81,10 @@ ro_shared_mappings_table_destroy (void)
   hash_destroy (&ro_shared_mappings_table.inumber_to_segment, shared_mappings_destroy_hash_func);
 }
 
-/* Get the shared_mappings associated with INODE.
-   If no such segment yet exists, one is created. */
+/* Get the shared_mappings associated with file F.
+   If no such segment yet exists, one is created. 
+   If such a segment exists already, we close F. 
+     In this case, acquires and releases filesys_lock. */
 struct shared_mappings * 
 ro_shared_mappings_table_get (struct file *f, int flags)
 {
@@ -98,7 +100,13 @@ ro_shared_mappings_table_get (struct file *f, int flags)
 
   struct hash_elem *e = hash_find (&ro_shared_mappings_table.inumber_to_segment, &dummy.elem);
   if (e)
+  {
     match = hash_entry (e, struct shared_mappings, elem);
+    /* An open pointer to F is already in the table, so we can close this one. */
+    filesys_lock ();
+    file_close (f);
+    filesys_unlock ();
+  }
   else
     match = ro_shared_mappings_table_add (f, flags);
 
@@ -264,7 +272,7 @@ supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
    Returns NULL on failure.
 
    F must be a "private" file*: a dup of whatever the original
-     file was.
+     file was. We will close F when we are done with it.
 
    Returns the new segment on success.
    Returns NULL if range is not valid or on failure.
@@ -426,7 +434,8 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
   {
     /* We only support shared segments for mmap'd files. */
     ASSERT (mmap_file != NULL);
-    /* Set mappings to the appropriate struct shared_mappings*. */
+    /* Set mappings to the appropriate struct shared_mappings*.
+       This will close mmap_file if we use an existing mapping. */
     seg->mappings = (void *) ro_shared_mappings_table_get (mmap_file, flags);
   }
   else
@@ -855,19 +864,19 @@ shared_mappings_destroy_hash_func (struct hash_elem *e, void *aux UNUSED)
 /* Atomically decrement the ref count of SM.
    If we are the last user, destroy SM. */ 
 void 
-shared_mappings_decr_ref_count (struct shared_mappings * ss)
+shared_mappings_decr_ref_count (struct shared_mappings * sm)
 {
-  ASSERT (ss != NULL);
+  ASSERT (sm != NULL);
 
-  lock_acquire (&ss->ref_count_lock);
-  ASSERT (0 < ss->ref_count);
-  ss->ref_count--;
-  lock_release (&ss->ref_count_lock);
+  lock_acquire (&sm->ref_count_lock);
+  ASSERT (0 < sm->ref_count);
+  sm->ref_count--;
+  lock_release (&sm->ref_count_lock);
 
   /* If it looks like we're the last user, ask the ro shared segment table
      to remove this segment. */
-  if (ss->ref_count == 0)
-    ro_shared_mappings_table_remove (ss->smi.mmap_file);
+  if (sm->ref_count == 0)
+    ro_shared_mappings_table_remove (sm->smi.mmap_file);
 }
 
 /* Atomically increment the ref count of SM.

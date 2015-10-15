@@ -622,7 +622,7 @@ syscall_close (int fd)
    the process. Returns -1 on failure. */
 static mapid_t syscall_mmap (int fd, void *addr)
 {
-  struct file *f = NULL, *f_dup = NULL;
+  struct file *f = NULL;
   struct mmap_info *mmap_info = NULL;
   mapid_t mapping = -1;
 
@@ -630,13 +630,9 @@ static mapid_t syscall_mmap (int fd, void *addr)
   if (f == NULL)
     goto CLEANUP_AND_ERROR;
 
-  filesys_lock ();
-  f_dup = file_reopen (f);
-  filesys_unlock ();
-  if (f_dup == NULL)
-    goto CLEANUP_AND_ERROR;
-
-  mmap_info = process_add_mapping (f_dup, addr, MAP_PRIVATE|MAP_RDWR);
+  mmap_info = process_add_mapping (f, addr, MAP_PRIVATE|MAP_RDWR);
+  /* TODO Just experimenting with shared mmap.
+  mmap_info = process_add_mapping (f, addr, MAP_SHARED|MAP_RDWR); */
   if (mmap_info == NULL)
     goto CLEANUP_AND_ERROR;
 
@@ -650,8 +646,6 @@ static mapid_t syscall_mmap (int fd, void *addr)
     if (mmap_info != NULL)
       /* process_delete_mapping will close f_dup. */
       process_delete_mapping (mmap_info);
-    else if (f_dup != NULL)
-      file_close (f_dup);
     return -1;
 }
 
