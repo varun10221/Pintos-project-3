@@ -864,19 +864,19 @@ shared_mappings_destroy_hash_func (struct hash_elem *e, void *aux UNUSED)
 /* Atomically decrement the ref count of SM.
    If we are the last user, destroy SM. */ 
 void 
-shared_mappings_decr_ref_count (struct shared_mappings * ss)
+shared_mappings_decr_ref_count (struct shared_mappings * sm)
 {
-  ASSERT (ss != NULL);
+  ASSERT (sm != NULL);
 
-  lock_acquire (&ss->ref_count_lock);
-  ASSERT (0 < ss->ref_count);
-  ss->ref_count--;
-  lock_release (&ss->ref_count_lock);
+  lock_acquire (&sm->ref_count_lock);
+  ASSERT (0 < sm->ref_count);
+  sm->ref_count--;
+  lock_release (&sm->ref_count_lock);
 
   /* If it looks like we're the last user, ask the ro shared segment table
      to remove this segment. */
-  if (ss->ref_count == 0)
-    ro_shared_mappings_table_remove (ss->smi.mmap_file);
+  if (sm->ref_count == 0)
+    ro_shared_mappings_table_remove (sm->smi.mmap_file);
 }
 
 /* Atomically increment the ref count of SM.
