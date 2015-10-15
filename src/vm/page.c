@@ -29,7 +29,6 @@ struct ro_shared_mappings_table ro_shared_mappings_table;
 static struct segment * supp_page_table_find_segment (struct supp_page_table *, void *);
 static struct segment * supp_page_table_get_stack_segment (struct supp_page_table *);
 static bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
-static bool supp_page_table_is_stack_growth (struct supp_page_table *, void *);
 
 /* Segment. */
 static struct segment * segment_create (void *, void *, struct file *, int, enum segment_type); 
@@ -212,8 +211,6 @@ supp_page_table_destroy (struct supp_page_table *spt)
 }
 
 /* Return the page associated with virtual address VADDR.
-   If VADDR looks like a stack growth, grow the stack and add a page.
-
    Returns NULL if no such page (i.e. illegal memory access). */
 struct page * 
 supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
@@ -225,7 +222,7 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
   struct segment *seg = supp_page_table_find_segment (spt, vaddr);
 
   struct page *ret = NULL;
-  /* Found a matching segment. */
+  /* Found a matching segment. Look up the page. */
   if (seg)
   {
     /* mappings is keyed by page number. */
@@ -233,26 +230,18 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
     ret = segment_get_page (seg, page_num);
     ASSERT (ret != NULL);
   }
-  /* Did not find a matching segment. Could still be stack growth. */
-  else
-  {
-    bool is_stack_growth = supp_page_table_is_stack_growth (spt, vaddr);
-    if (is_stack_growth)
-    {
-      /* Stack growth? Need to add a page. 
-         We know we aren't overlapping our predecessor because if we were, we would
-           not have page faulted. Behavior in such a case is undefined. */
-      seg = supp_page_table_get_stack_segment (spt);
-      seg->start -= PGSIZE;
-      /* mappings is keyed by page number. */
-      int32_t page_num = segment_calc_page_num (seg, vaddr);
-      ret = segment_get_page (seg, page_num);
-      ASSERT (ret != NULL);
-    }
-    /* Else, apparently it wasn't stack growth. Return NULL. */
-  }
 
   return ret;
+}
+
+/* Grow the stack by one page. */
+void 
+supp_page_table_grow_stack (struct supp_page_table *spt)
+{
+  ASSERT (spt != NULL);
+  struct segment *seg = supp_page_table_get_stack_segment (spt);
+  ASSERT (seg != NULL);
+  seg->start -= PGSIZE;
 }
 
 /* Add a memory mapping to supp page table SPT
@@ -375,22 +364,6 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *
   }
 
   return true;
-}
-
-/* Return true if this address is stack growth, false else. */
-bool 
-supp_page_table_is_stack_growth (struct supp_page_table *spt, void *vaddr)
-{
-  ASSERT (spt != NULL);
-
-  struct segment *stack_seg = supp_page_table_get_stack_segment (spt);
-  ASSERT (stack_seg != NULL);
-
-  /* Use casting to make sure we have a valid number for abs. */
-  int64_t distance_from_stack = (uint64_t) stack_seg->start - (uint64_t) vaddr;
-  if (llabs (distance_from_stack) <= MAX_VALID_STACK_DISTANCE)
-    return true;
-  return false;
 }
 
 /* Initialize a segment. Destroy with segment_destroy(). */

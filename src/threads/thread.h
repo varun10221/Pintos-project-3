@@ -141,6 +141,9 @@ struct thread
     /* Owned by userprog/process.c. */
     struct list child_list; /* List of direct children. */
     struct child_process_info *child_info_self; /* Pointer to my entry in my parent's child_list. */
+
+    /* Owned by userprog/syscall.c. */
+    void *scratch_page; /* PGSIZE-sized scratch page for syscall handling of user-provided memory. Safe from page fault. */
 #endif
 
     /* Structures for virtual memory. */

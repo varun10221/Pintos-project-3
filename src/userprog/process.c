@@ -541,6 +541,9 @@ process_exit (void)
   if (cur->my_executable != NULL)
     file_close (cur->my_executable);
 
+  /* Done with our scratch page, if we allocated one. */
+  process_free_scratch_page ();
+
   /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. 
      Only announce if we were a valid thread. */
   struct child_process_info *cpi = thread_get_child_info_self ();
@@ -1047,6 +1050,20 @@ process_mmap_destroy_mapping (void *elt, void *aux UNUSED)
   process_delete_mapping (mmap_info);
 }
 
+/* Pin this page to the frame table. */
+void process_pin_page (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  return frame_table_pin_page (pg);
+}
+
+/* Unpin this page in the frame table. */
+void process_unpin_page (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  return frame_table_unpin_page (pg);
+}
+
 /* Remove all extant mappings from the mmap_table and free the memory.
    Use when a process is exiting. */
 void process_mmap_remove_all (void)
@@ -1063,6 +1080,13 @@ void process_mmap_remove_all (void)
 struct page * process_page_table_find_page (void *vaddr)
 {
   return supp_page_table_find_page (&thread_current ()->supp_page_table, vaddr); 
+}
+
+/* Grow the stack. Called by page_fault when it looks like the 
+   page fault was due to stack growth. */
+void process_grow_stack (void)
+{
+  return supp_page_table_grow_stack (&thread_current ()->supp_page_table);
 }
 
 /* Add a memory mapping to this process's page table 
@@ -1110,4 +1134,29 @@ void process_delete_mapping (struct mmap_info *mmap_info)
 
   supp_page_table_remove_segment (&thread_current ()->supp_page_table, mmap_info->seg);
   free (mmap_info);
+}
+
+/* Returns the process's scratch page. 
+   Allocates scratch page if it is not yet allocated. 
+   This is done on-demand in case the process never uses a 
+   syscall that requires one. 
+   
+   Free with process_free_scratch_page() when process closes. */
+void * process_get_scratch_page (void)
+{
+  struct thread *t = thread_current ();
+  if (t->scratch_page == NULL)
+  {
+    t->scratch_page = malloc (PGSIZE);
+    ASSERT (t->scratch_page != NULL);
+  }
+  return t->scratch_page;
+}
+
+/* Free this processes's scratch page, if one was allocated. */
+void process_free_scratch_page (void)
+{
+  struct thread *t = thread_current ();
+  if (t->scratch_page != NULL)
+    free (t->scratch_page);
 }

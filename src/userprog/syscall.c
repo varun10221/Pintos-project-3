@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <syscall-nr.h>
+#include <limits.h>
+#include <string.h>
 #include "userprog/stack.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
@@ -341,9 +343,17 @@ syscall_create (const char *file, unsigned initial_size)
 {
   ASSERT (file != NULL);
 
+  /* Copy file into process's scratch page so that it will be safe from page fault. */
+  char *sp = (char *) process_get_scratch_page ();
+  ASSERT (PATH_MAX <= PGSIZE);
+  size_t len = strlcpy (sp, file, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return false;
+
   bool success = false;
   filesys_lock ();
-  success = filesys_create (file, initial_size);
+  success = filesys_create (sp, initial_size);
   filesys_unlock ();
   return success;
 }
@@ -354,10 +364,18 @@ syscall_remove (const char *file)
 {
   ASSERT (file != NULL);
 
+  /* Copy file into process's scratch page so that it will be safe from page fault. */
+  char *sp = (char *) process_get_scratch_page ();
+  ASSERT (PATH_MAX <= PGSIZE);
+  size_t len = strlcpy (sp, file, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return false;
+
   bool success = false;
   filesys_lock ();
-  /* Note that this has no effect on outstanding fd's in this process's fd_table. */
-  success = filesys_remove (file);
+  /* Note that this has no effect on outstanding fds in this process's fd_table. */
+  success = filesys_remove (sp);
   filesys_unlock ();
   return success;
 }
@@ -370,8 +388,16 @@ syscall_open (const char *file)
 {
   ASSERT (file != NULL);
 
+  /* Copy file into process's scratch page so that it will be safe from page fault. */
+  char *sp = (char *) process_get_scratch_page ();
+  ASSERT (PATH_MAX <= PGSIZE);
+  size_t len = strlcpy (sp, file, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return -1;
+
   filesys_lock ();
-  int fd = process_new_file (file);
+  int fd = process_new_file (sp);
   filesys_unlock ();
   return fd;
 }
@@ -411,22 +437,52 @@ syscall_read (int fd, void *buffer, unsigned size)
     int i;
     char *buf = (char *) buffer;
     for (i = 0; i < n_left; i++)
-    {
       buf[i] = (char) input_getc ();
-    }
   }
   else
   {
-    n_read = 0;
-    filesys_lock ();
+    /* Get the corresponding file. */
     struct file *f = process_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
-      n_read = -1;
-    else
-      /* Let file_read do any desired buffering. */
-      n_read = file_read (f, buffer, size);
-    filesys_unlock ();
+      return -1;
+  
+    n_left = (int) size;
+    /* NB This implementation makes for interesting potential "races" with other readers/writers. 
+       See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
+    while (0 <= n_left)
+    {
+      /* For each page in buffer, pin the page to a frame so that we cannot
+         page fault while we are holding filesys_lock(). */
+      struct page *pg = process_page_table_find_page (buffer);
+      ASSERT (pg != NULL);
+      process_pin_page (pg);
+
+      int amount_to_read = PGSIZE;
+      /* If buffer is not page-aligned, only read up to the end of the page so that 
+         subsequent non-final reads will be page-aligned. */
+      uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
+      if (mod_PGSIZE != 0)
+        /* (read from buffer to the end of its containing page) */
+        amount_to_read = PGSIZE - mod_PGSIZE;
+      /* n_left is an upper bound on the amount to read. */
+      if (n_left < amount_to_read)
+        amount_to_read = n_left;
+
+      filesys_lock ();
+      n_read = file_read (f, buffer, amount_to_read);
+      filesys_unlock ();
+
+      process_unpin_page (pg);
+
+      /* Advance buffer. */
+      buffer += n_read;
+      n_left -= n_read;
+      /* If we read non-negative value but less than the expected amount, we've reached end of file. */
+      ASSERT (0 <= n_read && n_read <= amount_to_read);
+      if (n_read != amount_to_read)
+        break;
+    }
   }
 
   return n_read;
@@ -463,16 +519,48 @@ syscall_write (int fd, const void *buffer, unsigned size)
   }
   else
   {
-    n_written = 0;
-    filesys_lock ();
+    /* Get the corresponding file. */
     struct file *f = process_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
-      n_written = -1;
-    else
-      /* Let file_write do any desired buffering. */
-      n_written = file_write (f, buffer, size);
-    filesys_unlock ();
+      return -1;
+  
+    n_left = (int) size;
+    /* NB This implementation makes for interesting potential "races" with other readers/writers. 
+       See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
+    while (0 <= n_left)
+    {
+      /* For each page in buffer, pin the page to a frame so that we cannot
+         page fault while we are holding filesys_lock(). */
+      struct page *pg = process_page_table_find_page (buffer);
+      ASSERT (pg != NULL);
+      process_pin_page (pg);
+
+      int amount_to_write = PGSIZE;
+      /* If buffer is not page-aligned, only write up to the end of the page so that 
+         subsequent non-final writes will be page-aligned. */
+      uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
+      if (mod_PGSIZE != 0)
+        /* (write from buffer to the end of its containing page) */
+        amount_to_write = PGSIZE - mod_PGSIZE;
+      /* n_left is an upper bound on the amount to write. */
+      if (n_left < amount_to_write)
+        amount_to_write = n_left;
+
+      filesys_lock ();
+      n_written = file_write (f, buffer, amount_to_write);
+      filesys_unlock ();
+
+      process_unpin_page (pg);
+
+      /* Advance buffer. */
+      buffer += n_written;
+      n_left -= n_written;
+      /* If we write non-negative value but less than the expected amount, we've reached end of file. */
+      ASSERT (0 <= n_written && n_written <= amount_to_write);
+      if (n_written != amount_to_write)
+        break;
+    }
   }
 
   return n_written;

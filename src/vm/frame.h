@@ -49,8 +49,6 @@ struct frame_swap_table
   void *entries;
 };
 
-typedef struct frame_swap_table frame_table_t;
-
 /* Basic life cycle. */
 void frame_table_init (void);
 void frame_table_destroy (void);
