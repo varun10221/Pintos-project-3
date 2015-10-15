@@ -1142,6 +1142,9 @@ init_thread (struct thread *t, const char *name, int priority)
 #ifdef USERPROG
   t->my_executable = NULL;
 
+  t->vm_esp = NULL;
+  t->is_handling_syscall = false;
+
   /* The fd_table is left uninitialized. 
      userprog/process.c does all of the management for fd_table. */
   t->fd_table.n_elts = 0;

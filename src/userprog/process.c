@@ -1086,7 +1086,7 @@ struct page * process_page_table_find_page (void *vaddr)
    page fault was due to stack growth. */
 void process_grow_stack (void)
 {
-  return supp_page_table_grow_stack (&thread_current ()->supp_page_table);
+  return supp_page_table_grow_stack (&thread_current ()->supp_page_table, 1);
 }
 
 /* Add a memory mapping to this process's page table 

@@ -6,6 +6,7 @@
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "threads/thread.h"
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "filesys/filesys.h"
@@ -211,7 +212,11 @@ supp_page_table_destroy (struct supp_page_table *spt)
 }
 
 /* Return the page associated with virtual address VADDR.
-   Returns NULL if no such page (i.e. illegal memory access). */
+   Returns NULL if no such page (i.e. illegal memory access). 
+   
+   Will add pages to the stack segment to accommodate growth if needed.
+   Will only do so if we are handling a syscall and vaddr is above 
+   thread_current ()->vm_esp. (i.e. a valid stack access). */
 struct page * 
 supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
@@ -234,14 +239,16 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
   return ret;
 }
 
-/* Grow the stack by one page. */
+/* Grow the stack N_PAGES pages. */
 void 
-supp_page_table_grow_stack (struct supp_page_table *spt)
+supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
 {
   ASSERT (spt != NULL);
   struct segment *seg = supp_page_table_get_stack_segment (spt);
   ASSERT (seg != NULL);
-  seg->start -= PGSIZE;
+  int i;
+  for (i = 0; i < n_pages; i++)
+    seg->start -= PGSIZE;
 }
 
 /* Add a memory mapping to supp page table SPT
@@ -286,7 +293,7 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
 }
 
 /* Returns the segment to which vaddr belongs, or NULL.
-   If NULL, could still be stack growth. */
+   If this is stack growth in a syscall, we grow the stack. */
 static struct segment * 
 supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
 {
@@ -302,6 +309,20 @@ supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
     if (seg->start <= vaddr && vaddr < seg->end)
       return seg;
   }
+
+  /* No segment found. */
+
+  /* Is this: stack growth taking place in a syscall? */
+  struct thread *thr = thread_current ();
+  if (thr->is_handling_syscall && thr->vm_esp <= vaddr)
+  {
+    /* vaddr is at or above esp: extend the stack segment downward. */
+    seg = supp_page_table_get_stack_segment (spt);
+    while (vaddr < seg->start)
+      seg->start -= PGSIZE;
+    return seg;
+  }
+
   return NULL;
 }
 

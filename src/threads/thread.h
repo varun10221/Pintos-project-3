@@ -147,7 +147,8 @@ struct thread
 #endif
 
     /* Structures for virtual memory. */
-
+    void *vm_esp; /* esp at the time of transition from user to kernel mode. */
+    bool is_handling_syscall;
     /* Maps mmap_id_t to struct mmap_info*. */
     struct vector mmap_table;
     /* Used to map virtual addresses to pages. */
