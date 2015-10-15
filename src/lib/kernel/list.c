@@ -504,14 +504,14 @@ list_insert_ordered_unique (struct list *list, struct list_elem *elem,
   ASSERT (elem != NULL);
   ASSERT (less != NULL);
 
-  struct list_elem *e = list_begin (list);
-  /* Skip until we've reached the point where elem belongs. */
-  while (less (e, elem, aux))
-    e = list_next (e);
+  struct list_elem *e;
+  for (e = list_begin (list); e != list_end (list); e = list_next (e))
+    if (less (elem, e, aux))
+      break;
+
   /* If !less (e, elem, aux) and !less (elem, e, aux), then e == elem and we don't insert it. */
   if (less (elem, e, aux))
     return false;
-
   list_insert (e, elem);
   return true;
 }

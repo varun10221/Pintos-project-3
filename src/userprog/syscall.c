@@ -102,7 +102,12 @@ static void syscall_munmap (mapid_t mapping);
 
 /* Handle the syscall contained in this stack frame.
    Any invalid pointers (stack pointer itself, or values
-   referred to therein) will prompt exit(-1). */
+   referred to therein) will prompt exit(-1). 
+   
+   TODO Is this the right place to do this? I think so, look at e.g. syscall3.
+     As this is the "first" place we come on transition from
+     user mode to kernel mode, save the stack pointer to the thread
+     in case we need to grow the stack in kernel mode (see tests/vm/pt-grow-stk-sc.c). */
 static void
 syscall_handler (struct intr_frame *f) 
 {
@@ -113,6 +118,10 @@ syscall_handler (struct intr_frame *f)
 
   /* Copy esp so we can navigate the stack without disturbing the caller. */
   void *sp = f->esp;
+  /* Copy esp for handling stack growth in kernel mode. */
+  struct thread *thr = thread_current ();
+  thr->vm_esp = f->esp;
+  thr->is_handling_syscall = true;
 
   /* Identify syscall. */
   int32_t syscall;
@@ -286,6 +295,8 @@ syscall_handler (struct intr_frame *f)
     default:
       printf ("Unsupported system call! vec %i esp %i\n", f->vec_no, *(int32_t *) f->esp);
   };  
+
+  thr->is_handling_syscall = false;
 }
 
 /* Any user-provided addresses given to the syscall_* routines have

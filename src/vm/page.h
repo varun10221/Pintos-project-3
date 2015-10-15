@@ -26,7 +26,7 @@ enum page_status
   PAGE_RESIDENT, /* This page is in a frame. */
   PAGE_SWAPPED_OUT, /* This page is in a swap slot. */
   PAGE_IN_FILE, /* This page is in a file (mmap). */
-  PAGE_NEVER_ACCESSED, /* This page has never been accessed. */
+  PAGE_STACK_NEVER_ACCESSED, /* This stack page has never been accessed. Zero it out before storing in frame please. */
   PAGE_DISCARDED /* This page has been discarded by its owner and is going to be deleted. */
 };
 
@@ -162,7 +162,7 @@ void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
 struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
-void supp_page_table_grow_stack (struct supp_page_table *);
+void supp_page_table_grow_stack (struct supp_page_table *, int);
 struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 

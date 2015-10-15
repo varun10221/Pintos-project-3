@@ -2,10 +2,12 @@
 #include <debug.h>
 #include <round.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "threads/thread.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "threads/thread.h"
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "filesys/filesys.h"
@@ -127,7 +129,7 @@ ro_shared_mappings_table_add (struct file *f, int flags)
 
 /* page_owner_info functions. */
 
-/* Return true if less, false else. 
+/* Return true if a < b, false else. 
    If there's a tie on tid, use vaddr. */
 static bool page_owner_info_list_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
@@ -136,6 +138,13 @@ static bool page_owner_info_list_less_func (const struct list_elem *a, const str
 
   struct page_owner_info *a_info = list_entry (a, struct page_owner_info, elem);
   struct page_owner_info *b_info = list_entry (b, struct page_owner_info, elem);
+
+  /* If a is NULL, a < b. */
+  if (a_info->owner == NULL)
+    return true;
+  /* If b is NULL, b < a. */
+  if (b_info->owner == NULL)
+    return false;
 
   bool is_same_tid = (a_info->owner->tid == b_info->owner->tid);
   if (is_same_tid)
@@ -211,7 +220,11 @@ supp_page_table_destroy (struct supp_page_table *spt)
 }
 
 /* Return the page associated with virtual address VADDR.
-   Returns NULL if no such page (i.e. illegal memory access). */
+   Returns NULL if no such page (i.e. illegal memory access). 
+   
+   Will add pages to the stack segment to accommodate growth if needed.
+   Will only do so if we are handling a syscall and vaddr is above 
+   thread_current ()->vm_esp. (i.e. a valid stack access). */
 struct page * 
 supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
@@ -234,14 +247,16 @@ supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
   return ret;
 }
 
-/* Grow the stack by one page. */
+/* Grow the stack N_PAGES pages. */
 void 
-supp_page_table_grow_stack (struct supp_page_table *spt)
+supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
 {
   ASSERT (spt != NULL);
   struct segment *seg = supp_page_table_get_stack_segment (spt);
   ASSERT (seg != NULL);
-  seg->start -= PGSIZE;
+  int i;
+  for (i = 0; i < n_pages; i++)
+    seg->start -= PGSIZE;
 }
 
 /* Add a memory mapping to supp page table SPT
@@ -261,7 +276,9 @@ supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *
   ASSERT (spt != NULL);
   ASSERT (f != NULL);
 
-  void *end = (void *) ((uint32_t) start + file_length (f));
+  /* Round end up to the next page. */
+  uint32_t end_exact = ((uint32_t) start + file_length (f));
+  void *end = (void *) ROUND_UP (end_exact, PGSIZE);
   if (!supp_page_table_is_range_valid (spt, start, end))
     return NULL;
 
@@ -286,7 +303,7 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
 }
 
 /* Returns the segment to which vaddr belongs, or NULL.
-   If NULL, could still be stack growth. */
+   If this is stack growth in a syscall, we grow the stack. */
 static struct segment * 
 supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
 {
@@ -302,6 +319,20 @@ supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
     if (seg->start <= vaddr && vaddr < seg->end)
       return seg;
   }
+
+  /* No segment found. */
+
+  /* Is this: stack growth taking place in a syscall? */
+  struct thread *thr = thread_current ();
+  if (thr->is_handling_syscall && thr->vm_esp <= vaddr)
+  {
+    /* vaddr is at or above esp: extend the stack segment downward. */
+    seg = supp_page_table_get_stack_segment (spt);
+    while (vaddr < seg->start)
+      seg->start -= PGSIZE;
+    return seg;
+  }
+
   return NULL;
 }
 
@@ -354,9 +385,8 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *
   {
     seg = list_entry (e, struct segment, elem);
     ASSERT (seg != NULL);
-    /* We don't overlap if: segment ends before we begin, or we end before segment begins. 
-       TODO <= because end is not actually IN the segment? */
-    bool does_not_overlap = ((uint32_t) seg->end < start_addr || end_addr < (uint32_t) seg->start);
+    /* We don't overlap if: segment ends before we begin, or we end before segment begins. */
+    bool does_not_overlap = ((uint32_t) seg->end <= start_addr || end_addr <= (uint32_t) seg->start);
     if (does_not_overlap)
       continue;
     else
@@ -374,6 +404,8 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
   ASSERT (seg != NULL);
 
   ASSERT ((uint32_t) start < (uint32_t) end);
+  ASSERT ((uint32_t) start % PGSIZE == 0); 
+  ASSERT ((uint32_t) end % PGSIZE == 0); 
 
   seg->start = start;
   seg->end = end;
@@ -404,7 +436,7 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
 }
 
 /* Destroy segment SEG created by segment_create(). 
-   Acquires and releases filesys_lock. */
+   If SEG is an mmap'd segment, will acquire and release. */
 void 
 segment_destroy (struct segment *seg)
 {
@@ -430,7 +462,7 @@ segment_destroy (struct segment *seg)
   struct hash *h = &smi->mappings;
   struct hash_iterator hi;
   hash_first (&hi, h);
-  struct hash_elem *he = hash_cur (&hi);
+  struct hash_elem *he = hash_next (&hi);
   struct hash_elem *next = NULL;
   while (he != NULL)
   {
@@ -571,7 +603,7 @@ segment_calc_page_num (struct segment *seg, void *vaddr)
   /* TODO @Jamie: Can we have vaddr as start and end segement numbers? */
   ASSERT ((uint32_t) seg->start <= (uint32_t) vaddr && (uint32_t) vaddr < (uint32_t) seg->end);
 
-  uint32_t *vpgaddr = ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
+  void *vpgaddr = (void *) ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
 
   /* If segment grows up (all segments but stack), then we calculate
        page number based on seg->start. seg->end is fixed.
@@ -600,7 +632,7 @@ segment_calc_vaddr (struct segment *seg, int32_t relative_page_num)
 {
   ASSERT (seg != NULL);
 
-  uint32_t max_page_num = (seg->end - seg->start) / PGSIZE;
+  int32_t max_page_num = (seg->end - seg->start) / PGSIZE;
   ASSERT (relative_page_num < max_page_num);
 
   /* Just like in segment_calc_page_num: 
@@ -608,12 +640,12 @@ segment_calc_vaddr (struct segment *seg, int32_t relative_page_num)
        - calculate based on seg->start or seg->end as appropriate */
   bool segment_grows_up = (seg->end < PHYS_BASE ? true : false);
 
-  uint32_t page_addr;
+  void * page_addr;
   if (segment_grows_up)
     page_addr = seg->start + relative_page_num*PGSIZE;
   else
     page_addr = seg->end - (relative_page_num + 1)*PGSIZE;
-  return (void *) page_addr;
+  return page_addr;
 }
 
 /* Segment list_less_func. */
@@ -645,10 +677,14 @@ page_create (struct segment_mapping_info *smi, int32_t segment_page)
   list_init (&pg->owners);
   pg->location = NULL;
   pg->stamp = 0;
-  pg->status = PAGE_NEVER_ACCESSED;
   pg->smi = smi;
   pg->segment_page = segment_page;
   lock_init (&pg->lock);
+
+  if (pg->smi->mmap_file)
+    pg->status = PAGE_IN_FILE;
+  else
+    pg->status = PAGE_STACK_NEVER_ACCESSED;
 
   return pg;
 }
@@ -680,6 +716,7 @@ void
 page_set_hash (struct page *pg, unsigned key)
 {
   ASSERT (pg != NULL);
+  memset (pg, 0, sizeof(struct page));
   pg->segment_page = (int32_t) key;
 } 
 
@@ -853,6 +890,7 @@ void
 shared_mappings_set_hash (struct shared_mappings *sm, unsigned key)
 {
   ASSERT (sm != NULL);
+  memset (sm, 0, sizeof(struct shared_mappings));
   sm->inumber = (block_sector_t) key;
 }
 

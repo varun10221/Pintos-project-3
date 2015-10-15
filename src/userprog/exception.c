@@ -164,8 +164,6 @@ page_fault (struct intr_frame *f)
     return;
   }
 
-  /* TODO Use 'write' to see if this access was legal. Check flags of the smi of pg? */
-
   /* TODO Correctly determine if this was stack growth HERE, not in process_page_table_find_page. 
      In this case, call process_page_table_grow_stack and then call find_page. 
      Refer to project assignment: 
@@ -183,22 +181,26 @@ page_fault (struct intr_frame *f)
        will need to arrange another way, such as saving esp into struct thread on the 
        initial transition from user to kernel mode. */
   void *esp = NULL;
-  if (user)
-    esp = f->esp;
-  else
-    ASSERT (0 == 1); /* Not yet handled. */
-
-  int MAX_VALID_STACK_DISTANCE = 32;
-  int64_t distance_from_stack = (uint64_t) esp - (uint64_t) fault_addr;
-  bool looks_like_stack_growth = (llabs (distance_from_stack) <= MAX_VALID_STACK_DISTANCE);
-  if (looks_like_stack_growth)
-    process_grow_stack ();
+  bool could_be_stack_growth = (user || thread_current ()->is_handling_syscall); 
+  if (could_be_stack_growth)
+  {
+    if (user)
+      esp = f->esp;
+    else
+      esp = thread_current ()->vm_esp; /* TODO Under what circumstances do we come here? Arg parsing when args have not been set by the user? */
+    /* If we are at most 32 bytes below the stack pointer, we call this stack growth. */
+    int MAX_DISTANCE_BELOW_STACK = 32;
+    if (fault_addr < esp && esp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
+      process_grow_stack ();
+  }
 
   /* Now that we've grown the stack if needed, we're ready to find 
      the page in our SPT. */
   struct page *pg = NULL;
   pg = process_page_table_find_page (fault_addr);
-  
+
+  /* TODO Use 'write' to see if this access was legal. Check flags of the smi of pg.
+     Note that those flags aren't being set properly yet. */
   if (pg)
     frame_table_store_page (pg);
   else

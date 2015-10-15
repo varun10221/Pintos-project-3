@@ -21,6 +21,7 @@
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
+#include "vm/frame.h"
 
 /* Structure for command-line args. */
 struct cl_args
@@ -364,6 +365,10 @@ start_process (void *thr_args)
   struct cl_args *cl_args = (struct cl_args *) (thr_args + sizeof(void *));
   char *file_name = cl_args->args;
   struct intr_frame if_;
+
+  /* Initialize our supplemental page table.
+     Must occur prior to loading the executable. */
+  process_page_table_init ();
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -1061,7 +1066,8 @@ void process_pin_page (struct page *pg)
 void process_unpin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
-  return frame_table_unpin_page (pg);
+  frame_table_unpin_page (pg);
+  return;
 }
 
 /* Remove all extant mappings from the mmap_table and free the memory.
@@ -1075,6 +1081,12 @@ void process_mmap_remove_all (void)
 
 /* Page table interaction functions. */
 
+/* Initialize this process's supplemental page table. */
+void process_page_table_init (void)
+{
+  supp_page_table_init (&thread_current ()->supp_page_table);
+}
+
 /* Return the appropriate page from supplemental page table,
      or NULL if no such page is defined. */
 struct page * process_page_table_find_page (void *vaddr)
@@ -1086,7 +1098,7 @@ struct page * process_page_table_find_page (void *vaddr)
    page fault was due to stack growth. */
 void process_grow_stack (void)
 {
-  return supp_page_table_grow_stack (&thread_current ()->supp_page_table);
+  return supp_page_table_grow_stack (&thread_current ()->supp_page_table, 1);
 }
 
 /* Add a memory mapping to this process's page table 
