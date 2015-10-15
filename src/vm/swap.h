@@ -5,7 +5,7 @@
 #include <round.h>
 
 #include "threads/vaddr.h"
-#include "devices/block.h"
+#include "threads/synch.h"
 
 /* Note: the swap table is a ``secret'' of the frame table. The frame table masks
    the existence of the swap table. 
@@ -21,6 +21,17 @@ struct swap_slot
 {
   id_t id; /* Index into the swap table. */
   struct page *pg; /* Page resident in this swap slot, or NULL if no page. */
+};
+
+/* The global swap table is used to store pages belong to a process
+   when it is not using them. It is the "backup" for the frame table. */
+struct swap_table
+{
+  struct bitmap *usage; /* 0 if available, 1 if in use. */
+  struct lock usage_lock; /* For atomic updates to usage. */
+
+  uint32_t n_slots; /* Total number of slots. */
+  struct swap_slot *slots; /* Array of n_slots slots. */
 };
 
 /* Basic life cycle. */

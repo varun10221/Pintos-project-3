@@ -11,10 +11,9 @@
 #include "threads/malloc.h"
 #include "userprog/pagedir.h"
 
-/* System-wide frame table. List of entries containing the resident pages
+/* System-wide frame table. List of.frames containing the resident pages
    Processes use the functions defined in frame.h to interact with this table. */
-typedef struct frame_swap_table frame_table_t;
-frame_table_t system_frame_table;
+struct frame_table system_frame_table;
 
 /* Private function declarations. */
 static void frame_table_init_frame (struct frame *, id_t);
@@ -38,19 +37,20 @@ frame_table_init (size_t n_frames)
   n_frames -= 10; /* Allow processes to load small executables. TODO TESTING ONLY. */
 
   system_frame_table.n_frames = n_frames;
-  system_frame_table.n_free_entries = system_frame_table.n_frames;
+  system_frame_table.n_free_frames = system_frame_table.n_frames;
   system_frame_table.usage = bitmap_create (system_frame_table.n_frames);
   ASSERT (system_frame_table.usage != NULL);
     
   lock_init (&system_frame_table.usage_lock);
-  /* Allocate entries: list of struct frames. */
-  system_frame_table.entries = malloc (system_frame_table.n_frames * sizeof(struct frame));
-  ASSERT (system_frame_table.entries != NULL);
-  /* Allocate frames: system_frame_table.n_frames contiguous PGSIZE regions. */
-  system_frame_table.frames = palloc_get_multiple (PAL_USER, system_frame_table.n_frames);
+  /* Allocate frames: list of struct frames. */
+  system_frame_table.frames = malloc (system_frame_table.n_frames * sizeof(struct frame));
   ASSERT (system_frame_table.frames != NULL);
+  /* Allocate phys_pages: system_frame_table.n_frames contiguous PGSIZE regions. */
+  system_frame_table.phys_pages = palloc_get_multiple (PAL_USER, system_frame_table.n_frames);
+  ASSERT (system_frame_table.phys_pages != NULL);
 
-  struct frame *frames = (struct frame *) system_frame_table.entries; /* Cleaner than compiler warnings. */
+  /* Initialize each frame. */
+  struct frame *frames = (struct frame *) system_frame_table.frames;
   for (i = 0; i < system_frame_table.n_frames; i++)
     frame_table_init_frame (&frames[i], i);
 
@@ -63,8 +63,8 @@ void
 frame_table_destroy (void)
 {
   bitmap_destroy (system_frame_table.usage); 
-  free (system_frame_table.entries);
-  palloc_free_multiple (system_frame_table.frames, system_frame_table.n_frames);
+  free (system_frame_table.frames);
+  palloc_free_multiple (system_frame_table.phys_pages, system_frame_table.n_frames);
 
   swap_table_destroy ();
 }
@@ -310,7 +310,7 @@ frame_table_get_eviction_victim (void)
 {
 
    uint32_t i;
-   struct frame *frames = (struct frame *) system_frame_table.entries;
+   struct frame *frames = (struct frame *) system_frame_table.frames;
 
    /* Preliminary eviction algorithm: Evict the first frame whose page is not pinned. */
 
@@ -418,7 +418,7 @@ frame_table_init_frame (struct frame *fr, id_t id)
   fr->id = id;
   lock_init (&fr->lock);
   /* frames is contiguous memory, so linear addressing works. */
-  fr->paddr = system_frame_table.frames + id*PGSIZE;
+  fr->paddr = system_frame_table.phys_pages + id*PGSIZE;
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
 }
@@ -456,7 +456,7 @@ frame_table_find_free_frame (void)
   /* Was a free frame found? */
   if (0 <= free_frame && free_frame < system_frame_table.n_frames)
   {
-    struct frame *frames = (struct frame *) system_frame_table.entries;
+    struct frame *frames = (struct frame *) system_frame_table.frames;
     struct frame *fr = &frames[free_frame];
     lock_acquire (&fr->lock);
     return fr;

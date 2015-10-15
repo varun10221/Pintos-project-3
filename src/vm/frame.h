@@ -34,24 +34,20 @@ struct frame
   struct lock lock; /* For mutex. */
 };
 
-/* Frame table and swap table have the same structure. */
-struct frame_swap_table
+/* The global frame table is used to store 
+   pages belonging to a process when it needs to use them. */
+struct frame_table
 {
-  int64_t n_free_entries; /* Number of available entries. Protected by usage_lock. */
+  int64_t n_free_frames; /* Number of available frames. Protected by usage_lock. */
   struct bitmap *usage; /* 0 if available, 1 if in use. */
   struct lock usage_lock; /* For atomic updates to usage. */
 
-  /* Array mapping frame index to corresponding entry. 
-     Frame table: struct frame*
-     Swap table: struct swap_slot* */
-  void *entries;
-
-  /* Frame table allocates frames: X contiguous PGSIZE regions
-     of memory obtained by palloc_get_multiple. */
-  /* TODO This difference is sufficient to require making a separate
-     frame table and swap table definition. Let's do that. */
-  void *frames;
-  uint32_t n_frames;
+  uint32_t n_frames; /* Total number of frames. */
+  struct frame *frames; /* Array of n_frames frames. */
+  /* Array of physical pages: n_frames contiguous PGSIZE regions
+       of memory obtained by palloc_get_multiple. 
+     Each frame refers to one of these physical pages. */
+  void *phys_pages;
 };
 
 /* Basic life cycle. */

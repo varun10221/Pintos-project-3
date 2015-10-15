@@ -9,8 +9,7 @@
 
 /* System swap table. Serves as an extension of the frame table. 
    List of pages that are stored on disk instead of in memory. */
-typedef struct frame_swap_table swap_table_t;
-swap_table_t system_swap_table;
+struct swap_table system_swap_table;
 
 /* DIV_ROUND_UP in case PGSIZE is not evenly divisible by BLOCK_SECTOR_SIZE. 
    Overestimate the number of sectors we need, since we can't share sectors
@@ -60,12 +59,12 @@ swap_table_init (void)
   lock_init (&system_swap_table.usage_lock);
 
   /* Slots. */
-  system_swap_table.entries = (struct swap_slot *) 
+  system_swap_table.slots = (struct swap_slot *) 
                                 malloc (SWAP_TABLE_N_SLOTS 
                                   * sizeof(struct swap_slot));
-  ASSERT (system_swap_table.entries != NULL);
+  ASSERT (system_swap_table.slots != NULL);
 
-  struct swap_slot *slots = (struct swap_slot *) system_swap_table.entries; /* Cleaner than compiler warnings. */
+  struct swap_slot *slots = (struct swap_slot *) system_swap_table.slots; /* Cleaner than compiler warnings. */
   size_t i;
   for (i = 0; i < SWAP_TABLE_N_SLOTS; i++)
     swap_table_init_swap_slot ((struct swap_slot *) &slots[i], i);
@@ -76,7 +75,7 @@ void
 swap_table_destroy (void)
 {
   bitmap_destroy (system_swap_table.usage);
-  free (system_swap_table.entries);
+  free (system_swap_table.slots);
 }
 
 /* Write this page to a free swap slot. Panic if no available slots. 
@@ -99,7 +98,7 @@ swap_table_store_page (struct page *pg)
   lock_release (&system_swap_table.usage_lock);
 
   /* Make sure slot is in a correct state. */
-  struct swap_slot *slots = (struct swap_slot *) system_swap_table.entries; /* Cleaner than compiler warnings. */
+  struct swap_slot *slots = (struct swap_slot *) system_swap_table.slots; /* Cleaner than compiler warnings. */
   struct swap_slot *s = &slots[free_slot];
   ASSERT ((size_t) s->id == free_slot); /* TODO Remove this later. Just initial debugging. */
 
