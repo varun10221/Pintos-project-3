@@ -8,19 +8,18 @@
 
 /* System swap table. Serves as an extension of the frame table. 
    List of pages that are stored on disk instead of in memory. */
-typedef struct frame_swap_table swap_table_t;
 swap_table_t system_swap_table;
 
 /* DIV_ROUND_UP in case PGSIZE is not evenly divisible by BLOCK_SECTOR_SIZE. 
    Overestimate the number of sectors we need, since we can't share sectors
    between two slots. Yes, this is needlessly paranoid. */
 const uint32_t BLOCK_SECTORS_PER_PAGE = DIV_ROUND_UP (PGSIZE, BLOCK_SECTOR_SIZE);
-/*TODO private function API */
+
 /* Globals set in swap_table_init. */
 uint32_t SWAP_TABLE_N_SLOTS = 0;
 struct block *SWAP_BLOCK = NULL;
-/*TODO comment */
-static uint32_t 
+
+static inline uint32_t 
 get_swap_table_n_slots (void)
 { 
   struct block *blk = block_get_role (BLOCK_SWAP);
@@ -36,7 +35,6 @@ swap_table_init_swap_slot (struct swap_slot *slot, id_t id)
   ASSERT (slot != NULL);
 
   slot->id = id;
-  slot->status = SWAP_SLOT_EMPTY;
   slot->pg = NULL;
 }
 
@@ -52,14 +50,16 @@ swap_table_init (void)
   ASSERT (SWAP_BLOCK != NULL);
 
   /* Bitmap. */
+  system_swap_table.n_free_entries = SWAP_TABLE_N_SLOTS;
   system_swap_table.usage = bitmap_create (SWAP_TABLE_N_SLOTS);
   ASSERT (system_swap_table.usage != NULL);
 
   lock_init (&system_swap_table.usage_lock);
 
   /* Slots. */
-  /* TODO malloc */
-  system_swap_table.entries = (struct swap_slot *) calloc (SWAP_TABLE_N_SLOTS, sizeof(struct swap_slot));
+  system_swap_table.entries = (struct swap_slot *) 
+                                malloc (SWAP_TABLE_N_SLOTS 
+                                  * sizeof(struct swap_slot));
   ASSERT (system_swap_table.entries != NULL);
 
   struct swap_slot *slots = (struct swap_slot *) system_swap_table.entries; /* Cleaner than compiler warnings. */
@@ -98,17 +98,15 @@ swap_table_store_page (struct page *pg)
   /* Make sure slot is in a correct state. */
   struct swap_slot *slots = (struct swap_slot *) system_swap_table.entries; /* Cleaner than compiler warnings. */
   struct swap_slot *s = &slots[free_slot];
-  ASSERT (s->status == SWAP_SLOT_EMPTY);
   ASSERT ((size_t) s->id == free_slot); /* TODO Remove this later. Just initial debugging. */
 
   /* Update slot state and contents. */
-  s->status = SWAP_SLOT_OCCUPIED;
   s->pg = pg;
       
   size_t i;
   for (i = 0; i < BLOCK_SECTORS_PER_PAGE; i++)
   {
-     /* TODO: Is this the right invocation for block_write? Need to check on sector zero and frame adress used as buffer. */
+     /* Is this the right invocation for block_write? Need to check on sector zero and frame adress used as buffer. */
      block_write (SWAP_BLOCK, i + free_slot*BLOCK_SECTORS_PER_PAGE, curr_frame->paddr + i*BLOCK_SECTOR_SIZE);
   }
 
@@ -127,7 +125,6 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
 
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
   struct swap_slot *s = (struct swap_slot *) pg->location;
-  ASSERT (s->status == SWAP_SLOT_OCCUPIED);
   ASSERT (s->pg == pg);
 
   /* Read slot into frame. */
@@ -137,7 +134,6 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
 
   /* Wipe the slot. */
   s->pg = NULL;
-  s->status = SWAP_SLOT_EMPTY;
 
   /* Mark slot as available. */
   lock_acquire (&system_swap_table.usage_lock);
@@ -145,8 +141,6 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
   bitmap_set (system_swap_table.usage, s->id, false);
   lock_release (&system_swap_table.usage_lock);
 
-  /* Update page info. */
-  pg->location = fr;
   pg->status = PAGE_RESIDENT;
 } 
 
@@ -159,28 +153,25 @@ swap_table_discard_page (struct page *pg)
   /* Page must be swapped out. */
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
   /* Only the final owner can release a page. */
-  /* TODO change the compare to 0? */
   ASSERT (list_size (&pg->owners) == 1);
 
   ASSERT (pg->location != NULL);
+
   struct swap_slot *s = (struct swap_slot *) pg->location;
 
   /* Page and slot must agree. */
-  ASSERT (s->status == SWAP_SLOT_OCCUPIED);
   ASSERT (pg == s->pg);
 
   /* Wipe the slot. */
   s->pg = NULL;
-  s->status = SWAP_SLOT_EMPTY;
 
   /* Toggle bitmap status. */
   lock_acquire (&system_swap_table.usage_lock);
-  /* TODO assert should match */
   ASSERT (bitmap_test (system_swap_table.usage, s->id) == 1);
   bitmap_flip (system_swap_table.usage, s->id);
   lock_release (&system_swap_table.usage_lock);
 
   /* Update page info. */
-  pg->location = NULL;
   pg->status = PAGE_DISCARDED; 
+  pg->location = NULL;
 }
