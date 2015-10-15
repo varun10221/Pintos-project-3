@@ -14,8 +14,6 @@
 
 #include <bitmap.h>
 
-static const uint32_t FRAME_TABLE_N_FRAMES = ( (uint32_t) PHYS_BASE / PGSIZE);
-
 enum frame_status
 {
   FRAME_EMPTY, /* There is no page occupying this frame. */
@@ -47,10 +45,17 @@ struct frame_swap_table
      Frame table: struct frame*
      Swap table: struct swap_slot* */
   void *entries;
+
+  /* Frame table allocates frames: X contiguous PGSIZE regions
+     of memory obtained by palloc_get_multiple. */
+  /* TODO This difference is sufficient to require making a separate
+     frame table and swap table definition. Let's do that. */
+  void *frames;
+  uint32_t n_frames;
 };
 
 /* Basic life cycle. */
-void frame_table_init (void);
+void frame_table_init (size_t);
 void frame_table_destroy (void);
 
 /* Storing and releasing pages. */

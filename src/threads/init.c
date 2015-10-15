@@ -102,7 +102,8 @@ main (void)
           init_ram_pages * PGSIZE / 1024);
 
   /* Initialize memory system. */
-  palloc_init (user_page_limit);
+  size_t n_user, n_kernel;
+  palloc_init (user_page_limit, &n_user, &n_kernel);
   malloc_init ();
   paging_init ();
 
@@ -111,10 +112,6 @@ main (void)
   tss_init ();
   gdt_init ();
 #endif
-
-  /* Initialize virtual memory system. */
-  frame_table_init ();
-  ro_shared_mappings_table_init ();
 
   /* Initialize interrupt handlers. */
   intr_init ();
@@ -140,6 +137,12 @@ main (void)
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
+
+  /* Initialize virtual memory system. 
+     Must come after initializing block devices
+     so that we can init the swap table (done by frame_table_init). */
+  frame_table_init (n_user);
+  ro_shared_mappings_table_init ();
 
   printf ("Boot complete.\n");
   

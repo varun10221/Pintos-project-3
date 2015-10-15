@@ -32,20 +32,26 @@ static void frame_table_read_mmap_page_from_file (struct frame *);
 
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
-frame_table_init (void)
+frame_table_init (size_t n_frames)
 {
   size_t i;
+  n_frames -= 10; /* Allow processes to load small executables. TODO TESTING ONLY. */
 
-  system_frame_table.n_free_entries = FRAME_TABLE_N_FRAMES;
-  system_frame_table.usage = bitmap_create (FRAME_TABLE_N_FRAMES);
+  system_frame_table.n_frames = n_frames;
+  system_frame_table.n_free_entries = system_frame_table.n_frames;
+  system_frame_table.usage = bitmap_create (system_frame_table.n_frames);
   ASSERT (system_frame_table.usage != NULL);
     
   lock_init (&system_frame_table.usage_lock);
-  system_frame_table.entries = malloc (FRAME_TABLE_N_FRAMES * sizeof(struct frame));
+  /* Allocate entries: list of struct frames. */
+  system_frame_table.entries = malloc (system_frame_table.n_frames * sizeof(struct frame));
   ASSERT (system_frame_table.entries != NULL);
+  /* Allocate frames: system_frame_table.n_frames contiguous PGSIZE regions. */
+  system_frame_table.frames = palloc_get_multiple (PAL_USER, system_frame_table.n_frames);
+  ASSERT (system_frame_table.frames != NULL);
 
   struct frame *frames = (struct frame *) system_frame_table.entries; /* Cleaner than compiler warnings. */
-  for (i = 0; i < FRAME_TABLE_N_FRAMES; i++)
+  for (i = 0; i < system_frame_table.n_frames; i++)
     frame_table_init_frame (&frames[i], i);
 
   /* Initialize the swap table: the ST is the FT's dirty little secret. */
@@ -58,6 +64,7 @@ frame_table_destroy (void)
 {
   bitmap_destroy (system_frame_table.usage); 
   free (system_frame_table.entries);
+  palloc_free_multiple (system_frame_table.frames, system_frame_table.n_frames);
 
   swap_table_destroy ();
 }
@@ -313,7 +320,7 @@ frame_table_get_eviction_victim (void)
    int counter;
    for (counter = 0; counter < 5; counter++)
    {
-     for (i = 0; i <  FRAME_TABLE_N_FRAMES ; i++)
+     for (i = 0; i <  system_frame_table.n_frames ; i++)
      {
        /* Optimistic search: search without locks, then lock to verify that it's valid. */
        if (frames[i].status != FRAME_PINNED )
@@ -410,6 +417,8 @@ frame_table_init_frame (struct frame *fr, id_t id)
 
   fr->id = id;
   lock_init (&fr->lock);
+  /* frames is contiguous memory, so linear addressing works. */
+  fr->paddr = system_frame_table.frames + id*PGSIZE;
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
 }
@@ -445,7 +454,7 @@ frame_table_find_free_frame (void)
   lock_release (&system_frame_table.usage_lock);
 
   /* Was a free frame found? */
-  if (0 <= free_frame && free_frame < FRAME_TABLE_N_FRAMES)
+  if (0 <= free_frame && free_frame < system_frame_table.n_frames)
   {
     struct frame *frames = (struct frame *) system_frame_table.entries;
     struct frame *fr = &frames[free_frame];

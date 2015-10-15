@@ -12,7 +12,7 @@ enum palloc_flags
     PAL_NOCACHE = 0x8           /* Disable memory caching for page. */
   };
 
-void palloc_init (size_t user_page_limit);
+void palloc_init (size_t user_page_limit, size_t *, size_t *);
 void *palloc_get_page (enum palloc_flags);
 void *palloc_get_multiple (enum palloc_flags, size_t page_cnt);
 void palloc_free_page (void *);

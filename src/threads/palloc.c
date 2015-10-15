@@ -36,15 +36,19 @@ struct pool
 /* Two pools: one for kernel data, one for user pages. */
 static struct pool kernel_pool, user_pool;
 
-static void init_pool (struct pool *, void *base, size_t page_cnt,
+static size_t init_pool (struct pool *, void *base, size_t page_cnt,
                        const char *name);
 static bool page_from_pool (const struct pool *, void *page);
 
 /* Initializes the page allocator.  At most USER_PAGE_LIMIT
-   pages are put into the user pool. */
+   pages are put into the user pool. 
+   Sets N_USER and N_KERNEL for the caller. */
 void
-palloc_init (size_t user_page_limit)
+palloc_init (size_t user_page_limit, size_t *n_user, size_t *n_kernel)
 {
+  ASSERT (n_user != NULL);
+  ASSERT (n_kernel != NULL);
+
   /* Free memory starts at 1 MB and runs to the end of RAM. */
   uint8_t *free_start = ptov (1024 * 1024);
   uint8_t *free_end = ptov (init_ram_pages * PGSIZE);
@@ -56,8 +60,8 @@ palloc_init (size_t user_page_limit)
   kernel_pages = free_pages - user_pages;
 
   /* Give half of memory to kernel, half to user. */
-  init_pool (&kernel_pool, free_start, kernel_pages, "kernel pool");
-  init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
+  *n_kernel = init_pool (&kernel_pool, free_start, kernel_pages, "kernel pool");
+  *n_user = init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
              user_pages, "user pool");
 }
 
@@ -149,8 +153,9 @@ palloc_free_page (void *page)
 }
 
 /* Initializes pool P as starting at START and ending at END,
-   naming it NAME for debugging purposes. */
-static void
+   naming it NAME for debugging purposes. 
+   Returns the number of pages that can be allocated from P. */
+static size_t
 init_pool (struct pool *p, void *base, size_t page_cnt, const char *name) 
 {
   /* We'll put the pool's used_map at its base.
@@ -167,6 +172,8 @@ init_pool (struct pool *p, void *base, size_t page_cnt, const char *name)
   lock_init (&p->lock);
   p->used_map = bitmap_create_in_buf (page_cnt, base, bm_pages * PGSIZE);
   p->base = base + bm_pages * PGSIZE;
+
+  return page_cnt;
 }
 
 /* Returns true if PAGE was allocated from POOL,
