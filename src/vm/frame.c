@@ -348,15 +348,38 @@ frame_table_init_frame (struct frame *fr, id_t id)
 }
 
 /* Allocate a frame for a page. 
- *
+
    Locate a free frame, mark it as used, lock it, and return it.
+   May have to evict a page to obtain a free frame.
+   If no free or evict-able frames are available, returns null. */
+static struct frame * 
+frame_table_obtain_locked_frame (void)
+{
+  struct frame *fr = frame_table_find_free_frame ();
+  if (fr == NULL)
+    fr = frame_table_make_free_frame ();
+
+  return fr;
+}
+
+/* Searches the system frame table and retrieves a free locked frame. 
+   Returns NULL if no free frames are available (necessitates eviction). */
+static struct frame *
+frame_table_find_free_frame (void)
+{ 
+  /* Do a bit map scan and retrieve the first free frame. */
+  lock_acquire (&system_frame_table.usage_lock);
+  size_t free_frame = bitmap_scan (system_frame_table.usage,0,1,false); 
   lock_release (&system_frame_table.usage_lock);
 
   /* Was a free frame found? */
   if (0 <= free_frame && free_frame < FRAME_TABLE_N_FRAMES)
   {
     struct frame *frames = (struct frame *) system_frame_table.entries;
-    return &frames[free_frame];
+    struct frame *fr = &frames[free_frame];
+    lock_acquire (&fr->lock);
+    return fr;
   }
+
   return NULL;
 }
