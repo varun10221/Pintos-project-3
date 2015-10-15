@@ -85,7 +85,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
+#include <"threads/thread.h">
 /* List element. */
 struct list_elem 
   {
@@ -186,6 +186,9 @@ void list_unique (struct list *, struct list *duplicates,
                   list_less_func *, void *aux);
 bool list_contains (struct list *, struct list_elem *,
                     list_less_func *, void *aux);
+
+/*operation on lists for all elements */
+void list_for_each (struct list * , void *);
 
 /* Max and min. */
 struct list_elem *list_max (struct list *, list_less_func *, void *aux);

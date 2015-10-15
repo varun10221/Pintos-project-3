@@ -608,3 +608,17 @@ list_min (struct list *list, list_less_func *less, void *aux)
     }
   return min;
 }
+
+/*
+
+void
+list_for_each (struct list * any_list , void *func)
+{
+  struct list_elem * e;
+  for (e = list_begin (any_list); e != list_end (any_list);                          e = list_next (e))
+     {
+       struct thread *t = list_entry (e, struct thread, allelem);
+       func (t, aux);
+      }
+}
+*/
