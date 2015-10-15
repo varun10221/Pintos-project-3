@@ -276,7 +276,9 @@ supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *
   ASSERT (spt != NULL);
   ASSERT (f != NULL);
 
-  void *end = (void *) ((uint32_t) start + file_length (f));
+  /* Round end up to the next page. */
+  uint32_t end_exact = ((uint32_t) start + file_length (f));
+  void *end = (void *) ROUND_UP (end_exact, PGSIZE);
   if (!supp_page_table_is_range_valid (spt, start, end))
     return NULL;
 
@@ -383,9 +385,8 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *
   {
     seg = list_entry (e, struct segment, elem);
     ASSERT (seg != NULL);
-    /* We don't overlap if: segment ends before we begin, or we end before segment begins. 
-       TODO <= because end is not actually IN the segment? */
-    bool does_not_overlap = ((uint32_t) seg->end < start_addr || end_addr < (uint32_t) seg->start);
+    /* We don't overlap if: segment ends before we begin, or we end before segment begins. */
+    bool does_not_overlap = ((uint32_t) seg->end <= start_addr || end_addr <= (uint32_t) seg->start);
     if (does_not_overlap)
       continue;
     else
@@ -403,6 +404,8 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
   ASSERT (seg != NULL);
 
   ASSERT ((uint32_t) start < (uint32_t) end);
+  ASSERT ((uint32_t) start % PGSIZE == 0); 
+  ASSERT ((uint32_t) end % PGSIZE == 0); 
 
   seg->start = start;
   seg->end = end;
