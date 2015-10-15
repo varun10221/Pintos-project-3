@@ -21,6 +21,7 @@
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
 #include "vm/page.h"
+#include "vm/frame.h"
 
 /* Structure for command-line args. */
 struct cl_args
@@ -1061,7 +1062,8 @@ void process_pin_page (struct page *pg)
 void process_unpin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
-  return frame_table_unpin_page (pg);
+  frame_table_unpin_page (pg);
+  return;
 }
 
 /* Remove all extant mappings from the mmap_table and free the memory.

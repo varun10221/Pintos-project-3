@@ -621,7 +621,7 @@ segment_calc_vaddr (struct segment *seg, int32_t relative_page_num)
 {
   ASSERT (seg != NULL);
 
-  uint32_t max_page_num = (seg->end - seg->start) / PGSIZE;
+  int32_t max_page_num = (seg->end - seg->start) / PGSIZE;
   ASSERT (relative_page_num < max_page_num);
 
   /* Just like in segment_calc_page_num: 
@@ -629,12 +629,12 @@ segment_calc_vaddr (struct segment *seg, int32_t relative_page_num)
        - calculate based on seg->start or seg->end as appropriate */
   bool segment_grows_up = (seg->end < PHYS_BASE ? true : false);
 
-  uint32_t page_addr;
+  void * page_addr;
   if (segment_grows_up)
     page_addr = seg->start + relative_page_num*PGSIZE;
   else
     page_addr = seg->end - (relative_page_num + 1)*PGSIZE;
-  return (void *) page_addr;
+  return page_addr;
 }
 
 /* Segment list_less_func. */
