@@ -29,7 +29,8 @@ static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct frame *);
 static void frame_table_read_mmap_page_from_file (struct frame *);
-static void frame_table_update_page_owner_info (struct page *,struct frame *);     
+static void frame_table_update_page_owner_info (struct page *,struct frame *);  static void frame_table_clear_page_owner_page_info (struct page *, struct frame *);   
+
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
 frame_table_init (size_t n_frames)
@@ -88,17 +89,17 @@ frame_table_store_page (struct page *pg)
     PANIC ("frame_table_store_page: Could not allocate a frame."); 
   ASSERT (lock_held_by_current_thread (&fr->lock));
 
-  /* TODO Load page contents into frame (swap in, zero out frame, mmap in, etc. depending on pg->status). */
+  /*  Loading page contents into frame (swap in, zero out frame, mmap in, etc. depending on pg->status). */
 
-/*TODO add a condition for never accessed */
 
   /* To check if its an mmap file */
    if (pg->status == PAGE_IN_FILE)
       frame_table_read_mmap_page_from_file (fr);
-   
+  /*To check if the page is in swap */ 
    else if (pg->status = PAGE_SWAPPED_OUT)
       swap_table_retrieve_page (pg , fr);
    
+  /* Create a zeroed page for stack _growth */
    else if (pg->status = PAGE_STACK_NEVER_ACCESSED)
       memset (fr->paddr, 0 , PGSIZE);
   
@@ -112,7 +113,7 @@ frame_table_store_page (struct page *pg)
   pg->location = fr;
   pg->status = PAGE_RESIDENT;
 
-  /* TODO Update the page directory of each owner. */
+  /* Update the page directory of each owner. */
   frame_table_update_page_owner_info (pg,fr);     
   
   // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
@@ -180,8 +181,9 @@ frame_table_release_page (struct page *pg)
   lock_release (&system_frame_table.usage_lock);
 }
 
-/* TODO writes the frames pg back to mmap file in the disk */
-/* TODO Document this API. Is the frame locked? Is the page locked? etc. */
+/*  Writes the locked frame  and locked pg back to mmap file in the disk */
+/*  Checks if the page is last, in which case it writes the content size in last page */
+/*  Else it will write in page_sizes */
 static void
 frame_table_write_mmap_page_to_file (struct frame *fr)
 {
@@ -218,7 +220,7 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
 }
 
 /* Read the mmap page from file in to the frame */
-/*Requires that both page and frame are locked */
+/*Requires that both page and frame to be locked */
 static void
 frame_table_read_mmap_page_from_file (struct frame *fr)
 {
@@ -275,7 +277,7 @@ frame_table_pin_page (struct page *pg)
        
   struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
-  /* TODO valid assert? Or can it be FRAME_PINNED? */
+  /*  Assuming frame can only be occupied and not FRAME_PINNED or FRAME_EMPTY */
   ASSERT (fr->status == FRAME_OCCUPIED);
   /* Change the frame_status to pinned. */
   fr->status = FRAME_PINNED; 
@@ -400,14 +402,16 @@ frame_table_evict_page_from_frame (struct frame *fr)
     /* TODO Need to check EVERY owner's pagedir. Review
        4.1.5.1 Accessed and Dirty Bits. */
     bool page_dirty = false;
-    struct page_owner_info *poi = list_entry (list_front (&pg->owners),
+    /*struct page_owner_info *poi = list_entry (list_front (&pg->owners),
                                               struct page_owner_info, elem);
     
-    if (pagedir_is_dirty (poi->owner->pagedir, fr->paddr)) /* TODO It must be vaddress for pagedir */   
+    if (pagedir_is_dirty (poi->owner->pagedir, fr->paddr)) * TODO It must be vaddress for pagedir *   
     {
       page_dirty = true;
-    }
-
+    }*/
+    
+    page_dirty = frame_table_check_page_owner_is_page_dirty (pg, fr);
+    
     if (page_dirty)
       frame_table_write_mmap_page_to_file (fr);
   }  
@@ -491,12 +495,25 @@ frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
   for (e = list_begin (&pg->owners); e = list_end (&pg->owners);
        e =  list_next (e))
       {
-        struct page_owner_info * poi = list_entry (e, struct page_owner_info,            elem);
-         pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
+        struct page_owner_info * poi = list_entry (e, struct page_owner_info, elem);
+         pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);    /* TODO keeping writable true in pagedir_set_page */
         }
 }
     
 
+static void
+frame_table_clear_page_owner_page_info (struct page *pg, struct frame *fr)
+{
+  struct list_elem *e;
+  for (e = list_begin (&pg->owners); e = list_end (&pg->owners);
+       e =  list_next (e))
+      {
+        struct page_owner_info * poi = list_entry (e, struct page_owner_info, elem);            
+        pagedir_clear_page (poi->owner->pagedir ,pg);
+
+
+       }
+}
 
 
 
