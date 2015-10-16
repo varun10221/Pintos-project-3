@@ -28,7 +28,7 @@ static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct frame *);
-static void frame_table_read_mmap_page_from_file (struct frame *);
+static void frame_table_read_mmap_page_from_file (struct page *, struct frame *);
 static void frame_table_update_page_owner_info (struct page *,struct frame *);     
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
@@ -94,7 +94,7 @@ frame_table_store_page (struct page *pg)
 
   /* To check if its an mmap file */
    if (pg->status == PAGE_IN_FILE)
-      frame_table_read_mmap_page_from_file (fr);
+      frame_table_read_mmap_page_from_file (pg, fr);
    
    else if (pg->status = PAGE_SWAPPED_OUT)
       swap_table_retrieve_page (pg , fr);
@@ -103,7 +103,6 @@ frame_table_store_page (struct page *pg)
       memset (fr->paddr, 0 , PGSIZE);
   
    else PANIC ("invalid page state for store_frame"); 
-
   
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
@@ -113,7 +112,7 @@ frame_table_store_page (struct page *pg)
   pg->status = PAGE_RESIDENT;
 
   /* TODO Update the page directory of each owner. */
-  frame_table_update_page_owner_info (pg,fr);     
+  frame_table_update_page_owner_info (pg, fr);     
   
   // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
   /* Page safely in frame. */
@@ -220,12 +219,10 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
 /* Read the mmap page from file in to the frame */
 /*Requires that both page and frame are locked */
 static void
-frame_table_read_mmap_page_from_file (struct frame *fr)
+frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
 {
+  ASSERT (pg != NULL);
   ASSERT (fr != NULL);
-  ASSERT (fr->pg != NULL);
-
-  struct page *pg = fr->pg;
 
   /* Find the length of the mmap file */
   size_t file_len = file_length (pg->smi->mmap_file);
