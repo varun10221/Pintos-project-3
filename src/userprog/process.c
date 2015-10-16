@@ -897,6 +897,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
+#ifdef VM
+  *esp = PHYS_BASE;
+  return true;
+#else
   uint8_t *kpage;
   bool success = false;
 
@@ -910,6 +914,7 @@ setup_stack (void **esp)
         palloc_free_page (kpage);
     }
   return success;
+#endif
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
