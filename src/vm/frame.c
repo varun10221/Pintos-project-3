@@ -28,9 +28,14 @@ static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
 static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct frame *);
+<<<<<<< HEAD
 static void frame_table_read_mmap_page_from_file (struct frame *);
 static void frame_table_update_page_owner_info (struct page *,struct frame *);  static void frame_table_clear_page_owner_page_info (struct page *, struct frame *);   
 
+=======
+static void frame_table_read_mmap_page_from_file (struct page *, struct frame *);
+static void frame_table_update_page_owner_info (struct page *,struct frame *);     
+>>>>>>> 2810824af7d7b3a8244d2e622ebd1d88491a1559
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
 frame_table_init (size_t n_frames)
@@ -94,8 +99,13 @@ frame_table_store_page (struct page *pg)
 
   /* To check if its an mmap file */
    if (pg->status == PAGE_IN_FILE)
+<<<<<<< HEAD
       frame_table_read_mmap_page_from_file (fr);
   /*To check if the page is in swap */ 
+=======
+      frame_table_read_mmap_page_from_file (pg, fr);
+   
+>>>>>>> 2810824af7d7b3a8244d2e622ebd1d88491a1559
    else if (pg->status = PAGE_SWAPPED_OUT)
       swap_table_retrieve_page (pg , fr);
    
@@ -104,7 +114,6 @@ frame_table_store_page (struct page *pg)
       memset (fr->paddr, 0 , PGSIZE);
   
    else PANIC ("invalid page state for store_frame"); 
-
   
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
@@ -113,8 +122,13 @@ frame_table_store_page (struct page *pg)
   pg->location = fr;
   pg->status = PAGE_RESIDENT;
 
+<<<<<<< HEAD
   /* Update the page directory of each owner. */
   frame_table_update_page_owner_info (pg,fr);     
+=======
+  /* TODO Update the page directory of each owner. */
+  frame_table_update_page_owner_info (pg, fr);     
+>>>>>>> 2810824af7d7b3a8244d2e622ebd1d88491a1559
   
   // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
   /* Page safely in frame. */
@@ -222,12 +236,10 @@ frame_table_write_mmap_page_to_file (struct frame *fr)
 /* Read the mmap page from file in to the frame */
 /*Requires that both page and frame to be locked */
 static void
-frame_table_read_mmap_page_from_file (struct frame *fr)
+frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
 {
+  ASSERT (pg != NULL);
   ASSERT (fr != NULL);
-  ASSERT (fr->pg != NULL);
-
-  struct page *pg = fr->pg;
 
   /* Find the length of the mmap file */
   size_t file_len = file_length (pg->smi->mmap_file);
@@ -492,12 +504,19 @@ static void
 frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
 {
   struct list_elem *e;
-  for (e = list_begin (&pg->owners); e = list_end (&pg->owners);
+  for (e = list_begin (&pg->owners); e != list_end (&pg->owners);
        e =  list_next (e))
       {
+<<<<<<< HEAD
         struct page_owner_info * poi = list_entry (e, struct page_owner_info, elem);
          pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);    /* TODO keeping writable true in pagedir_set_page */
         }
+=======
+        struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
+        /* TODO pagedir doesn't want a 'struct pg *', it wants the user address. You almost certainly want vpg_addr in the poi, but double-check that this is set properly. */
+        pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
+      }
+>>>>>>> 2810824af7d7b3a8244d2e622ebd1d88491a1559
 }
     
 

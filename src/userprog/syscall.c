@@ -123,6 +123,10 @@ syscall_handler (struct intr_frame *f)
   thr->vm_esp = f->esp;
   thr->is_handling_syscall = true;
 
+  /* TODO Same thinking as below, do we need to be this careful
+     now or can we just make sure sp is below PHYS_BASE and
+     let page_fault deal with it?  */
+
   /* Identify syscall. */
   int32_t syscall;
   if (!pop_int32_t_from_user_stack (&syscall, &sp))
@@ -140,6 +144,12 @@ syscall_handler (struct intr_frame *f)
       syscall_exit (-1);
   }
 
+/* Remove this testing for now. I think we don't need to
+   worry about it -- if the reference memory is not resident,
+   we'll page fault and look for its page.
+   If no page, it's an invalid access and we can terminate the caller
+   in page_fault itself. */
+#if 0
   /* For those syscalls that evaluate a user-provided address,
      test here for safety. This allows us to centralize the error handling
      and lets us simplify the syscall_* routines. 
@@ -227,6 +237,7 @@ syscall_handler (struct intr_frame *f)
       args[0] = -1;
     }
   } /* End of user-provided address handling. */
+#endif
 
   /* Ready to handle whatever syscall they requested. */
   switch (syscall)
