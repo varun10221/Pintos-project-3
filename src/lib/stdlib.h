@@ -3,19 +3,31 @@
 
 #include <stddef.h>
 
+/* Some math routines. */
+
+/* Various flavors of absolute value. */
 static inline int abs (int j)
 {
   return ( 0 < j ? j : -1*j);
 }
+
 static inline long int labs (long int j)
 {
   return ( 0 < j ? j : -1*j);
 }
+
 static inline long long int llabs (long long int j)
 {
   return ( 0 < j ? j : -1*j);
 }
 
+/* Return the min of X and Y. */
+#define MIN(X, Y) \
+        ((X) < (Y) ? (X) : (Y))
+
+/* Return the max of X and Y. */
+#define MAX(X, Y) \
+        ((X) < (Y) ? (Y) : (X))
 
 /* Standard functions. */
 int atoi (const char *);
