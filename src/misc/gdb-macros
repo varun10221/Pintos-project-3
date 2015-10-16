@@ -115,6 +115,8 @@ define hook-stop
         else
             # if this was in kernel mode, a stack trace might be useful
             printf "pintos-debug: a page fault occurred in kernel mode\n"
+            printf "pintos-debug: hit 'c' to continue, or 's' to step to intr_handler\n"
+            printf "pintos-debug: backtrace:\n"
             btpagefault
         end
     end

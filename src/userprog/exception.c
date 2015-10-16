@@ -157,12 +157,14 @@ page_fault (struct intr_frame *f)
      to communicate to syscall.c::get_user, put_user. 
      
      TODO In P3 could be stack growth. See below. */
+#ifndef VM
   if (!user)
   {
     f->eip = (void *) f->eax;
     f->eax = 0xffffffff;
     return;
   }
+#endif
 
   /* TODO Correctly determine if this was stack growth HERE, not in process_page_table_find_page. 
      In this case, call process_page_table_grow_stack and then call find_page. 
