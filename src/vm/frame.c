@@ -247,6 +247,10 @@ frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
   file_read_at (pg->smi->mmap_file, fr->paddr, size,
                              (pg->segment_page)*PGSIZE);
   filesys_unlock ();
+
+  /* If we didn't read a full page, zero out the rest. */
+  memset(fr->paddr + size, 0, PGSIZE - size);
+
   pg->status = PAGE_RESIDENT;
   pg->location = fr->paddr;
 }
