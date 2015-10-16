@@ -485,12 +485,13 @@ static void
 frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
 {
   struct list_elem *e;
-  for (e = list_begin (&pg->owners); e = list_end (&pg->owners);
+  for (e = list_begin (&pg->owners); e != list_end (&pg->owners);
        e =  list_next (e))
       {
-        struct page_owner_info * poi = list_entry (e, struct page_owner_info,            elem);
-         pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
-        }
+        struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
+        /* TODO pagedir doesn't want a 'struct pg *', it wants the user address. You almost certainly want vpg_addr in the poi, but double-check that this is set properly. */
+        pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
+      }
 }
     
 
