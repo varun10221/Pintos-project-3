@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <debug.h>
 #include <list.h>
+#include <string.h>
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "vm/swap.h"
@@ -96,10 +97,10 @@ frame_table_store_page (struct page *pg)
    if (pg->status == PAGE_IN_FILE)
       frame_table_read_mmap_page_from_file (pg, fr);
    
-   else if (pg->status = PAGE_SWAPPED_OUT)
+   else if (pg->status == PAGE_SWAPPED_OUT)
       swap_table_retrieve_page (pg , fr);
    
-   else if (pg->status = PAGE_STACK_NEVER_ACCESSED)
+   else if (pg->status == PAGE_STACK_NEVER_ACCESSED)
       memset (fr->paddr, 0 , PGSIZE);
   
    else PANIC ("invalid page state for store_frame"); 
@@ -111,12 +112,9 @@ frame_table_store_page (struct page *pg)
   pg->location = fr;
   pg->status = PAGE_RESIDENT;
 
-  /* TODO Update the page directory of each owner. */
   frame_table_update_page_owner_info (pg, fr);     
-  
-  // pagedir_set_page (pd ,pg, fr,  true), is it evn a correct function?;
-  /* Page safely in frame. */
 
+  /* Page safely in frame. */
   lock_release (&fr->lock);
 }
 
@@ -489,8 +487,7 @@ frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
        e =  list_next (e))
       {
         struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
-        /* TODO pagedir doesn't want a 'struct pg *', it wants the user address. You almost certainly want vpg_addr in the poi, but double-check that this is set properly. */
-        pagedir_set_page (poi->owner->pagedir, pg, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
+        pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, fr->paddr, true);                /* TODO keeping writable true in pagedir_set_page */
       }
 }
     
