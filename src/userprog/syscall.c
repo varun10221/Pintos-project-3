@@ -359,7 +359,8 @@ syscall_wait (pid_t pid)
 static bool 
 syscall_create (const char *file, unsigned initial_size)
 {
-  ASSERT (file != NULL);
+  if (file == NULL)
+    return -1;
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
   char *sp = (char *) process_scratch_page_get ();
@@ -380,7 +381,8 @@ syscall_create (const char *file, unsigned initial_size)
 static bool 
 syscall_remove (const char *file)
 {
-  ASSERT (file != NULL);
+  if (file == NULL)
+    return -1;
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
   char *sp = (char *) process_scratch_page_get ();
@@ -404,7 +406,8 @@ syscall_remove (const char *file)
 static int 
 syscall_open (const char *file)
 {
-  ASSERT (file != NULL);
+  if (file == NULL)
+    return -1;
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
   char *sp = (char *) process_scratch_page_get ();
