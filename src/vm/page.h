@@ -166,4 +166,9 @@ void supp_page_table_grow_stack (struct supp_page_table *, int);
 struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 
+/* Some page APIs for use by frame. */
+void page_clear_owners_pagedir (struct page *);
+void page_update_owners_pagedir (struct page *, void *);
+bool page_unset_dirty (struct page *);
+
 #endif /* vm/page.h */

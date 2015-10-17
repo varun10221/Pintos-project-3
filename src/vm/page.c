@@ -12,6 +12,7 @@
 #include "filesys/inode.h"
 #include "filesys/filesys.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 
 #include "vm/frame.h"
 #include "vm/swap.h"
@@ -49,6 +50,10 @@ static unsigned page_hash_func (const struct hash_elem *, void *);
 static bool page_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
 static bool page_remove_owner (struct page *, struct segment *);
 static bool page_add_owner (struct page *, struct segment *);
+
+static void page_clear_owners_pagedir_list_action_func (struct list_elem *, void *);
+static void page_update_owners_pagedir_list_action_func (struct list_elem *, void *);
+static void page_unset_dirty_list_action_func (struct list_elem *, void *);
 
 /* Shared mappings. */
 static struct shared_mappings * shared_mappings_create (struct file *, int);
@@ -921,6 +926,86 @@ shared_mappings_hash_less_func (const struct hash_elem *a, const struct hash_ele
   
   /* KISS. */
   return shared_mappings_hash_func (a, aux) < shared_mappings_hash_func (b, aux);
+}
+
+/* Clear the pagedir entry for PG for each of its owners: PG is no longer resident in memory.
+   PG must be locked. */
+void 
+page_clear_owners_pagedir (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
+
+  list_apply (&pg->owners, page_clear_owners_pagedir_list_action_func, NULL);
+}
+
+/* Returns true if PG is dirty, false else. 
+   Marks PAGE as clean for all owners. 
+   PG must be locked. */
+bool 
+page_unset_dirty (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
+
+  bool was_dirty = false;
+  list_apply (&pg->owners, page_unset_dirty_list_action_func, &was_dirty);
+  return was_dirty;
+}
+
+/* Update the pagedir of each owner: PG now resides at PADDR.
+   PG must be locked. */
+void
+page_update_owners_pagedir (struct page *pg, void *paddr)
+{
+  ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
+  list_apply (&pg->owners, page_update_owners_pagedir_list_action_func, paddr);
+}
+
+/* Clear the pagedir of this element of a page's owners list. 
+   Helper for page_clear_owners_pagedir. */
+static void
+page_clear_owners_pagedir_list_action_func (struct list_elem *e, void *aux)
+{
+  ASSERT (e != NULL);
+
+  struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
+  pagedir_clear_page (poi->owner->pagedir, poi->vpg_addr);
+}
+
+/* Mark the pagedir of this element of a page's owners list as clean.
+   AUX is a pointer to a bool. If pagedir was dirty, set AUX to true.
+   Helper for page_unset_dirty . */
+static void 
+page_unset_dirty_list_action_func (struct list_elem *e, void *aux)
+{
+  ASSERT (e != NULL);
+  ASSERT (aux != NULL);
+
+  bool *global_is_dirty = (bool *) aux;
+
+  struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
+  /* Get and then wipe the is_dirty status. */
+  bool local_is_dirty = pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr);
+  pagedir_set_dirty (poi->owner->pagedir, poi->vpg_addr, false);
+
+  if (local_is_dirty)
+    *global_is_dirty = true;
+}
+
+/* Set the mapping in the pagedir of this element of a page's owners list to AUX.
+   Helper for page_update_owners_pagedir. */
+static void 
+page_update_owners_pagedir_list_action_func (struct list_elem *e, void *aux)
+{
+  ASSERT (e != NULL);
+  ASSERT (aux != NULL);
+
+  void *paddr = aux;
+  struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
+  /* TODO Check whether or not it should be writable. */
+  pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, paddr, true);
 }
 
 /*
