@@ -548,6 +548,8 @@ process_exit (void)
 
   /* Done with our scratch page, if we allocated one. */
   process_scratch_page_free ();
+  /* Done with our SPT. */
+  process_page_table_destroy ();
 
   /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. 
      Only announce if we were a valid thread. */
@@ -1087,9 +1089,17 @@ void process_mmap_remove_all (void)
 /* Page table interaction functions. */
 
 /* Initialize this process's supplemental page table. */
-void process_page_table_init (void)
+void 
+process_page_table_init (void)
 {
   supp_page_table_init (&thread_current ()->supp_page_table);
+}
+
+/* Destroy this process's supplemental page table. */
+void 
+process_page_table_destroy (void)
+{
+  supp_page_table_destroy (&thread_current ()->supp_page_table);
 }
 
 /* Return the appropriate page from supplemental page table,
