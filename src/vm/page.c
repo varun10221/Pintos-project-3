@@ -686,7 +686,6 @@ page_create (struct segment_mapping_info *smi, int32_t segment_page)
 
   list_init (&pg->owners);
   pg->location = NULL;
-  pg->stamp = 0;
   pg->smi = smi;
   pg->segment_page = segment_page;
   lock_init (&pg->lock);
