@@ -1026,7 +1026,8 @@ process_close_all_files (void)
 /* Add an entry for this mmap_info in the process's mmap_table. 
  
    Returns mapid, or -1 on failure. */ 
-mapid_t process_mmap_add (struct mmap_info *mmap_info)
+mapid_t 
+process_mmap_add (struct mmap_info *mmap_info)
 {
   ASSERT (mmap_info != NULL);
 
@@ -1035,7 +1036,8 @@ mapid_t process_mmap_add (struct mmap_info *mmap_info)
 
 /* Remove this mapping. 
    Caller is responsible for freeing the memory associated with it. */
-void process_mmap_remove (mapid_t id)
+void 
+process_mmap_remove (mapid_t id)
 {
   ASSERT (0 <= id); 
   vector_delete_elt (&thread_current ()->mmap_table, id);
@@ -1043,7 +1045,8 @@ void process_mmap_remove (mapid_t id)
 
 /* Find the struct file* associated with this id. 
    Returns NULL if no mapping. */
-struct mmap_info * process_mmap_lookup (mapid_t id)
+struct mmap_info * 
+process_mmap_lookup (mapid_t id)
 {
   ASSERT (0 <= id); 
 
@@ -1063,14 +1066,16 @@ process_mmap_destroy_mapping (void *elt, void *aux UNUSED)
 }
 
 /* Pin this page to the frame table. */
-void process_pin_page (struct page *pg)
+void 
+process_pin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
   return frame_table_pin_page (pg);
 }
 
 /* Unpin this page in the frame table. */
-void process_unpin_page (struct page *pg)
+void 
+process_unpin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
   frame_table_unpin_page (pg);
@@ -1079,7 +1084,8 @@ void process_unpin_page (struct page *pg)
 
 /* Remove all extant mappings from the mmap_table and free the memory.
    Use when a process is exiting. */
-void process_mmap_remove_all (void)
+void 
+process_mmap_remove_all (void)
 {
   struct vector *vec = &thread_current ()->mmap_table;
   vector_foreach (vec, process_mmap_destroy_mapping, NULL);
@@ -1104,14 +1110,16 @@ process_page_table_destroy (void)
 
 /* Return the appropriate page from supplemental page table,
      or NULL if no such page is defined. */
-struct page * process_page_table_find_page (void *vaddr)
+struct page *
+process_page_table_find_page (void *vaddr)
 {
   return supp_page_table_find_page (&thread_current ()->supp_page_table, vaddr); 
 }
 
 /* Grow the stack. Called by page_fault when it looks like the 
    page fault was due to stack growth. */
-void process_grow_stack (void)
+void 
+process_grow_stack (void)
 {
   return supp_page_table_grow_stack (&thread_current ()->supp_page_table, 1);
 }
@@ -1125,10 +1133,10 @@ void process_grow_stack (void)
 
    Caller should NOT free the returned mmap_info.
    Use process_delete_mapping() to clean up the mmap_info. */
-struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
+struct mmap_info * 
+process_add_mapping (struct file *f, void *start, int flags)
 {
   ASSERT (f != NULL);
-  ASSERT (start != NULL);
 
   struct file *f_dup;
 
@@ -1168,7 +1176,8 @@ struct mmap_info * process_add_mapping (struct file *f, void *start, int flags)
 }
 
 /* Remove the memory mapping specified by MMAP_INFO. */
-void process_delete_mapping (struct mmap_info *mmap_info)
+void 
+process_delete_mapping (struct mmap_info *mmap_info)
 {
   ASSERT (mmap_info != NULL);
   ASSERT (mmap_info->seg != NULL);
