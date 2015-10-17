@@ -12,8 +12,6 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 
-#include <bitmap.h>
-
 enum frame_status
 {
   FRAME_EMPTY, /* There is no page occupying this frame. */
@@ -38,9 +36,8 @@ struct frame
    pages belonging to a process when it needs to use them. */
 struct frame_table
 {
-  int64_t n_free_frames; /* Number of available frames. Protected by usage_lock. */
-  struct bitmap *usage; /* 0 if available, 1 if in use. */
-  struct lock usage_lock; /* For atomic updates to usage. */
+  int64_t n_free_frames; /* Number of available frames. Protected by n_free_frames_lock. */
+  struct lock n_free_frames_lock; /* For atomic updates to n_free_frames. */
 
   uint32_t n_frames; /* Total number of frames. */
   struct frame *frames; /* Array of n_frames frames. */

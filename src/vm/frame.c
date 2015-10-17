@@ -39,11 +39,9 @@ frame_table_init (size_t n_frames)
   n_frames -= 10; /* Allow processes to load small executables. TODO TESTING ONLY. */
 
   system_frame_table.n_frames = n_frames;
+
   system_frame_table.n_free_frames = system_frame_table.n_frames;
-  system_frame_table.usage = bitmap_create (system_frame_table.n_frames);
-  ASSERT (system_frame_table.usage != NULL);
-    
-  lock_init (&system_frame_table.usage_lock);
+  lock_init (&system_frame_table.n_free_frames_lock);
   /* Allocate frames: list of struct frames. */
   system_frame_table.frames = malloc (system_frame_table.n_frames * sizeof(struct frame));
   ASSERT (system_frame_table.frames != NULL);
@@ -64,7 +62,6 @@ frame_table_init (size_t n_frames)
 void 
 frame_table_destroy (void)
 {
-  bitmap_destroy (system_frame_table.usage); 
   free (system_frame_table.frames);
   palloc_free_multiple (system_frame_table.phys_pages, system_frame_table.n_frames);
 
@@ -156,11 +153,6 @@ frame_table_release_page (struct page *pg)
   /* Update page. */
   pg->status = FRAME_DISCARDED;
   pg->location = NULL;
-
-  /* Mark frame as available in the bitmap. */
-  lock_acquire (&system_frame_table.usage_lock);
-  bitmap_flip (system_frame_table.usage, fr->id);
-  lock_release (&system_frame_table.usage_lock);
 }
 
 /*  Writes the locked frame  and locked pg back to mmap file in the disk */
@@ -500,19 +492,26 @@ frame_table_obtain_locked_frame (void)
 static struct frame *
 frame_table_find_free_frame (void)
 { 
-  /* Do a bit map scan and retrieve the first free frame. */
-  lock_acquire (&system_frame_table.usage_lock);
-  size_t free_frame = bitmap_scan (system_frame_table.usage,0,1,false); 
-  lock_release (&system_frame_table.usage_lock);
-
-  /* Was a free frame found? */
-  if (0 <= free_frame && free_frame < system_frame_table.n_frames)
+  struct frame *frames = (struct frame *) system_frame_table.frames;
+  uint32_t frame_ix;
+  for (frame_ix = 0; frame_ix < system_frame_table.n_frames; frame_ix++)
   {
-    struct frame *frames = (struct frame *) system_frame_table.frames;
-    struct frame *fr = &frames[free_frame];
-    lock_acquire (&fr->lock);
-    return fr;
+    struct frame *fr = &frames[frame_ix];
+    /* Optimistically search for an empty frame without obtaining locks. */
+    if (fr->status == FRAME_EMPTY)
+    {
+      /* Since we might be competing with frame_table_get_eviction_victim, lock frame and make sure it's still empty. */
+      lock_acquire (&fr->lock);
+      if (fr->status == FRAME_EMPTY)
+      {
+        frame_table_decr_n_free_frames ();
+        return fr;
+      }
+      else
+        lock_release (&fr->lock);
+    }
   }
 
+  /* No free frame found, return NULL. */
   return NULL;
 }
