@@ -78,17 +78,20 @@ swap_table_destroy (void)
   free (system_swap_table.slots);
 }
 
-/* Write this page to a free swap slot. Panic if no available slots. 
+/* Write locked PG to a free swap slot. Panic if no available slots. 
    Stores swap slot information in PG. 
    Caller must hold lock on PG. */
 void 
 swap_table_store_page (struct page *pg)
 {
   ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
 
   /* Make sure PG is in a correct state. */
   ASSERT (pg->status == PAGE_RESIDENT);
   struct frame *curr_frame = (struct frame *) pg->location;
+  ASSERT (curr_frame->pg == pg);
+  ASSERT (curr_frame->status == FRAME_OCCUPIED);
 
   /* Find a free slot. */
   lock_acquire (&system_swap_table.usage_lock);
@@ -113,17 +116,19 @@ swap_table_store_page (struct page *pg)
   }
 
   /* Update page info. */
-  pg->location = s;
   pg->status = PAGE_SWAPPED_OUT;
+  pg->location = s;
 }
 
-/* Retrieve locked PG from its swap slot. Put the page contents into frame FR. */
+/* Retrieve locked PG from its swap slot. Put the page contents into locked empty frame FR. */
 void 
 swap_table_retrieve_page (struct page *pg, struct frame *fr)
 {
   ASSERT (pg != NULL);
   ASSERT (lock_held_by_current_thread (&pg->lock));
   ASSERT (fr != NULL);
+  ASSERT (lock_held_by_current_thread (&fr->lock));
+  ASSERT (fr->status == FRAME_EMPTY);
 
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
   struct swap_slot *s = (struct swap_slot *) pg->location;
@@ -144,8 +149,8 @@ swap_table_retrieve_page (struct page *pg, struct frame *fr)
   lock_release (&system_swap_table.usage_lock);
 
   /* Update page info. */
-  pg->location = fr;
   pg->status = PAGE_RESIDENT;
+  pg->location = fr;
 } 
 
 /* Free up the swap slot used by locked page PG. */
@@ -177,6 +182,6 @@ swap_table_discard_page (struct page *pg)
   lock_release (&system_swap_table.usage_lock);
 
   /* Update page info. */
-  pg->location = NULL;
   pg->status = PAGE_DISCARDED; 
+  pg->location = NULL;
 }
