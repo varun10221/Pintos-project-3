@@ -504,16 +504,21 @@ list_insert_ordered_unique (struct list *list, struct list_elem *elem,
   ASSERT (elem != NULL);
   ASSERT (less != NULL);
 
-  struct list_elem *e;
+  struct list_elem *e = NULL;
   for (e = list_begin (list); e != list_end (list); e = list_next (e))
     if (less (elem, e, aux))
       break;
 
-  /* If !less (e, elem, aux) and !less (elem, e, aux), then e == elem and we don't insert it. */
-  if (less (elem, e, aux))
+  /* If previous e < elem, it's safe to insert it. */
+  struct list_elem *prev = e->prev;
+  if (less (prev, elem, aux))
+  {
+    list_insert (e, elem);
+    return true;
+  }
+  else
+    /* Otherwise we have a duplicate entry. */
     return false;
-  list_insert (e, elem);
-  return true;
 }
 
 /* Returns the element in LIST with the largest value according
@@ -548,15 +553,18 @@ list_remove_ordered (struct list *list, struct list_elem *elem,
   ASSERT (elem != NULL); 
   ASSERT (less != NULL);
 
-  struct list_elem *e = list_begin (list);
-  /* Skip until we've reached the point where elem belongs. */
-  while (less (e, elem, aux))
-    e = list_next (e);
-  /* If !less (e, elem, aux) and !less (elem, e, aux), then e == elem and we remove it. */
-  if (!less (elem, e, aux))
+  struct list_elem *e;
+  for (e = list_begin (list); e != list_end (list); e = list_next (e))
   {
-    list_remove (e);
-    return e;
+    /* Skip until we find where elem would be. */
+    if (less (e, elem, aux))
+      continue;
+    /* We know !less (e, elem), so if !less (elem, e), then e == elem. */
+    if (!less (elem, e, aux))
+    {
+      list_remove (e);
+      return e;
+    }
   }
   return NULL;
 }
