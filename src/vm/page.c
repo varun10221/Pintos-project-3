@@ -448,7 +448,7 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
 }
 
 /* Destroy segment SEG created by segment_create(). 
-   If SEG is an mmap'd segment, will acquire and release. */
+   If SEG is an mmap'd segment, will acquire and release filesys_lock. */
 void 
 segment_destroy (struct segment *seg)
 {
@@ -492,9 +492,7 @@ segment_destroy (struct segment *seg)
       page_destroy (pg);
     }
     else
-    {
       lock_release (&pg->lock);
-    }
     he = next;
   }
 
