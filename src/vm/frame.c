@@ -31,10 +31,6 @@ static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct page *, struct frame *);
 static void frame_table_read_mmap_page_from_file (struct page *, struct frame *);
 
-static bool frame_table_is_page_dirty (struct page *);
-static void frame_table_update_page_owner_info (struct page *, struct frame *);  
-static void frame_table_clear_page_owner_page_info (struct page *);
-
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
 frame_table_init (size_t n_frames)
@@ -401,12 +397,13 @@ frame_table_evict_page_from_frame (struct frame *fr)
   /* Update each owner's pagedir so that they page fault when they next access this page. 
      Do this BEFORE copying the contents so that the owners will page fault on access and have to wait for us
      to finish evicting it. */
-  frame_table_clear_page_owner_page_info (pg);
+  page_clear_owners_pagedir (pg);
 
   if (pg->smi->mmap_file != NULL)
   {   
-    /* mmap (uses file as backing store): only need to write back if page is dirty. */
-    if (frame_table_is_page_dirty (pg))
+    /* mmap (uses file as backing store): only need to write back if page is dirty. 
+       Once we've written it out, PG is no longer dirty. */
+    if (page_unset_dirty (pg))
       frame_table_write_mmap_page_to_file (pg, fr);
   }  
   else
@@ -476,56 +473,4 @@ frame_table_find_free_frame (void)
   }
 
   return NULL;
-}
-
-
-/* Sets the pagedir of each page owner: PG is now resident in FR. 
-   PG must be locked. */
-static void
-frame_table_update_page_owner_info (struct page *pg, struct frame *fr)
-{
-  ASSERT (pg != NULL);
-  ASSERT (lock_held_by_current_thread (&pg->lock));
-  ASSERT (fr != NULL);
-
-  struct list_elem *e;
-  for (e = list_begin (&pg->owners); e != list_end (&pg->owners); e = list_next (e))
-  {
-    struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
-    pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, fr->paddr, true); /* TODO Check whether or not it should be writable (true vs. false). */
-  }
-}
-
-/* Sets the pagedir of each page owner: PG is no longer resident in memory.
-   PG must be locked. */
-static void
-frame_table_clear_page_owner_page_info (struct page *pg)
-{
-  ASSERT (pg != NULL);
-  ASSERT (lock_held_by_current_thread (&pg->lock));
-
-  struct list_elem *e;
-  for (e = list_begin (&pg->owners); e != list_end (&pg->owners); e = list_next (e))
-  {
-    struct page_owner_info * poi = list_entry (e, struct page_owner_info, elem);            
-    pagedir_clear_page (poi->owner->pagedir, poi->vpg_addr);
-  }
-}
-
-/* Returns true if page PG is dirty, false else.
-   PG must be locked. */
-static bool
-frame_table_is_page_dirty (struct page *pg)
-{
-  ASSERT (pg != NULL);
-  ASSERT (lock_held_by_current_thread (&pg->lock));
-
-  struct list_elem *e;
-  for (e = list_begin (&pg->owners); e != list_end (&pg->owners); e = list_next (e))
-  {
-    struct page_owner_info * poi = list_entry (e, struct page_owner_info, elem);            
-    if (pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr))
-      return true;
-  }
-  return false;
 }
