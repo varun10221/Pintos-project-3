@@ -711,8 +711,7 @@ page_destroy (struct page *pg)
      In this case, pg->owners is empty. */
   ASSERT (list_size (&pg->owners) == 0);
 
-  /* TODO I shouldn't know that the swap table exists. Add a bool to struct page for frame's use,
-     and just call frame_table_release_page? Or is this needlessly circuitous? */
+  /* TODO Should I know that the swap table exists? */
   if (pg->status == PAGE_RESIDENT)
     frame_table_release_page (pg);
   else if (pg->status == PAGE_SWAPPED_OUT)
@@ -773,6 +772,9 @@ page_remove_owner (struct page *pg, struct segment *seg)
   if (removed_poi_elem != NULL)
   {
     struct page_owner_info *poi = list_entry (removed_poi_elem, struct page_owner_info, elem);
+    /* If pagedir entry is dirty, set is_dirty on our way out. */
+    if (pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr))
+      pg->is_dirty = true;
     free (poi);
   }
 
@@ -949,7 +951,16 @@ page_unset_dirty (struct page *pg)
   ASSERT (lock_held_by_current_thread (&pg->lock));
 
   bool was_dirty = false;
+  /* Ask and clear current owners. */
   list_apply (&pg->owners, page_unset_dirty_list_action_func, &was_dirty);
+
+  /* Did any former owners dirty the page? */
+  if (pg->is_dirty)
+  {
+    was_dirty = true;
+    pg->is_dirty = false;
+  }
+
   return was_dirty;
 }
 

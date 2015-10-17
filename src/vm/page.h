@@ -127,6 +127,7 @@ struct page
 
      Use lock to control access to this field. */
   struct list owners; 
+  bool is_dirty; /* If an owner with a dirty pagedir entry for this page calls page_remove_owner, he sets this to true. */ 
 
   void *location; /* struct frame* or struct slot* in which this page resides. */
   unsigned stamp; /* Stamp of the frame/slot in which this page resides. For ABA problem. TODO Do we need this? */

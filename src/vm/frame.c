@@ -115,60 +115,36 @@ frame_table_store_page (struct page *pg)
   pg->status = PAGE_RESIDENT;
 
   /* Update the page directory of each owner. */
-  frame_table_update_page_owner_info (pg,fr);     
-  /* TODO Update the page directory of each owner. */
-  frame_table_update_page_owner_info (pg, fr);     
+  page_update_owners_pagedir (pg, fr->paddr);
 
   /* Page safely in frame. */
   lock_release (&fr->lock);
+  lock_release (&pg->lock);
 }
 
-/* Release resources associated with locked page PG; process is done with it. 
-   If an mmap'd file, flush changes to backing file. 
-   TODO */
+/* Release resources associated with resident locked page PG; it has no owners.
+   If a dirty page in an mmap'd file, flush changes to backing file. 
+   We acquire and release the lock on the frame in which PG is resident. */
 void 
 frame_table_release_page (struct page *pg) 
 { 
-  ASSERT (0 == 1);
-
   ASSERT (pg != NULL);
-  ASSERT (pg->status != PAGE_DISCARDED);
-  /* TODO handle possible page status.
-     HOWEVER Make sure you lock the frame if it is resident. 
-     Coordinate with frame_table_evict_page_from_frame. */
-  /* Only the final owner can release a page.*/
-  /* TODO  0 ? */
-  ASSERT (list_size (&pg->owners) == 1);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
 
-  /* TODO Hmm? I think that:
-       Since we've locked the page, we shouldn't need to lock the frame too. 
-       The eviction function should lock frame first, then page. By holding 
-       the lock on the page we "skip" the frame locking step. 
-       TODO This means that in eviction we must double-check that the page is still
-       resident before we actually evict. */
-  struct frame * fr = (struct frame *) pg->location;
+  ASSERT (pg->status == PAGE_RESIDENT);
+  /* A page is only released when it has no owners left. */
+  ASSERT (list_size (&pg->owners) == 0);
+
+  struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
-  ASSERT (fr->status != FRAME_OCCUPIED);
+  lock_acquire (&fr->lock);
+  ASSERT (fr->status == FRAME_OCCUPIED);
   ASSERT (fr->pg == pg);
 
-  struct page_owner_info *poi = list_entry (list_front (&pg->owners), struct page_owner_info, elem);
-  ASSERT (poi != NULL);
-  bool need_to_write_back = (pg->smi->mmap_file && pagedir_is_dirty (poi->owner->pagedir, fr->paddr));
-
+  bool is_dirty = page_unset_dirty (pg);
+  bool need_to_write_back = (pg->smi->mmap_file && is_dirty);
   if (need_to_write_back)
-  {
-    /*  mmap: Write page to file. Should call the same function used by
-        frame_table_evict_page_from_frame (victim).is there a way to write just the page in file , how to do that*/
-     frame_table_write_mmap_page_to_file (pg, fr);
-  }
-
- /* Can we have a separate function for writing mmap file? 
-   Im assuming writing back mmap file involves block_write and some other support 
-   infra needed 
-   
-   JD: Yes, I agree. I think separate functions for evicting mmap and non-mmap pages are needed.
-   Please add declarations for these.
-   */
+    frame_table_write_mmap_page_to_file (pg, fr);
 
   /* Update frame. */
   fr->status = FRAME_EMPTY;
@@ -189,8 +165,13 @@ static void
 frame_table_write_mmap_page_to_file (struct page *pg, struct frame *fr)
 {
   ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
   ASSERT (fr != NULL);
-  ASSERT (fr->pg != NULL);
+  ASSERT (lock_held_by_current_thread (&fr->lock));
+
+  /* Make sure there is agreement. */
+  ASSERT (fr->pg == pg);
+  ASSERT ((struct frame *) pg->location == fr);
   
   /* Find the length of the mmap file */
   size_t file_len = file_length (pg->smi->mmap_file);
