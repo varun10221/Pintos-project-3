@@ -654,7 +654,13 @@ static mapid_t syscall_mmap (int fd, void *addr)
   if (f == NULL)
     goto CLEANUP_AND_ERROR;
 
-  mmap_info = process_add_mapping (f, addr, MAP_PRIVATE|MAP_RDWR);
+  /* Populate an mmap_details struct. */
+  struct mmap_details md;
+  memset (&md, 0, sizeof(struct mmap_details));
+  md.mmap_file = f;
+  md.offset = 0;
+  md.backing_type = MMAP_BACKING_PERMANENT;
+  mmap_info = process_add_mapping (&md, addr, MAP_PRIVATE|MAP_RDWR);
   /* TODO Just experimenting with shared mmap.
   mmap_info = process_add_mapping (f, addr, MAP_SHARED|MAP_RDWR); */
   if (mmap_info == NULL)

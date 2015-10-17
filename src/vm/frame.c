@@ -143,7 +143,7 @@ frame_table_release_page (struct page *pg)
   ASSERT (fr->pg == pg);
 
   bool is_dirty = page_unset_dirty (pg);
-  bool need_to_write_back = (pg->smi->mmap_file && is_dirty);
+  bool need_to_write_back = (pg->smi->mmap_details.backing_type == MMAP_BACKING_PERMANENT && pg->smi->mmap_details.mmap_file && is_dirty);
   if (need_to_write_back)
     frame_table_write_mmap_page_to_file (pg, fr);
 
@@ -179,7 +179,9 @@ frame_table_write_mmap_page_to_file (struct page *pg, struct frame *fr)
   ASSERT ((struct frame *) pg->location == fr);
   
   /* Find the length of the mmap file */
-  size_t file_len = file_length (pg->smi->mmap_file);
+  filesys_lock ();
+  size_t file_len = file_length (pg->smi->mmap_details.mmap_file);
+  filesys_unlock ();
   size_t size;
 
   /* If file_length is a multiple of page size, then last page in file is of page size */
@@ -198,10 +200,13 @@ frame_table_write_mmap_page_to_file (struct page *pg, struct frame *fr)
   /* Determine the size to write in file, PGSIZE */ 
   else 
     size = PGSIZE;
-  /* Write the mmap page to file , in the page's respective position in the file */
+
+  uint32_t offset_in_mapping = (pg->segment_page)*PGSIZE;
+  uint32_t offset_in_file = pg->smi->mmap_details.offset + offset_in_mapping;
+  /* Write the mmap page to file, in the page's respective position in the file */
   filesys_lock ();
-  file_write_at (pg->smi->mmap_file, fr->paddr, size,
-                             (pg->segment_page)*PGSIZE);
+  file_write_at (pg->smi->mmap_details.mmap_file, fr->paddr, size,
+                 offset_in_file);
   filesys_unlock ();
 
   pg->status = PAGE_IN_FILE;
@@ -222,11 +227,12 @@ frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
   ASSERT (fr->status == FRAME_EMPTY);
 
   /* Find the length of the mmap file */
-  size_t file_len = file_length (pg->smi->mmap_file);
+  filesys_lock ();
+  size_t file_len = file_length (pg->smi->mmap_details.mmap_file);
+  filesys_unlock ();
   size_t size;
 
   /* If file_length is a multiple of page size, then last page in file is of page size */
-
   if (file_len % PGSIZE != 0)
     {
       /* Condition to check if the page is last page in file or not */
@@ -236,17 +242,36 @@ frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
      /* Check if its last page in file, as the last page's size may  less than pg size;*/
      if (is_last_page_in_file)
        size = file_len % PGSIZE;
-     else size = PGSIZE;
+     else 
+       size = PGSIZE;
     }
-  /* Determine the size to write in file, PGSIZE */
+  /* Determine the size to read from the file, PGSIZE */
   else 
     size = PGSIZE;
 
-  /* Write the mmap page to file , in the page's respective position in the file */
+  /* Read the mmap page from file, in the page's respective position in the file */
+  uint32_t offset_in_mapping = (pg->segment_page)*PGSIZE;
+  uint32_t offset_in_file = pg->smi->mmap_details.offset + offset_in_mapping;
   filesys_lock ();
-  file_read_at (pg->smi->mmap_file, fr->paddr, size,
-                             (pg->segment_page)*PGSIZE);
+  file_read_at (pg->smi->mmap_details.mmap_file, fr->paddr, size,
+                 offset_in_file);
   filesys_unlock ();
+
+  /* If this is a BACKING_INITIAL, zero out as needed. */
+  if (pg->smi->mmap_details.backing_type == MMAP_BACKING_INITIAL)
+  {
+    uint32_t zero_start;
+    if (pg->smi->mmap_details.read_bytes < offset_in_mapping)
+      /* This entire page should be zeros. */
+      zero_start = 0;
+    else if (pg->smi->mmap_details.read_bytes < offset_in_mapping + size)
+      /* Read portion and zero portion meet in this page. */
+      zero_start = pg->smi->mmap_details.read_bytes - offset_in_mapping;
+    else
+      /* All in the read portion. Zero nothing. */
+      zero_start = size;
+    memset (fr->paddr + zero_start, 0, size - zero_start);
+  }
 
   /* If we didn't read a full page, zero out the rest. */
   memset(fr->paddr + size, 0, PGSIZE - size);
@@ -404,12 +429,24 @@ frame_table_evict_page_from_frame (struct frame *fr)
      to finish evicting it. */
   page_clear_owners_pagedir (pg);
 
-  if (pg->smi->mmap_file != NULL)
+  if (pg->smi->mmap_details.mmap_file != NULL)
   {   
-    /* mmap (uses file as backing store): only need to write back if page is dirty. 
-       Once we've written it out, PG is no longer dirty. */
+    /* mmap (uses file as backing store): only need to write back if page is dirty. */
     if (page_unset_dirty (pg))
-      frame_table_write_mmap_page_to_file (pg, fr);
+    {
+      /* If dirty and a permanent map, write to file. */
+      if (pg->smi->mmap_details.backing_type == MMAP_BACKING_PERMANENT)
+        frame_table_write_mmap_page_to_file (pg, fr);
+      else
+      /* If dirty and a non-permanent map, swap out instead. */
+        swap_table_store_page (pg);
+    }
+    else
+    {
+      /* mmap and not dirty, so whether or not its permanent we can get it back again from the mapping file. */
+      pg->location = NULL; 
+      pg->status = PAGE_IN_FILE;
+    }
   }  
   else
     /* Not mmap: store in swap table. */

@@ -13,6 +13,7 @@
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "filesys/off_t.h"
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
@@ -682,6 +683,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   filesys_lock ();
 
   /* Allocate and activate page directory. */
+  /* TODO Shift this out a layer once we load more cleanly? */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
@@ -835,20 +837,15 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
   return true;
 }
 
-/* Loads a segment starting at offset OFS in FILE at address
-   UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
-   memory are initialized, as follows:
+/* Creates a memory mapping for a segment starting at offset OFS in FILE at address
+   UPAGE.
 
-        - READ_BYTES bytes at UPAGE must be read from FILE
-          starting at offset OFS.
-
-        - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
-
-   The pages initialized by this function must be writable by the
+   The segment initialized by this function must be writable by the
    user process if WRITABLE is true, read-only otherwise.
 
-   Return true if successful, false if a memory allocation error
-   or disk read error occurs. */
+   Return true if successful, false if segment cannot be created. 
+   
+   filesys_lock is held by caller and should still be held when returning. */
 static bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
               uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
@@ -857,41 +854,31 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
-  file_seek (file, ofs);
-  while (read_bytes > 0 || zero_bytes > 0) 
-    {
-      /* Calculate how to fill this page.
-         We will read PAGE_READ_BYTES bytes from FILE
-         and zero the final PAGE_ZERO_BYTES bytes. */
-      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-      size_t page_zero_bytes = PGSIZE - page_read_bytes;
+  /* Populate an mmap_details struct. */
+  struct mmap_details md;
+  memset (&md, 0, sizeof(struct mmap_details));
+  md.mmap_file = file;
+  md.offset = ofs;
+  md.backing_type = MMAP_BACKING_INITIAL;
+  md.read_bytes = read_bytes;
+  md.zero_bytes = zero_bytes;
+  int flags = 0;
+  flags |= (writable ? MAP_RDWR : MAP_RDONLY); 
+  /* TODO */
+  /* flags |= (writable ? MAP_PRIVATE : MAP_SHARED); */ /* If read-only we can share it. */
+  flags |= MAP_PRIVATE; /* Initially, share nothing. */
 
-      /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
-        return false;
+  filesys_unlock ();
+  struct mmap_info *mi = process_add_mapping (&md, upage, flags);
+  filesys_lock ();
 
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-
-      /* Advance. */
-      read_bytes -= page_read_bytes;
-      zero_bytes -= page_zero_bytes;
-      upage += PGSIZE;
-    }
-  return true;
+  if (mi)
+  {
+    /* We don't actually need this mmap_info. */
+    free (mi);
+    return true;
+  }
+  return false;
 }
 
 /* Create a minimal stack by mapping a zeroed page at the top of
@@ -1145,18 +1132,21 @@ process_grow_stack (void)
   return supp_page_table_grow_stack (&thread_current ()->supp_page_table, 1);
 }
 
-/* Add a memory mapping to this process's page table 
-     for file F beginning at START with flags FLAGS.
+/* Add a memory mapping to this process's page table.
+   mapping_details MD contains a description of the mapping.
+   Mapping begins at virtual address START and uses FLAGS.
    Returns NULL on failure.
 
-   We create a "dup" of F. We will close it when the mapping 
+   We use a "dup" of MD->MMAP_FILE. We will close it when the mapping 
      is destroyed. Consequently we need to acquire filesys_lock().
 
    Caller should NOT free the returned mmap_info.
    Use process_delete_mapping() to clean up the mmap_info. */
 struct mmap_info * 
-process_add_mapping (struct file *f, void *start, int flags)
+process_add_mapping (struct mmap_details *md, void *start, int flags)
 {
+  ASSERT (md != NULL);
+  struct file *f = md->mmap_file;
   ASSERT (f != NULL);
 
   struct file *f_dup;
@@ -1166,11 +1156,12 @@ process_add_mapping (struct file *f, void *start, int flags)
   filesys_unlock ();
   if (f_dup == NULL)
     goto CLEANUP_AND_ERROR;
+  md->mmap_file = f_dup;
 
   struct segment *seg = NULL;
   struct mmap_info *mmap_info = NULL;
 
-  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, f_dup, start, flags, flags & MAP_SHARED);
+  seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, md, start, flags, flags & MAP_SHARED);
   if (seg == NULL)
     goto CLEANUP_AND_ERROR;
 

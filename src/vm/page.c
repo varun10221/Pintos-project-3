@@ -34,7 +34,7 @@ static struct segment * supp_page_table_get_stack_segment (struct supp_page_tabl
 static bool supp_page_table_is_range_valid (struct supp_page_table *, const void *, const void *);
 
 /* Segment. */
-static struct segment * segment_create (void *, void *, struct file *, int, enum segment_type); 
+static struct segment * segment_create (void *, void *, struct mmap_details *, int , enum segment_type);
 static void segment_destroy (struct segment *);
 
 static struct page * segment_get_page (struct segment *, int32_t);
@@ -271,29 +271,42 @@ supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
 }
 
 /* Add a memory mapping to supp page table SPT
-     for file F beginning at START with flags FLAGS.
+     based on mmap_details MD beginning at START with flags FLAGS.
    Returns NULL on failure.
 
-   F must be a "private" file*: a dup of whatever the original
-     file was. We will close F when we are done with it.
+   MD->MMAP_FILE must be a "private" file*: a dup of whatever the original
+     file was. We will close it when we are done with it.
 
    Returns the new segment on success.
    Returns NULL if range is not valid or on failure.
 
    Use supp_page_table_remove_segment() to clean up the segment. */
 struct segment * 
-supp_page_table_add_mapping (struct supp_page_table *spt, struct file *f, void *start, int flags, bool is_shared)
+supp_page_table_add_mapping (struct supp_page_table *spt, struct mmap_details *md, void *start, int flags, bool is_shared)
 {
   ASSERT (spt != NULL);
+  ASSERT (md != NULL);
+  ASSERT (md->mmap_file != NULL);
+
+  struct file *f = md->mmap_file;
   ASSERT (f != NULL);
 
-  /* Round end up to the next page. */
-  uint32_t end_exact = ((uint32_t) start + file_length (f));
+  /* Determine the exact end we need. Round end up to the next page. */
+  uint32_t mmap_len;
+  if (md->backing_type == MMAP_BACKING_PERMANENT)
+  {
+    filesys_lock ();
+    mmap_len = file_length (f);
+    filesys_unlock ();
+  }
+  else
+    mmap_len = md->read_bytes + md->zero_bytes;
+  uint32_t end_exact = (uint32_t) start + mmap_len;
   void *end = (void *) ROUND_UP (end_exact, PGSIZE);
   if (!supp_page_table_is_range_valid (spt, start, end))
     return NULL;
 
-  struct segment *ret = segment_create (start, end, f, flags, is_shared ? SEGMENT_SHARED : SEGMENT_PRIVATE);
+  struct segment *ret = segment_create (start, end, md, flags, is_shared ? SEGMENT_SHARED : SEGMENT_PRIVATE);
   list_insert_ordered (&spt->segment_list, &ret->elem, segment_list_less_func, NULL);
   return ret;
 }
@@ -409,7 +422,7 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, const void *start, 
 
 /* Initialize a segment. Destroy with segment_destroy(). */
 struct segment * 
-segment_create (void *start, void *end, struct file *mmap_file, int flags, enum segment_type type)
+segment_create (void *start, void *end, struct mmap_details *md, int flags, enum segment_type type)
 {
   struct segment *seg = (struct segment *) malloc (sizeof(struct segment));
   ASSERT (seg != NULL);
@@ -430,16 +443,23 @@ segment_create (void *start, void *end, struct file *mmap_file, int flags, enum 
 
     struct segment_mapping_info *smi = (struct segment_mapping_info *) seg->mappings;
     hash_init (&smi->mappings, page_hash_func, page_hash_less_func, NULL);
-    smi->mmap_file = mmap_file;
+    if (md)
+      memcpy (&smi->mmap_details, md, sizeof(struct mmap_details));
+    else
+      smi->mmap_details.mmap_file = NULL;
     smi->flags = flags;
   }
   else if (seg->type == SEGMENT_SHARED)
   {
     /* We only support shared segments for mmap'd files. */
+    ASSERT (md != NULL);
+    struct file *mmap_file = md->mmap_file;
     ASSERT (mmap_file != NULL);
     /* Set mappings to the appropriate struct shared_mappings*.
        This will close mmap_file if we use an existing mapping. */
-    seg->mappings = (void *) ro_shared_mappings_table_get (mmap_file, flags);
+    /* TODO Pass md itself, and re-work ro_shared_mappings_table to hash on both
+       inumber and offset. */
+    seg->mappings = (void *) ro_shared_mappings_table_get (md->mmap_file, flags);
   }
   else
     NOT_REACHED ();
@@ -506,10 +526,10 @@ segment_destroy (struct segment *seg)
     ASSERT (hash_size (&smi->mappings) == 0);
     /* Destroy the hash. */
     hash_destroy (&smi->mappings, NULL);
-    if (smi->mmap_file)
+    if (smi->mmap_details.mmap_file)
     {
       filesys_lock ();
-      file_close (smi->mmap_file);
+      file_close (smi->mmap_details.mmap_file);
       filesys_unlock ();
     }
   }
@@ -690,7 +710,7 @@ page_create (struct segment_mapping_info *smi, int32_t segment_page)
   pg->segment_page = segment_page;
   lock_init (&pg->lock);
 
-  if (pg->smi->mmap_file)
+  if (pg->smi->mmap_details.mmap_file)
     pg->status = PAGE_IN_FILE;
   else
     pg->status = PAGE_STACK_NEVER_ACCESSED;
@@ -819,7 +839,7 @@ shared_mappings_create (struct file *f, int flags)
   sm->inumber = inumber;
 
   hash_init (&sm->smi.mappings, shared_mappings_hash_func, shared_mappings_hash_less_func, NULL);
-  sm->smi.mmap_file = f;
+  sm->smi.mmap_details.mmap_file = f;
   sm->smi.flags = flags;
   lock_init (&sm->segment_mapping_info_lock);
 
@@ -844,10 +864,10 @@ shared_mappings_destroy (struct shared_mappings *sm)
   hash_destroy (&sm->smi.mappings, NULL);
   /* Must do this after destroying the hash table, so that frame table still 
        has the file to work with. */
-  if (sm->smi.mmap_file != NULL)
+  if (sm->smi.mmap_details.mmap_file != NULL)
   {
     filesys_lock ();
-    file_close (sm->smi.mmap_file);
+    file_close (sm->smi.mmap_details.mmap_file);
     filesys_unlock ();
   }
 }
@@ -879,7 +899,7 @@ shared_mappings_decr_ref_count (struct shared_mappings * sm)
   /* If it looks like we're the last user, ask the ro shared segment table
      to remove this segment. */
   if (sm->ref_count == 0)
-    ro_shared_mappings_table_remove (sm->smi.mmap_file);
+    ro_shared_mappings_table_remove (sm->smi.mmap_details.mmap_file);
 }
 
 /* Atomically increment the ref count of SM.

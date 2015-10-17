@@ -4,6 +4,7 @@
 #include "threads/thread.h"
 #include "threads/synch.h"
 #include "filesys/file.h"
+#include "vm/page.h"
 
 #include <stdint.h>
 
@@ -72,7 +73,7 @@ struct page * process_page_table_find_page (const void *);
 void process_pin_page (struct page *);
 void process_unpin_page (struct page *);
 void process_grow_stack (void);
-struct mmap_info * process_add_mapping (struct file *, void *, int);
+struct mmap_info * process_add_mapping (struct mmap_details *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
 
 /* Syscall handling. */

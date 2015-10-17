@@ -7,6 +7,7 @@
 
 #include "threads/synch.h"
 #include "devices/block.h"
+#include "filesys/off_t.h"
 
 /* TODO Move the "implementation-level" declarations to page.c. Prefer an opaque interface where possible. */
 
@@ -36,6 +37,12 @@ enum segment_type
   SEGMENT_SHARED /* RO shared segment. */
 };
 
+enum mmap_backing_type
+{
+  MMAP_BACKING_PERMANENT, /* mmap is backed by a file forever. */
+  MMAP_BACKING_INITIAL    /* mmap is backed by a file temporarily: once read, it becomes swap'able. */
+};
+
 enum popularity_range
 
 {
@@ -50,6 +57,16 @@ struct supp_page_table
   struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends at PHYS_BASE). */
 };
 
+struct mmap_details
+{
+  struct file *mmap_file; /* If not NULL, segment is backed by this file. */
+  off_t offset; /* mmap is based on this offset in the file. */
+
+  enum mmap_backing_type backing_type;
+  uint32_t read_bytes; /* Used for MMAP_BACKING_INITIAL. The first READ_BYTES of the executable are read. */
+  uint32_t zero_bytes; /* Used for MMAP_BACKING_INITIAL. Bytes after READ_BYTES are zero'd. */
+};
+
 /* Info needed to:
      - map 'relative page numbers' to 'pages'
      - evict and replace such pages. 
@@ -57,7 +74,7 @@ struct supp_page_table
 struct segment_mapping_info
 {
   struct hash mappings; /* Maps relative page number to page. */
-  struct file *mmap_file; /* If not NULL, segment is backed by this file. */
+  struct mmap_details mmap_details; /* Info about whether or not this is an mmap'd segment. */
   int flags;
 };
 
@@ -115,6 +132,7 @@ struct page_owner_info
 {
   struct thread *owner; /* This thread has a reference to this page. */
   void *vpg_addr; /* This is the virtual page address in the owner's address space. */
+  bool writable; /* Whether or not this mapping is writable. */
   struct list_elem elem;
 };
 
@@ -130,7 +148,6 @@ struct page
   bool is_dirty; /* If an owner with a dirty pagedir entry for this page calls page_remove_owner, he sets this to true. */ 
 
   void *location; /* If page is in frame or swap table, this is the struct frame* or struct slot* in which this page resides. */
-
   enum page_status status; /* Status of this page. */
 
   struct segment_mapping_info *smi; /* Info for mmap and knowledge about rw status. */
@@ -163,7 +180,7 @@ void supp_page_table_destroy (struct supp_page_table *);
 /* Usage. */
 struct page * supp_page_table_find_page (struct supp_page_table *, const void *vaddr);
 void supp_page_table_grow_stack (struct supp_page_table *, int);
-struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int, bool);
+struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct mmap_details *md, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 
 /* Some page APIs for use by frame. */
