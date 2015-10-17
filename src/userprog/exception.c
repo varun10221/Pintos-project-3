@@ -123,7 +123,7 @@ kill (struct intr_frame *f)
 static void
 page_fault (struct intr_frame *f) 
 {
-  bool not_present;  /* True: not-present page, false: writing r/o page. */
+  bool not_present;  /* True: not-present page, false: writing r/o page. TODO As written we don't use this, nor do I think that we need to. However, might be a shortcut. */
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
@@ -174,14 +174,14 @@ page_fault (struct intr_frame *f)
     }
   }
 
+  /* If user page fault, take opportunity to observe the stack pointer. */
   if (user)
     process_observe_stack_pointer (f->esp);
   void *min_sp = process_get_min_observed_stack_pointer ();
-  /* If we are at most 32 bytes below the stack pointer, we declare this a legal stack access and grow the stack. */
-  int MAX_DISTANCE_BELOW_STACK = 32;
 
   /* printf ("page_fault: user %i fault_addr %p min_sp %p\n", user, fault_addr, min_sp); */
-
+  /* If we are at most 32 bytes below the stack pointer, we declare this a legal stack access and grow the stack. */
+  int MAX_DISTANCE_BELOW_STACK = 32;
   if (fault_addr < min_sp && min_sp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
     process_grow_stack ();
 
@@ -191,9 +191,8 @@ page_fault (struct intr_frame *f)
   if (!pg)
     pg = process_page_table_find_page (fault_addr);
 
-  /* TODO Use 'write' to see if this access was legal. Check flags of the smi of pg.
-     Note that those flags aren't being set properly yet. */
-  if (pg)
+  /* If pg exists: if attempted write, make sure a write is legal. */ 
+  if (pg && (!write || (pg->smi->flags & MAP_RDWR)) )
     frame_table_store_page (pg);
   else
     /* Default exit status is -1. */

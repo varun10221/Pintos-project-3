@@ -19,8 +19,7 @@ static const int MAP_SHARED  = 1 << 1;
 
 /* Access info for the segment holding the pages. */
 static const int MAP_RDONLY  = 1 << 2;
-static const int MAP_WRONLY  = 1 << 3; /* Unused. */
-static const int MAP_RDWR    = 1 << 4;
+static const int MAP_RDWR    = 1 << 3;
 
 enum page_status
 {

@@ -211,7 +211,7 @@ supp_page_table_init (struct supp_page_table *spt)
   list_init (&spt->segment_list);
 
   /* Create a stack segment. */
-  struct segment *stack_seg = segment_create (PHYS_BASE - PGSIZE, PHYS_BASE, NULL, 0, SEGMENT_PRIVATE);
+  struct segment *stack_seg = segment_create (PHYS_BASE - PGSIZE, PHYS_BASE, NULL, MAP_RDWR, SEGMENT_PRIVATE);
   list_insert_ordered (&spt->segment_list, &stack_seg->elem, segment_list_less_func, NULL);
 }
 
@@ -811,6 +811,7 @@ page_add_owner (struct page *pg, struct segment *seg)
   ASSERT (poi != NULL);
   poi->owner = thread_current ();
   poi->vpg_addr = segment_calc_vaddr (seg, pg->segment_page);
+  poi->writable = pg->smi->flags & MAP_RDWR;
 
   /* If insertion succeeeds, no matching poi was already present. */ 
   if (list_insert_ordered_unique (&pg->owners, &poi->elem, page_owner_info_list_less_func, NULL))
@@ -1032,8 +1033,7 @@ page_update_owners_pagedir_list_action_func (struct list_elem *e, void *aux)
 
   void *paddr = aux;
   struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
-  /* TODO Check whether or not it should be writable. */
-  pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, paddr, true);
+  pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, paddr, poi->writable);
 }
 
 /*

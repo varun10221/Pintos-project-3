@@ -25,7 +25,7 @@ static void frame_table_decr_n_free_frames (void);
 static uint32_t frame_table_get_n_free_frames (void);
 
 /* Nice way to get a frame. */
-static struct frame * frame_table_obtain_locked_frame (void);
+static struct frame * frame_table_obtain_free_locked_frame (void);
 
 /* Henchmen for the 'nice way'. */
 static struct frame * frame_table_find_free_frame (void);
@@ -74,20 +74,27 @@ frame_table_destroy (void)
 
 /* Storing and releasing pages. */
 
-/* Put page PG into a frame.
+/* Put possibly-locked page PG into a frame.
    (includes loading the page's contents into the frame).
    Update the page directory for each of its owners. 
-   Acquires and releases lock on PG. */
+   If PG is unlocked, acquires and releases lock on PG. */
 void 
 frame_table_store_page (struct page *pg)
 {
   ASSERT (pg != NULL);
-  lock_acquire (&pg->lock);
 
-  /* Page must not be in a page already. */
+  /* If already in a frame, nothing to do. */
+  if (pg->status == PAGE_RESIDENT)
+    return;
+
+  bool was_page_locked = lock_held_by_current_thread (&pg->lock);
+  if (!was_page_locked)
+    lock_acquire (&pg->lock);
+
+  /* Page must not be in a frame already. */
   ASSERT (pg->status != PAGE_RESIDENT);
 
-  struct frame *fr = frame_table_obtain_locked_frame ();
+  struct frame *fr = frame_table_obtain_free_locked_frame ();
   if (fr == NULL)
     PANIC ("frame_table_store_page: Could not allocate a frame."); 
   ASSERT (lock_held_by_current_thread (&fr->lock));
@@ -120,8 +127,8 @@ frame_table_store_page (struct page *pg)
   page_update_owners_pagedir (pg, fr->paddr);
 
   /* Page safely in frame. */
-  lock_release (&fr->lock);
-  lock_release (&pg->lock);
+  if (!was_page_locked)
+    lock_release (&pg->lock);
 }
 
 /* Release resources associated with resident locked page PG; it has no owners.
@@ -281,52 +288,56 @@ frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
   pg->location = fr;
 }
 
-/* (Put locked page PG into a frame and) pin it there. 
+/* Put (page PG into a frame and) pin it there. 
    It will not be evicted until a call to 
     - frame_table_release_page(), or
     - frame_table_unpin_page()
-    */
+   We lock and unlock PG. */ 
 void 
 frame_table_pin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
-  /* TODO Is this safe from race conditions? I think frame needs to be locked the entire time. */
-  /* First allocate the frame for the page if not available before */
-  if (pg->location == NULL)
+
+  /* Lock PG. This lets us test for residence and be confident that PG will
+     not be evicted until we are done if it is already resident. 
+
+     See comments for frame_table_get_eviction_victim. */
+  lock_acquire (&pg->lock);
+
+  if (pg->location != PAGE_RESIDENT)
     frame_table_store_page (pg);
 
-  /* NB: frame_table_evict_page_from_frame locks page, so there's
-     no risk of the page being evicted before we can mark the frame
-     as pinned. */
-       
   struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
-  /*  Assuming frame can only be occupied and not FRAME_PINNED or FRAME_EMPTY */
-  ASSERT (fr->status == FRAME_OCCUPIED);
-  /* Change the frame_status to pinned. */
+  ASSERT (fr->pg == pg);
+
+  ASSERT (fr->status != FRAME_EMPTY);
   fr->status = FRAME_PINNED; 
+
+  lock_release (&pg->lock);
 }
 
-/* Allow locked resident page PG to be evicted from its frame. */
+/* Allow page PG to be evicted from its pinned frame.
+   We lock and unlock PG. */ 
 void 
 frame_table_unpin_page (struct page *pg)
 {
   ASSERT (pg != NULL);
-  ASSERT (lock_held_by_current_thread (&pg->lock));
+
+  /* Lock PG for coordination if shared.
+     Other than that, PG must be pinned in its frame, so there's
+     no risk of eviction until we change fr->status. */
+  lock_acquire (&pg->lock);
   ASSERT (pg->status == PAGE_RESIDENT)
 
   struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
-
-  /* Acquiring and releasing this lock is probably paranoid, given
-     that this frame won't be selected for eviction because it is in state FRAME_PINNED. */
-  lock_acquire (&fr->lock);
-
-  ASSERT (fr->status == FRAME_PINNED);
   ASSERT (fr->pg == pg);
+  ASSERT (fr->status == FRAME_PINNED);
+
   fr->status = FRAME_OCCUPIED;
 
-  lock_release (&fr->lock);
+  lock_release (&pg->lock);
 }
 
 /* Private helper functions. */
@@ -351,6 +362,12 @@ frame_table_make_free_frame (void)
 
 /* Identify a victim frame whose resident page (if any) is locked and can be evicted.
    Return the locked frame containing its locked page (if any).
+
+   This means that we will only evict a resident page from its frame if:
+     - we can lock frame
+     - we can lock page
+   This implies that if you hold the lock on a page and it is resident, it is
+     safe from eviction.
 
    If no candidate is identified, returns NULL. */
 static struct frame * 
@@ -478,7 +495,7 @@ frame_table_init_frame (struct frame *fr, id_t id)
    May have to evict a page to obtain a free frame.
    If no free or evict-able frames are available, returns null. */
 static struct frame * 
-frame_table_obtain_locked_frame (void)
+frame_table_obtain_free_locked_frame (void)
 {
   struct frame *fr = frame_table_find_free_frame ();
   if (fr == NULL)
@@ -487,6 +504,7 @@ frame_table_obtain_locked_frame (void)
   if (fr != NULL)
   {
     ASSERT (lock_held_by_current_thread (&fr->lock));
+    ASSERT (fr->status == FRAME_EMPTY);
   }
 
   return fr;
