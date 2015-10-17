@@ -172,6 +172,10 @@ typedef bool list_eq_func (const struct list_elem *a,
                            const struct list_elem *b,
                            void *aux);
 
+/* Performs some operation on list element E, given auxiliary
+   data AUX. */
+typedef void list_action_func (struct list_elem *e, void *aux);
+
 /* Operations on lists with ordered elements. */
 void list_sort (struct list *,
                 list_less_func *, void *aux);
@@ -186,8 +190,7 @@ void list_unique (struct list *, struct list *duplicates,
 bool list_contains (struct list *, struct list_elem *,
                     list_less_func *, void *aux);
 
-/*operation on lists for all elements */
-void list_for_each (struct list * , void *);
+void list_apply (struct list *, list_action_func *, void *);
 
 /* Max and min. */
 struct list_elem *list_max (struct list *, list_less_func *, void *aux);

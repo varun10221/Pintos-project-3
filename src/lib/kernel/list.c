@@ -609,16 +609,16 @@ list_min (struct list *list, list_less_func *less, void *aux)
   return min;
 }
 
-/*
-
-void
-list_for_each (struct list * any_list , void *func)
+/* Apply ACTION to each element in LIST, supplying custom data AUX. */
+void 
+list_apply (struct list *list, list_action_func *action, void *aux)
 {
+  ASSERT (list != NULL);
+  ASSERT (action != NULL);
+
   struct list_elem * e;
-  for (e = list_begin (any_list); e != list_end (any_list);                          e = list_next (e))
-     {
-       struct thread *t = list_entry (e, struct thread, allelem);
-       func (t, aux);
-      }
+  for (e = list_begin (list); e != list_end (list); e = list_next (e))
+ {
+   action (e, aux);
+ }
 }
-*/
