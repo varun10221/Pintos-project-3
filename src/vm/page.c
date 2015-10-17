@@ -29,16 +29,16 @@ struct ro_shared_mappings_table ro_shared_mappings_table;
 /* Private function declarations. */
 
 /* Supp page table. */
-static struct segment * supp_page_table_find_segment (struct supp_page_table *, void *);
+static struct segment * supp_page_table_find_segment (struct supp_page_table *, const void *);
 static struct segment * supp_page_table_get_stack_segment (struct supp_page_table *);
-static bool supp_page_table_is_range_valid (struct supp_page_table *, void *, void *);
+static bool supp_page_table_is_range_valid (struct supp_page_table *, const void *, const void *);
 
 /* Segment. */
 static struct segment * segment_create (void *, void *, struct file *, int, enum segment_type); 
 static void segment_destroy (struct segment *);
 
 static struct page * segment_get_page (struct segment *, int32_t);
-static int32_t segment_calc_page_num (struct segment *, void *);
+static int32_t segment_calc_page_num (struct segment *, const void *);
 static void * segment_calc_vaddr (struct segment *, int32_t);
 static bool segment_list_less_func (const struct list_elem *, const struct list_elem *, void *);
 
@@ -238,7 +238,7 @@ supp_page_table_destroy (struct supp_page_table *spt)
    Will add pages to the stack segment to accommodate growth if needed.
    Will only do so if vaddr is above the min_observed_esp (i.e. a valid stack access). */
 struct page * 
-supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
+supp_page_table_find_page (struct supp_page_table *spt, const void *vaddr)
 {
   ASSERT (spt != NULL);
   ASSERT (vaddr < PHYS_BASE);
@@ -316,7 +316,7 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
 /* Returns the segment to which vaddr belongs, or NULL.
    Grows the stack if it looks like a legal stack access. */
 static struct segment * 
-supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
+supp_page_table_find_segment (struct supp_page_table *spt, const void *vaddr)
 {
   ASSERT (spt != NULL);
 
@@ -368,7 +368,7 @@ supp_page_table_get_stack_segment (struct supp_page_table *spt)
     
    Returns true if valid, false else. */
 bool 
-supp_page_table_is_range_valid (struct supp_page_table *spt, void *start, void *end)
+supp_page_table_is_range_valid (struct supp_page_table *spt, const void *start, const void *end)
 {
   ASSERT (spt != NULL);
 
@@ -607,7 +607,7 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
 /* Calculate the relative page number of VADDR in segment SEG.
    This is the inverse of segment_calc_vaddr. */
 int32_t 
-segment_calc_page_num (struct segment *seg, void *vaddr)
+segment_calc_page_num (struct segment *seg, const void *vaddr)
 {
   ASSERT (seg != NULL);
   /* TODO @Jamie: Can we have vaddr as start and end segement numbers? */
@@ -975,7 +975,7 @@ page_update_owners_pagedir (struct page *pg, void *paddr)
 /* Clear the pagedir of this element of a page's owners list. 
    Helper for page_clear_owners_pagedir. */
 static void
-page_clear_owners_pagedir_list_action_func (struct list_elem *e, void *aux)
+page_clear_owners_pagedir_list_action_func (struct list_elem *e, void *aux UNUSED)
 {
   ASSERT (e != NULL);
 

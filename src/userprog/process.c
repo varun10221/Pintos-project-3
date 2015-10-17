@@ -1132,7 +1132,7 @@ process_page_table_destroy (void)
 /* Return the appropriate page from supplemental page table,
      or NULL if no such page is defined. */
 struct page *
-process_page_table_find_page (void *vaddr)
+process_page_table_find_page (const void *vaddr)
 {
   return supp_page_table_find_page (&thread_current ()->supp_page_table, vaddr); 
 }

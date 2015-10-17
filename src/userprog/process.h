@@ -68,7 +68,7 @@ void * process_observe_stack_pointer (void *);
 void * process_get_min_observed_stack_pointer (void);
 void process_page_table_init (void);
 void process_page_table_destroy (void);
-struct page * process_page_table_find_page (void *);
+struct page * process_page_table_find_page (const void *);
 void process_pin_page (struct page *);
 void process_unpin_page (struct page *);
 void process_grow_stack (void);

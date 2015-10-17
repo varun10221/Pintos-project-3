@@ -162,7 +162,7 @@ void supp_page_table_init (struct supp_page_table *);
 void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
-struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
+struct page * supp_page_table_find_page (struct supp_page_table *, const void *vaddr);
 void supp_page_table_grow_stack (struct supp_page_table *, int);
 struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct file *, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
