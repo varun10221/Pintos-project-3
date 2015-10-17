@@ -760,6 +760,7 @@ static bool
 page_remove_owner (struct page *pg, struct segment *seg)
 {
   ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
   ASSERT (seg != NULL);
 
   /* A page_owner_info matching what this process would have put into PG->owners were
