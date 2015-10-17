@@ -73,13 +73,15 @@ frame_table_destroy (void)
 
 /* Storing and releasing pages. */
 
-/* Put locked page PG into a frame.
+/* Put page PG into a frame.
    (includes loading the page's contents into the frame).
-   Update the page directory for each of its owners. */
+   Update the page directory for each of its owners. 
+   Acquires and releases lock on PG. */
 void 
 frame_table_store_page (struct page *pg)
 {
   ASSERT (pg != NULL);
+  lock_acquire (&pg->lock);
 
   /* Page must not be in a page already. */
   ASSERT (pg->status != PAGE_RESIDENT);
