@@ -129,7 +129,7 @@ struct page
   struct list owners; 
   bool is_dirty; /* If an owner with a dirty pagedir entry for this page calls page_remove_owner, he sets this to true. */ 
 
-  void *location; /* struct frame* or struct slot* in which this page resides. */
+  void *location; /* If page is in frame or swap table, this is the struct frame* or struct slot* in which this page resides. */
 
   enum page_status status; /* Status of this page. */
 
