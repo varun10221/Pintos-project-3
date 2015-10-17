@@ -547,7 +547,7 @@ process_exit (void)
     file_close (cur->my_executable);
 
   /* Done with our scratch page, if we allocated one. */
-  process_free_scratch_page ();
+  process_scratch_page_free ();
 
   /* Announce that we're exiting. Do so BEFORE we potentially free our child_info_self. 
      Only announce if we were a valid thread. */
@@ -1172,8 +1172,9 @@ void process_delete_mapping (struct mmap_info *mmap_info)
    This is done on-demand in case the process never uses a 
    syscall that requires one. 
    
-   Free with process_free_scratch_page() when process closes. */
-void * process_get_scratch_page (void)
+   Free with process_scratch_page_free() when process closes. */
+void *
+process_scratch_page_get (void)
 {
   struct thread *t = thread_current ();
   if (t->scratch_page == NULL)
@@ -1185,7 +1186,8 @@ void * process_get_scratch_page (void)
 }
 
 /* Free this processes's scratch page, if one was allocated. */
-void process_free_scratch_page (void)
+void 
+process_scratch_page_free (void)
 {
   struct thread *t = thread_current ();
   if (t->scratch_page != NULL)

@@ -366,7 +366,7 @@ syscall_create (const char *file, unsigned initial_size)
   ASSERT (file != NULL);
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
-  char *sp = (char *) process_get_scratch_page ();
+  char *sp = (char *) process_scratch_page_get ();
   ASSERT (PATH_MAX <= PGSIZE);
   size_t len = strlcpy (sp, file, PGSIZE);
   /* If too long, fail gracefully (a la ENAMETOOLONG). */
@@ -387,7 +387,7 @@ syscall_remove (const char *file)
   ASSERT (file != NULL);
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
-  char *sp = (char *) process_get_scratch_page ();
+  char *sp = (char *) process_scratch_page_get ();
   ASSERT (PATH_MAX <= PGSIZE);
   size_t len = strlcpy (sp, file, PGSIZE);
   /* If too long, fail gracefully (a la ENAMETOOLONG). */
@@ -411,7 +411,7 @@ syscall_open (const char *file)
   ASSERT (file != NULL);
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
-  char *sp = (char *) process_get_scratch_page ();
+  char *sp = (char *) process_scratch_page_get ();
   ASSERT (PATH_MAX <= PGSIZE);
   size_t len = strlcpy (sp, file, PGSIZE);
   /* If too long, fail gracefully (a la ENAMETOOLONG). */

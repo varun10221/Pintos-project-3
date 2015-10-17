@@ -73,7 +73,7 @@ struct mmap_info * process_add_mapping (struct file *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
 
 /* Syscall handling. */
-void * process_get_scratch_page (void);
-void process_free_scratch_page (void);
+void * process_scratch_page_get (void);
+void process_scratch_page_free (void);
 
 #endif /* userprog/process.h */
