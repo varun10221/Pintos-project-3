@@ -1145,6 +1145,8 @@ init_thread (struct thread *t, const char *name, int priority)
   /* Start as high as possible. */
   t->min_observed_sp = (void *) ((uint32_t) -1);
 
+  t->getting_syscall_args = false;
+
   /* The fd_table is left uninitialized. 
      userprog/process.c does all of the management for fd_table. */
   t->fd_table.n_elts = 0;

@@ -150,6 +150,10 @@ struct thread
 
     /* The smallest observed stack pointer. Based on observations taken during stack growth and transitions from user to kernel mode. */
     void *min_observed_sp; 
+    /* Keeps us from growing the stack in order to get syscall args. If user gave us bad args in his
+       syscall, we don't want to grow the stack for him. Just terminate him. */
+    bool getting_syscall_args;
+
     /* Maps mmap_id_t to struct mmap_info*. */
     struct vector mmap_table;
     /* Used to map virtual addresses to pages. */

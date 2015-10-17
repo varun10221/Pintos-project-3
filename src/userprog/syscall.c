@@ -118,13 +118,12 @@ syscall_handler (struct intr_frame *f)
 
   /* Copy esp so we can navigate the stack without disturbing the caller. */
   void *sp = f->esp;
-  /* Update min observed esp. */
-  process_observe_stack_pointer (sp);
 
   /* TODO Same thinking as below, do we need to be this careful
      now or can we just make sure sp is below PHYS_BASE and
      let page_fault deal with it?  */
 
+  thread_current ()->getting_syscall_args = true;
   /* Identify syscall. */
   int32_t syscall;
   if (!pop_int32_t_from_user_stack (&syscall, &sp))
@@ -141,6 +140,10 @@ syscall_handler (struct intr_frame *f)
     if (!pop_int32_t_from_user_stack (&args[i], &sp))
       syscall_exit (-1);
   }
+  thread_current ()->getting_syscall_args = false;
+
+  /* We made it this far safely, so update the min observed esp. */
+  process_observe_stack_pointer (sp);
 
 /* Remove this testing for now. I think we don't need to
    worry about it -- if the reference memory is not resident,

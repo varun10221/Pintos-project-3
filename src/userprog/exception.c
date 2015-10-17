@@ -152,19 +152,17 @@ page_fault (struct intr_frame *f)
     /* Access is definitely invalid. */
     thread_exit (); 
 
-  /* P2: Page fault in the kernel: This is caused by an invalid user pointer
+  /* P2: Page fault in the kernel while getting syscall args. 
+   *
+     This is caused by an invalid user pointer
      provided to a system call. Copy eax to eip and set eax to 0xffffffff
-     to communicate to syscall.c::get_user, put_user. 
-     
-     TODO In P3 could be stack growth. See below. */
-#ifndef VM
-  if (!user)
+     to communicate to syscall.c::get_user, put_user. */
+  if (!user && thread_current ()->getting_syscall_args)
   {
     f->eip = (void *) f->eax;
     f->eax = 0xffffffff;
     return;
   }
-#endif
 
   /* TODO Correctly determine if this was stack growth HERE, not in process_page_table_find_page. 
      In this case, call process_page_table_grow_stack and then call find_page. 
@@ -188,7 +186,7 @@ page_fault (struct intr_frame *f)
   /* If we are at most 32 bytes below the stack pointer, we declare this a legal stack access and grow the stack. */
   int MAX_DISTANCE_BELOW_STACK = 32;
 
-  printf ("page_fault: user %i fault_addr %p min_sp %p\n", user, fault_addr, min_sp);
+  /* printf ("page_fault: user %i fault_addr %p min_sp %p\n", user, fault_addr, min_sp); */
 
   if (fault_addr < min_sp && min_sp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
     process_grow_stack ();
