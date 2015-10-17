@@ -21,9 +21,6 @@
 /* Size of tables. */
 #define N_SUPPORTED_SYSCALLS 15
 
-/* Read/write buffer size. We do IO in this unit. */
-#define STDINOUT_BUFSIZE 512
-
 enum io_type 
   {
     IO_TYPE_READ, /* IO will read. */
@@ -453,57 +450,71 @@ syscall_read (int fd, void *buffer, unsigned size)
   int n_left = (int) size;
   int n_read = 0;
 
-  if (fd == STDOUT_FILENO)
-  {
-    int i;
-    char *buf = (char *) buffer;
-    for (i = 0; i < n_left; i++)
-      buf[i] = (char) input_getc ();
-  }
-  else
+  struct file *f;
+  if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
-    struct file *f = process_fd_lookup (fd);
+    f = process_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
       return -1;
-  
-    n_left = (int) size;
-    /* NB This implementation makes for interesting potential "races" with other readers/writers. 
-       See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
-    while (0 <= n_left)
+  }
+
+  /* NB If doing file I/O, this implementation allows "races" with other readers/readrs. 
+     File content can vary based on IO interleaving.
+     See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
+  while (n_left)
+  {
+    ASSERT (0 < n_left);
+    int amount_to_read = PGSIZE;
+    /* If buffer is not page-aligned, only read up to the end of the page so that 
+       subsequent non-final reads will be page-aligned. */
+    uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
+    if (mod_PGSIZE != 0)
+      /* (read from buffer to the end of its containing page) */
+      amount_to_read = PGSIZE - mod_PGSIZE;
+    /* n_left is an upper bound on the amount to read. */
+    if (n_left < amount_to_read)
+      amount_to_read = n_left;
+
+    /* For each page in buffer, pin the page to a frame so that we cannot
+       page fault while we are holding filesys_lock(). */
+    struct page *pg = process_page_table_find_page (buffer);
+    /* Bad buffer? Bail out. */
+    if (pg == NULL)
+      syscall_exit (-1);
+
+    process_pin_page (pg);
+
+    int32_t amount_read = -1;
+    if (fd == STDOUT_FILENO)
     {
-      /* For each page in buffer, pin the page to a frame so that we cannot
-         page fault while we are holding filesys_lock(). */
-      struct page *pg = process_page_table_find_page (buffer);
-      ASSERT (pg != NULL);
-      process_pin_page (pg);
-
-      int amount_to_read = PGSIZE;
-      /* If buffer is not page-aligned, only read up to the end of the page so that 
-         subsequent non-final reads will be page-aligned. */
-      uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
-      if (mod_PGSIZE != 0)
-        /* (read from buffer to the end of its containing page) */
-        amount_to_read = PGSIZE - mod_PGSIZE;
-      /* n_left is an upper bound on the amount to read. */
-      if (n_left < amount_to_read)
-        amount_to_read = n_left;
-
-      filesys_lock ();
-      n_read = file_read (f, buffer, amount_to_read);
-      filesys_unlock ();
-
-      process_unpin_page (pg);
-
-      /* Advance buffer. */
-      buffer += n_read;
-      n_left -= n_read;
-      /* If we read non-negative value but less than the expected amount, we've reached end of file. */
-      ASSERT (0 <= n_read && n_read <= amount_to_read);
-      if (n_read != amount_to_read)
-        break;
+      /* This page of the buffer is pinned, so read amount_to_read chars. */
+      char *buf = (char *) buffer;
+      int i;
+      for (i = 0; i < amount_to_read; i++)
+        buf[i] = (char) input_getc ();
+      amount_read = amount_to_read;
     }
+    else
+    {
+      filesys_lock ();
+      amount_read = file_read (f, buffer, amount_to_read);
+      filesys_unlock ();
+    }
+
+    process_unpin_page (pg);
+  
+    /* Advance buffer. */
+    buffer += amount_read;
+
+    /* Update counters. */
+    n_read += amount_read;
+    n_left -= amount_read;
+    /* File I/O only: if we read a non-negative value but less than the expected amount, we've reached end of file. */
+    ASSERT (0 <= amount_read && amount_read <= amount_to_read);
+    if (amount_read != amount_to_read)
+      break;
   }
 
   return n_read;
@@ -521,67 +532,70 @@ syscall_write (int fd, const void *buffer, unsigned size)
   if (!is_valid_fd)
     return -1;
 
-  ASSERT (buffer != NULL);
-
-  int n_to_write;
   int n_left = (int) size;
   int n_written = 0;
 
-  if (fd == STDOUT_FILENO)
-  {
-    while (n_left)
-    {
-      /* Write no more than STDINOUT_BUFSIZE at a time. */
-      n_to_write = (STDINOUT_BUFSIZE <= n_left ? STDINOUT_BUFSIZE : n_left);
-      putbuf (buffer + n_written, n_to_write);
-      n_written += n_to_write;
-      n_left -= n_to_write;
-    }
-  }
-  else
+  struct file *f;
+  if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
-    struct file *f = process_fd_lookup (fd);
+    f = process_fd_lookup (fd);
     if (f == NULL)
       /* We don't have this fd open. */
       return -1;
-  
-    n_left = (int) size;
-    /* NB This implementation makes for interesting potential "races" with other readers/writers. 
-       See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
-    while (0 <= n_left)
+  }
+
+  /* NB If doing file I/O, this implementation allows "races" with other readers/writers. 
+     File content can vary based on IO interleaving.
+     See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
+  while (n_left)
+  {
+    ASSERT (0 < n_left);
+    int amount_to_write = PGSIZE;
+    /* If buffer is not page-aligned, only write up to the end of the page so that 
+       subsequent non-final writes will be page-aligned. */
+    uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
+    if (mod_PGSIZE != 0)
+      /* (write from buffer to the end of its containing page) */
+      amount_to_write = PGSIZE - mod_PGSIZE;
+    /* n_left is an upper bound on the amount to write. */
+    if (n_left < amount_to_write)
+      amount_to_write = n_left;
+
+    /* For each page in buffer, pin the page to a frame so that we cannot
+       page fault while we are holding filesys_lock(). */
+    struct page *pg = process_page_table_find_page (buffer);
+    /* Bad buffer? Bail out. */
+    if (pg == NULL)
+      syscall_exit (-1);
+
+    process_pin_page (pg);
+
+    int32_t amount_written = -1;
+    if (fd == STDOUT_FILENO)
     {
-      /* For each page in buffer, pin the page to a frame so that we cannot
-         page fault while we are holding filesys_lock(). */
-      struct page *pg = process_page_table_find_page (buffer);
-      ASSERT (pg != NULL);
-      process_pin_page (pg);
-
-      int amount_to_write = PGSIZE;
-      /* If buffer is not page-aligned, only write up to the end of the page so that 
-         subsequent non-final writes will be page-aligned. */
-      uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
-      if (mod_PGSIZE != 0)
-        /* (write from buffer to the end of its containing page) */
-        amount_to_write = PGSIZE - mod_PGSIZE;
-      /* n_left is an upper bound on the amount to write. */
-      if (n_left < amount_to_write)
-        amount_to_write = n_left;
-
-      filesys_lock ();
-      n_written = file_write (f, buffer, amount_to_write);
-      filesys_unlock ();
-
-      process_unpin_page (pg);
-
-      /* Advance buffer. */
-      buffer += n_written;
-      n_left -= n_written;
-      /* If we write non-negative value but less than the expected amount, we've reached end of file. */
-      ASSERT (0 <= n_written && n_written <= amount_to_write);
-      if (n_written != amount_to_write)
-        break;
+      putbuf (buffer + n_written, amount_to_write);
+      amount_written = amount_to_write;
     }
+    else
+    {
+      filesys_lock ();
+      amount_written = file_write (f, buffer, amount_to_write);
+      filesys_unlock ();
+    }
+
+    process_unpin_page (pg);
+  
+    /* Advance buffer. */
+    buffer += amount_written;
+
+    /* Update counters. */
+    n_written += amount_written;
+    n_left -= amount_written;
+    /* File I/O only: if we write a non-negative value but less than the expected amount, we've reached end of file. */
+    ASSERT (0 <= amount_written && amount_written <= amount_to_write);
+    if (amount_written != amount_to_write)
+      break;
   }
 
   return n_written;
