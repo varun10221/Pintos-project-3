@@ -236,8 +236,7 @@ supp_page_table_destroy (struct supp_page_table *spt)
    Returns NULL if no such page (i.e. illegal memory access). 
    
    Will add pages to the stack segment to accommodate growth if needed.
-   Will only do so if we are handling a syscall and vaddr is above 
-   thread_current ()->vm_esp. (i.e. a valid stack access). */
+   Will only do so if vaddr is above the min_observed_esp (i.e. a valid stack access). */
 struct page * 
 supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
@@ -266,9 +265,9 @@ supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
   ASSERT (spt != NULL);
   struct segment *seg = supp_page_table_get_stack_segment (spt);
   ASSERT (seg != NULL);
-  int i;
-  for (i = 0; i < n_pages; i++)
-    seg->start -= PGSIZE;
+
+  seg->start -= PGSIZE*n_pages;
+  process_observe_stack_pointer (seg->start);
 }
 
 /* Add a memory mapping to supp page table SPT
@@ -315,7 +314,7 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
 }
 
 /* Returns the segment to which vaddr belongs, or NULL.
-   If this is stack growth in a syscall, we grow the stack. */
+   Grows the stack if it looks like a legal stack access. */
 static struct segment * 
 supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
 {
@@ -334,14 +333,14 @@ supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
 
   /* No segment found. */
 
-  /* Is this: stack growth taking place in a syscall? */
-  struct thread *thr = thread_current ();
-  if (thr->is_handling_syscall && thr->vm_esp <= vaddr)
+  /* Is this vaddr below the minimum observed sp? If so, we need to grow the stack. */
+  if (process_get_min_observed_stack_pointer () <= vaddr)
   {
-    /* vaddr is at or above esp: extend the stack segment downward. */
+    /* Extend stack to include vaddr. 
+       Don't go all the way to min_observed_stack_pointer, since this 
+       may be unnecessary. */
     seg = supp_page_table_get_stack_segment (spt);
-    while (vaddr < seg->start)
-      seg->start -= PGSIZE;
+    seg->start = (void *) ROUND_DOWN ((uint32_t) vaddr, PGSIZE);
     return seg;
   }
 

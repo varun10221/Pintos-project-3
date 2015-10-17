@@ -1142,8 +1142,8 @@ init_thread (struct thread *t, const char *name, int priority)
 #ifdef USERPROG
   t->my_executable = NULL;
 
-  t->vm_esp = NULL;
-  t->is_handling_syscall = false;
+  /* Start as high as possible. */
+  t->min_observed_sp = (void *) ((uint32_t) -1);
 
   /* The fd_table is left uninitialized. 
      userprog/process.c does all of the management for fd_table. */

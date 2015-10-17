@@ -901,6 +901,7 @@ setup_stack (void **esp)
 {
 #ifdef VM
   *esp = PHYS_BASE;
+  process_observe_stack_pointer (PHYS_BASE);
   return true;
 #else
   uint8_t *kpage;
@@ -1093,6 +1094,26 @@ process_mmap_remove_all (void)
 }
 
 /* Page table interaction functions. */
+
+/* We have seen user with stack pointer SP. 
+   Updates min observed SP if needed. 
+   Round SP down to PGSIZE.
+   Returns the minimum observed stack pointer. */ 
+void * 
+process_observe_stack_pointer (void *sp)
+{
+  struct thread *thr = thread_current ();
+  sp = (void *) ROUND_DOWN ((uint32_t) sp, PGSIZE);
+  thr->min_observed_sp = (void *) MIN ((uint32_t) sp, (uint32_t) thr->min_observed_sp);
+  return thr->min_observed_sp;
+}
+
+/* Get the minimum observed stack pointer. */
+void * 
+process_get_min_observed_stack_pointer (void)
+{
+  return thread_current ()->min_observed_sp;
+}
 
 /* Initialize this process's supplemental page table. */
 void 

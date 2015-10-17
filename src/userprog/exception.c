@@ -182,19 +182,16 @@ page_fault (struct intr_frame *f)
        to page_fault() would yield an undefined value, not the user stack pointer. You 
        will need to arrange another way, such as saving esp into struct thread on the 
        initial transition from user to kernel mode. */
-  void *esp = NULL;
-  bool could_be_stack_growth = (user || thread_current ()->is_handling_syscall); 
-  if (could_be_stack_growth)
-  {
-    if (user)
-      esp = f->esp;
-    else
-      esp = thread_current ()->vm_esp; /* TODO Under what circumstances do we come here? Arg parsing when args have not been set by the user? */
-    /* If we are at most 32 bytes below the stack pointer, we call this stack growth. */
-    int MAX_DISTANCE_BELOW_STACK = 32;
-    if (fault_addr < esp && esp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
-      process_grow_stack ();
-  }
+  if (user)
+    process_observe_stack_pointer (f->esp);
+  void *min_sp = process_get_min_observed_stack_pointer ();
+  /* If we are at most 32 bytes below the stack pointer, we declare this a legal stack access and grow the stack. */
+  int MAX_DISTANCE_BELOW_STACK = 32;
+
+  printf ("page_fault: user %i fault_addr %p min_sp %p\n", user, fault_addr, min_sp);
+
+  if (fault_addr < min_sp && min_sp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
+    process_grow_stack ();
 
   /* Now that we've grown the stack if needed, we're ready to find 
      the page in our SPT. */
@@ -209,4 +206,3 @@ page_fault (struct intr_frame *f)
     /* Default exit status is -1. */
     thread_exit ();
 }
-

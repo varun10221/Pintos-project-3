@@ -118,10 +118,8 @@ syscall_handler (struct intr_frame *f)
 
   /* Copy esp so we can navigate the stack without disturbing the caller. */
   void *sp = f->esp;
-  /* Copy esp for handling stack growth in kernel mode. */
-  struct thread *thr = thread_current ();
-  thr->vm_esp = f->esp;
-  thr->is_handling_syscall = true;
+  /* Update min observed esp. */
+  process_observe_stack_pointer (sp);
 
   /* TODO Same thinking as below, do we need to be this careful
      now or can we just make sure sp is below PHYS_BASE and
@@ -306,8 +304,6 @@ syscall_handler (struct intr_frame *f)
     default:
       printf ("Unsupported system call! vec %i esp %i\n", f->vec_no, *(int32_t *) f->esp);
   };  
-
-  thr->is_handling_syscall = false;
 }
 
 /* Any user-provided addresses given to the syscall_* routines have
