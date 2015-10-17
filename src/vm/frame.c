@@ -20,6 +20,10 @@ struct frame_table system_frame_table;
 /* Private function declarations. */
 static void frame_table_init_frame (struct frame *, id_t);
 
+static void frame_table_incr_n_free_frames (void);
+static void frame_table_decr_n_free_frames (void);
+static uint32_t frame_table_get_n_free_frames (void);
+
 /* Nice way to get a frame. */
 static struct frame * frame_table_obtain_locked_frame (void);
 
@@ -148,10 +152,11 @@ frame_table_release_page (struct page *pg)
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
   fr->popularity = POPULARITY_START;
+  frame_table_incr_n_free_frames ();
   lock_release (&fr->lock);
 
   /* Update page. */
-  pg->status = FRAME_DISCARDED;
+  pg->status = PAGE_DISCARDED;
   pg->location = NULL;
 }
 
@@ -514,4 +519,35 @@ frame_table_find_free_frame (void)
 
   /* No free frame found, return NULL. */
   return NULL;
+}
+
+/* Atomically increment the number of free frames. */
+static void 
+frame_table_incr_n_free_frames (void)
+{
+  lock_acquire (&system_frame_table.n_free_frames_lock);
+
+  ASSERT (system_frame_table.n_free_frames < system_frame_table.n_frames);
+  system_frame_table.n_free_frames++;
+
+  lock_release (&system_frame_table.n_free_frames_lock);
+}
+
+/* Atomically decrement the number of free frames. */
+static void 
+frame_table_decr_n_free_frames (void)
+{
+  lock_acquire (&system_frame_table.n_free_frames_lock);
+
+  ASSERT (0 < system_frame_table.n_free_frames);
+  system_frame_table.n_free_frames--;
+
+  lock_release (&system_frame_table.n_free_frames_lock);
+}
+
+/* Look up the number of free frames. */
+static uint32_t 
+frame_table_get_n_free_frames (void)
+{
+  return system_frame_table.n_free_frames;
 }
