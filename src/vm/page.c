@@ -793,6 +793,8 @@ page_remove_owner (struct page *pg, struct segment *seg)
     /* If pagedir entry is dirty, set is_dirty on our way out. */
     if (pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr))
       pg->is_dirty = true;
+    /* Wipe our pagedir entry. */
+    pagedir_clear_page (poi->owner->pagedir, poi->vpg_addr);
     free (poi);
   }
 
