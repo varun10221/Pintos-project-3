@@ -300,11 +300,13 @@ frame_table_pin_page (struct page *pg)
 
   /* Lock PG. This lets us test for residence and be confident that PG will
      not be evicted until we are done if it is already resident. 
+     (See comments for frame_table_get_eviction_victim.) 
 
-     See comments for frame_table_get_eviction_victim. */
+     frame_table_store_page accommodates us by not locking/unlocking page
+     if the lock is already held by the caller. */
   lock_acquire (&pg->lock);
 
-  if (pg->location != PAGE_RESIDENT)
+  if (pg->status != PAGE_RESIDENT)
     frame_table_store_page (pg);
 
   struct frame *fr = (struct frame *) pg->location;
