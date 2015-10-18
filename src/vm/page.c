@@ -341,24 +341,26 @@ supp_page_table_find_segment (struct supp_page_table *spt, const void *vaddr)
        e = list_next (e))
   {
     seg = list_entry (e, struct segment, elem);
-    /* For the stack segment, the minimum valid address is the min observed stack pointer (arbitrary address) rather than seg->start (page aligned). */
-    void *min_valid_addr = (seg == stack_seg ? process_get_min_observed_stack_pointer () : seg->start);
-    if (min_valid_addr <= vaddr && vaddr < seg->end)
+    /* Handle stack segment specially below. */
+    if (seg != stack_seg && seg->start <= vaddr && vaddr < seg->end)
       return seg;
   }
 
   /* No segment found. */
 
-  /* TODO Do we ever come here? */
-  /* Is this vaddr below the minimum observed sp? If so, we need to grow the stack. */
+  /* Is this vaddr below the minimum observed sp? If so, we may need to grow the stack. */
   if (process_get_min_observed_stack_pointer () <= vaddr)
   {
-    /* Extend stack to include vaddr. 
-       Don't go all the way to min_observed_stack_pointer, since this 
-       may be unnecessary. */
+    if (stack_seg->start <= vaddr)
+      /* Already big enough, no need to grow. */
+      return stack_seg;
+
+    /* Not big enough yet. Extend stack to include vaddr. 
+       Don't go all the way to min_observed_stack_pointer -- only do that
+       if they actually go that low. */
     seg = supp_page_table_get_stack_segment (spt);
     seg->start = (void *) ROUND_DOWN ((uint32_t) vaddr, PGSIZE);
-    return seg;
+    return stack_seg;
   }
 
   return NULL;
@@ -490,10 +492,18 @@ segment_destroy (struct segment *seg)
   }
 
   /* Iterate over the mappings, removing ourselves from the list of owners for each. 
-     We must be the sole modifier of the hash at this time, hence the lock in the case
-     of a shared mapping. */
+     We may also destroy the pages involved.
+     We must be the sole modifier of the hash while iterating over it and removing pages. */
   if (sm)
     lock_acquire (&sm->segment_mapping_info_lock);
+
+  /* Track pages from the hash that are dead (no owners) in a list for subsequent destruction.
+     Note that due to hash API restrictions, we cannot simply delete elements from the hash while
+     iterating over it. Since we hold segment_mapping_info_lock throughout, no new owners can be added
+     after we remove ourselves as owners, so if a page has no owners when we add it to dead_pages then
+     it must still have no owners when we go to delete it. */
+  struct list dead_pages;
+  list_init (&dead_pages);
 
   struct hash *h = &smi->mappings;
   struct hash_iterator hi;
@@ -504,23 +514,32 @@ segment_destroy (struct segment *seg)
   {
     next = hash_next (&hi);
     struct page *pg = (struct page *) hash_entry (he, struct page, elem);
+    /* Lock to protect owners -- coordinate with frame_table_evict_page_from_frame. */
     lock_acquire (&pg->lock);
     bool was_sole_owner = page_remove_owner (pg, seg);
+    lock_release (&pg->lock);
     if (seg->type == SEGMENT_PRIVATE)
     {
       ASSERT (was_sole_owner);
     }
     if (was_sole_owner)
-    {
-      hash_delete (h, &pg->elem);
-      page_destroy (pg);
-    }
-    else
-      lock_release (&pg->lock);
+      list_push_back (&dead_pages, &pg->dead_elem);
     he = next;
   }
 
+  /* Clean up the dead pages. */
+  struct list_elem *e;
+  while (!list_empty (&dead_pages))
+  {
+    e = list_pop_front (&dead_pages);
+    struct page *pg = list_entry (e, struct page, dead_elem);
+    ASSERT (list_empty (&pg->owners));
+    hash_delete (h, &pg->elem);
+    page_destroy (pg); /* This ends with free (pg), so e is dead. */
+  }
+
   if (sm)
+    /* Done iterating over and modifying the mappings hash. */
     lock_release (&sm->segment_mapping_info_lock);
 
   /* Remaining cleanup for private segments. */
@@ -583,6 +602,7 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   ASSERT (h != NULL);
 
   if (sm)
+    /* Lock to ensure mutex on hash_insert. */
     lock_acquire (&sm->segment_mapping_info_lock);
 
   struct page *ret = NULL;
@@ -599,6 +619,10 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
 
   /* Lock page so that the owners member is fixed. */
   lock_acquire (&ret->lock);
+
+  if (sm)
+    /* The lock on the page protects us from here on. */
+    lock_release (&sm->segment_mapping_info_lock);
 
   /* Now that we've got a page, we need to make sure we are on the list of owners of the page. 
      In the event that it's a shared page, we may or may not already be on the list. 
@@ -621,9 +645,6 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   }
 
   lock_release (&ret->lock);
-
-  if (sm)
-    lock_release (&sm->segment_mapping_info_lock);
 
   return ret;
 }
@@ -722,15 +743,22 @@ page_create (struct segment_mapping_info *smi, int32_t segment_page)
   return pg;
 }
 
-/* Destroy locked page PG created by page_create(). */
+/* Destroy page PG created by page_create(). 
+   This page is not initially locked, so no other process
+   can be allowed to add itself to the list of owners.
+
+   Therefore, if the page is shared, a lock on the associated
+   segment_mapping_info_lock must be held by the caller. */
 void 
 page_destroy (struct page *pg)
 {
   ASSERT (pg != NULL);
 
+  /* Lock to protect pg->status -- coordinate with frame_table_evict_page_from_frame. */
+  lock_acquire (&pg->lock);
   /* Only the last owner should be destroying this page. 
      In this case, pg->owners is empty. */
-  ASSERT (list_size (&pg->owners) == 0);
+  ASSERT (list_empty (&pg->owners)); 
 
   /* TODO Should I know that the swap table exists? */
   if (pg->status == PAGE_RESIDENT)
@@ -740,6 +768,7 @@ page_destroy (struct page *pg)
 
   pg->status = PAGE_DISCARDED;
 
+  lock_release (&pg->lock);
   free (pg);
 }
 

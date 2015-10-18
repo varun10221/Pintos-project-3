@@ -152,8 +152,9 @@ struct page
   struct segment_mapping_info *smi; /* Info for mmap and knowledge about rw status. */
   int32_t segment_page; /* Which page in its segment is this? Segments hash pages by segment_page. */
 
-  struct lock lock; /* Used for owners (and for eviction?). */ 
+  struct lock lock; /* Used to protect owners and location+status. */
   struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
+  struct list_elem dead_elem; /* For adding to a list of dead pages in segment_destroy. A page must be present in exactly one segment_mapping_info's mappings hash. */
 };
 
 /* Tracks the segment* associated with a given mapid_t. 
