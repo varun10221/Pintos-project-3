@@ -992,6 +992,41 @@ page_update_owners_pagedir (struct page *pg, void *paddr)
   list_apply (&pg->owners, page_update_owners_pagedir_list_action_func, paddr);
 }
 
+
+
+/* Check the page dir of each owner , if the page is accessed 
+ if accessed the function updates popularity of frame corresponding to page 
+called in interrupt_context , dont lock any frames or pages as */
+void
+page_update_accessbit_popularity_pagedir (struct *pg, struct frame *fr)
+{
+  ASSERT (pg != NULL);
+  int i;
+  struct list_elem *e;
+  for (e = list_begin (&pg->owners); e!= list_end (&pg->owners); 
+       e = list_next(e))
+   {
+    struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);    
+    if(pagedir_is_accessed (poi->owner->pagedir, poi->vpg_addr))
+      {
+         if (fr->popularity < 255)
+              fr->popularity ++;
+         pagedir_set_accessed (poi->owner->pagedir , poi->vpg_addr, false);
+
+      }
+    else if (fr->popularity > 0)
+              fr->popularity --;              
+   
+
+    }
+
+   
+
+}
+    
+
+
+
 /* Clear the pagedir of this element of a page's owners list. 
    Helper for page_clear_owners_pagedir. */
 static void
@@ -1035,6 +1070,13 @@ page_update_owners_pagedir_list_action_func (struct list_elem *e, void *aux)
   struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
   pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, paddr, poi->writable);
 }
+
+
+
+ 
+
+
+
 
 /*
   QUESTION FROM VARUN:
