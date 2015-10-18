@@ -576,16 +576,22 @@ frame_table_get_n_free_frames (void)
 }
 
 void
-frame_table_popularity_update ()
+frame_table_return_eviction_candidate ()
 {
    int i;
+   bool a;
    struct frame *frames = (struct frame *) system_frame_table.frames;
    for (i = 0; i < system_frame_table.n_frames; i++)
-    {    if(&frames[i] != NULL && &frames[i]->pg != NULL)
-          page_update_accessbit_popularity_pagedir (&frames[i]->pg, &frames[i]); 
-       
+    {    if(&frames[i] != NULL && &frames[i]->pg != NULL && &frames[i].status != FRAME_PINNED)
+           
+          a = page_update_accessbit_popularity_pagedir (&frames[i]->pg, &frames[i]); 
+          if(a)
+           break;
      }
 
+   
+
+   
 }        
           
 

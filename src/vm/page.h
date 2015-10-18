@@ -186,5 +186,6 @@ void supp_page_table_remove_segment (struct supp_page_table *, struct segment *)
 void page_clear_owners_pagedir (struct page *);
 void page_update_owners_pagedir (struct page *, void *);
 bool page_unset_dirty (struct page *);
+bool page_check_accessbit_decide_eviction_pagedir (struct page * , struct frame *);
 
 #endif /* vm/page.h */
