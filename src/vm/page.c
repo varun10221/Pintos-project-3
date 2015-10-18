@@ -241,7 +241,8 @@ struct page *
 supp_page_table_find_page (struct supp_page_table *spt, const void *vaddr)
 {
   ASSERT (spt != NULL);
-  ASSERT (vaddr < PHYS_BASE);
+  if (PHYS_BASE <= vaddr)
+    return NULL;
 
   struct segment *seg = supp_page_table_find_segment (spt, vaddr);
 
@@ -267,7 +268,6 @@ supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
   ASSERT (seg != NULL);
 
   seg->start -= PGSIZE*n_pages;
-  process_observe_stack_pointer (seg->start);
 }
 
 /* Add a memory mapping to supp page table SPT
@@ -336,16 +336,20 @@ supp_page_table_find_segment (struct supp_page_table *spt, const void *vaddr)
   struct list_elem *e = NULL;
   struct segment *seg = NULL;
 
+  struct segment *stack_seg = supp_page_table_get_stack_segment (spt);
   for (e = list_begin (&spt->segment_list); e != list_end (&spt->segment_list);
        e = list_next (e))
   {
     seg = list_entry (e, struct segment, elem);
-    if (seg->start <= vaddr && vaddr < seg->end)
+    /* For the stack segment, the minimum valid address is the min observed stack pointer (arbitrary address) rather than seg->start (page aligned). */
+    void *min_valid_addr = (seg == stack_seg ? process_get_min_observed_stack_pointer () : seg->start);
+    if (min_valid_addr <= vaddr && vaddr < seg->end)
       return seg;
   }
 
   /* No segment found. */
 
+  /* TODO Do we ever come here? */
   /* Is this vaddr below the minimum observed sp? If so, we need to grow the stack. */
   if (process_get_min_observed_stack_pointer () <= vaddr)
   {
@@ -792,6 +796,8 @@ page_remove_owner (struct page *pg, struct segment *seg)
     /* If pagedir entry is dirty, set is_dirty on our way out. */
     if (pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr))
       pg->is_dirty = true;
+    /* Wipe our pagedir entry. */
+    pagedir_clear_page (poi->owner->pagedir, poi->vpg_addr);
     free (poi);
   }
 
