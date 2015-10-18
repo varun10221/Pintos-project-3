@@ -241,7 +241,8 @@ struct page *
 supp_page_table_find_page (struct supp_page_table *spt, const void *vaddr)
 {
   ASSERT (spt != NULL);
-  ASSERT (vaddr < PHYS_BASE);
+  if (PHYS_BASE <= vaddr)
+    return NULL;
 
   struct segment *seg = supp_page_table_find_segment (spt, vaddr);
 
