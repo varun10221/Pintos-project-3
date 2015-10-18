@@ -360,7 +360,9 @@ static bool
 syscall_create (const char *file, unsigned initial_size)
 {
   if (file == NULL)
-    return -1;
+    /* TODO Argue with Dr. Back about the create-null test. Per P2 specs, returning false should suffice. */ 
+    syscall_exit (-1);
+    /* return false; */
 
   /* Copy file into process's scratch page so that it will be safe from page fault. */
   char *sp = (char *) process_scratch_page_get ();
