@@ -504,20 +504,25 @@ list_insert_ordered_unique (struct list *list, struct list_elem *elem,
   ASSERT (elem != NULL);
   ASSERT (less != NULL);
 
-  struct list_elem *e = NULL;
-  for (e = list_begin (list); e != list_end (list); e = list_next (e))
-    if (less (elem, e, aux))
-      break;
-
-  /* If previous e < elem, it's safe to insert it. */
-  struct list_elem *prev = e->prev;
-  if (less (prev, elem, aux))
+  struct list_elem *prev = NULL;
+  struct list_elem *curr = NULL;
+  for (curr = list_begin (list); curr != list_end (list); curr = list_next (curr))
   {
-    list_insert (e, elem);
+    /* If elem < curr, then either prev == elem or we add elem to the list. */
+    if (less (elem, curr, aux))
+      break;
+    prev = curr;
+  }
+
+  /* A. If list was empty, add ourselves, OR
+     B. If prev < elem, add ourselves. */ 
+  if (prev == NULL || less (prev, elem, aux))
+  {
+    list_insert (curr, elem);
     return true;
   }
   else
-    /* Otherwise we have a duplicate entry. */
+    /* Otherwise we prev < elem && elem < prev: duplicate. */
     return false;
 }
 
