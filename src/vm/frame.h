@@ -58,4 +58,8 @@ void frame_table_release_page (struct page *);
 void frame_table_pin_page (struct page *);
 void frame_table_unpin_page (struct page *);
 
+/* Replacement Algorithm support function */
+void frame_table_popularity_change ()
+
+
 #endif /* vm/frame.h */

@@ -17,6 +17,7 @@
    Processes use the functions defined in frame.h to interact with this table. */
 struct frame_table system_frame_table;
 
+
 /* Private function declarations. */
 static void frame_table_init_frame (struct frame *, id_t);
 
@@ -413,6 +414,8 @@ frame_table_get_eviction_victim (void)
      } /* Loop over all frames. */
    } /* Loop from 0 to 5. */
    
+ 
+
    return NULL;
 }
 
@@ -569,3 +572,27 @@ frame_table_get_n_free_frames (void)
 {
   return system_frame_table.n_free_frames;
 }
+
+void
+frame_table_popularity_change ()
+{
+   int i,j;
+   struct frame *frames = (struct frame *) system_frame_table.frames;
+   for (i = 0; i < system_frame_table.n_frames; i++)
+    {
+        
+       
+
+        
+          
+
+
+
+
+
+
+
+
+
+
+

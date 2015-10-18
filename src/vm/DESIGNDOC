@@ -9,7 +9,7 @@
 >> Fill in the names and email addresses of your group members.
 
 Jamie Davis <davisjam@vt.edu>
-
+Varun Subramanian <varuns92@vt.edu>
 ---- PRELIMINARIES ----
 
 >> If you have any preliminary comments on your submission, notes for the
@@ -60,6 +60,19 @@ Jamie Davis <davisjam@vt.edu>
 
 >> B2: When a frame is required but none is free, some frame must be
 >> evicted.  Describe your code for choosing a frame to evict.
+   
+   Each frame is associated with a popularity that varies between 0 and 255.
+   Whenever the number of free frames, fall below a certain threshold in the
+   frame table, we will start updating the popularity of the non-free frames
+   by checking if the pages in the frames are accessed are not. If the pages are
+   accessed after the last time since the check was made, popularity of the frame
+   gets incremented,if not the popularity gets decremented (by 1). This updation 
+   will stop again if the number of free_frames go above the threshold. The
+   updation of the popularity is handled in the interrupt context. Hence at the 
+   time ,when a decision regarding eviction has to made , the frame with the lowest
+   popularity will be picked and evicted.  
+  
+
 
 >> B3: When a process P obtains a frame that was previously used by a
 >> process Q, how do you adjust the page table (and any other data
