@@ -183,7 +183,10 @@ page_fault (struct intr_frame *f)
   /* If we are at most 32 bytes below the stack pointer, we declare this a legal stack access and grow the stack. */
   int MAX_DISTANCE_BELOW_STACK = 32;
   if (fault_addr < min_sp && min_sp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
+  {
     process_grow_stack ();
+    process_observe_stack_pointer (fault_addr); /* This is now the lowest we've seen a valid stack access. */
+  }
 
   /* Now that we've grown the stack if needed, we're ready to find 
        the page in our SPT...unless we already found it earlier, 
