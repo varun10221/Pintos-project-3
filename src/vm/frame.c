@@ -484,7 +484,6 @@ frame_table_init_frame (struct frame *fr, id_t id)
 {
   ASSERT (fr != NULL);
 
-  fr->id = id;
   lock_init (&fr->lock);
   /* frames is contiguous memory, so linear addressing works. */
   fr->paddr = system_frame_table.phys_pages + id*PGSIZE;
