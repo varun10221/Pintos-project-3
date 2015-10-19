@@ -18,7 +18,7 @@
 struct frame_table system_frame_table;
 
 /* Private function declarations. */
-static void frame_table_init_frame (struct frame *, id_t);
+static void frame_table_init_frame (struct frame *, void *);
 
 static void frame_table_incr_n_free_frames (void);
 static void frame_table_decr_n_free_frames (void);
@@ -40,7 +40,6 @@ void
 frame_table_init (size_t n_frames)
 {
   size_t i;
-  n_frames -= 10; /* Allow processes to load small executables. TODO TESTING ONLY. */
 
   system_frame_table.n_frames = n_frames;
 
@@ -56,7 +55,8 @@ frame_table_init (size_t n_frames)
   /* Initialize each frame. */
   struct frame *frames = (struct frame *) system_frame_table.frames;
   for (i = 0; i < system_frame_table.n_frames; i++)
-    frame_table_init_frame (&frames[i], i);
+    /* phys_pages is contiguous memory, so linear addressing works. */
+    frame_table_init_frame (&frames[i], system_frame_table.phys_pages + i*PGSIZE);
 
   /* Initialize the swap table: the ST is the FT's dirty little secret. */
   swap_table_init ();
@@ -480,15 +480,14 @@ frame_table_evict_page_from_frame (struct frame *fr)
   lock_release (&pg->lock);
 }
 
-/* Initialize frame FR. */
+/* Initialize frame FR based on physical mem beginning at PADDR. */
 static void 
-frame_table_init_frame (struct frame *fr, id_t id)
+frame_table_init_frame (struct frame *fr, void *paddr)
 {
   ASSERT (fr != NULL);
 
   lock_init (&fr->lock);
-  /* frames is contiguous memory, so linear addressing works. */
-  fr->paddr = system_frame_table.phys_pages + id*PGSIZE;
+  fr->paddr = paddr;
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
 }
