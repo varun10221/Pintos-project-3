@@ -358,7 +358,7 @@ static struct frame *
 frame_table_make_free_frame (void)
 {
   /* TODO For testing, since eviction is currently too expensive. */
-  return NULL;
+ // return NULL;
   struct frame *victim = frame_table_return_eviction_candidate ();
   if (victim != NULL)
   {
@@ -604,7 +604,7 @@ frame_table_return_eviction_candidate ()
          struct frame *fr = &frames[i]; 
         if(fr != NULL && fr->pg != NULL && fr->status != FRAME_PINNED)
            
-          a = page_check_accessbit_decide_evicition_pagedir (fr->pg); 
+          a = page_check_accessbit_decide_eviction_pagedir (fr->pg); 
           if(a)
            { 
              lock_acquire (&fr->lock);
