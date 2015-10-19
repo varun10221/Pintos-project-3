@@ -353,6 +353,8 @@ frame_table_unpin_page (struct page *pg)
 static struct frame * 
 frame_table_make_free_frame (void)
 {
+  /* TODO For testing, since eviction is currently too expensive. */
+  return NULL;
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
   {
