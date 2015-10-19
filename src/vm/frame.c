@@ -514,7 +514,13 @@ frame_table_obtain_free_locked_frame (void)
 }
 
 /* Searches the system frame table and retrieves a free locked frame. 
-   Returns NULL if no free frames are available (necessitates eviction). */
+   Returns NULL if no free frames are available (necessitates eviction). 
+   
+   TODO We can optimize this in a few ways:
+    1. If there are no free frames, return immediately.
+    2. Start from a randomly-chosen point (or from the last obtained frame)
+       each time. Always starting from the same place almost guarantees wasted
+       search time. */
 static struct frame *
 frame_table_find_free_frame (void)
 { 
