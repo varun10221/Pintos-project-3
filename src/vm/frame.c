@@ -148,7 +148,7 @@ frame_table_release_page (struct page *pg)
   struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
   lock_acquire (&fr->lock);
-  ASSERT (fr->status == FRAME_OCCUPIED);
+  ASSERT (fr->status != FRAME_EMPTY);
   ASSERT (fr->pg == pg);
 
   bool is_dirty = page_unset_dirty (pg);
