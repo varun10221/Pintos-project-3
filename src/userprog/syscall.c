@@ -139,10 +139,10 @@ syscall_handler (struct intr_frame *f)
   }
   thread_current ()->getting_syscall_args = false;
 
-  /* We made it this far safely, so update the min observed esp. */
-  process_observe_stack_pointer (sp);
+  /* We made it this far safely, so update the min observed stack address. */
+  process_observe_stack_address (sp);
 
-/* Remove this testing for now. I think we don't need to
+/*TODO  Remove this testing for now. I think we don't need to
    worry about it -- if the reference memory is not resident,
    we'll page fault and look for its page.
    If no page, it's an invalid access and we can terminate the caller
@@ -455,7 +455,7 @@ syscall_read (int fd, void *buffer, unsigned size)
   int n_left = (int) size;
   int n_read = 0;
 
-  struct file *f;
+  struct file *f = NULL;
   if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
@@ -465,31 +465,37 @@ syscall_read (int fd, void *buffer, unsigned size)
       return -1;
   }
 
-  /* NB If doing file I/O, this implementation allows "races" with other readers/readrs. 
+  /* NB If doing file I/O, this implementation allows "races" with other readers/writers. 
      File content can vary based on IO interleaving.
      See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
   while (n_left)
   {
-    ASSERT (0 < n_left);
     int amount_to_read = PGSIZE;
     /* If buffer is not page-aligned, only read up to the end of the page so that 
        subsequent non-final reads will be page-aligned. */
     uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
     if (mod_PGSIZE != 0)
-      /* (read from buffer to the end of its containing page) */
+      /* Read from buffer to the end of its containing page. */
       amount_to_read = PGSIZE - mod_PGSIZE;
-    /* n_left is an upper bound on the amount to read. */
+    /* n_left is the upper bound on the amount to read. */
     if (n_left < amount_to_read)
       amount_to_read = n_left;
 
-    /* For each page in buffer, pin the page to a frame so that we cannot
+    /* For each page spanned by buffer, pin the page to a frame so that we cannot
        page fault while we are holding filesys_lock(). */
     struct page *pg = process_page_table_find_page (buffer);
-    /* Bad buffer? Bail out. */
+    /* Invalid mem access? Bail out. */
     if (pg == NULL)
       syscall_exit (-1);
 
     process_pin_page (pg);
+
+    /* Attempt to modify buf -- if we're reading into a buffer in a read-only page, page_fault
+       will error out here safely before we hold filesys_lock(). 
+       This code is not necessary in syscall_write because there the buffer is only being read from. 
+
+       The magic is to defeat compiler "optimization", a la http://stackoverflow.com/questions/2219829/how-to-prevent-gcc-optimizing-some-statements-in-c */
+    ((char volatile *)buffer)[0] = ((char *)buffer)[0];
 
     int32_t amount_read = -1;
     if (fd == STDOUT_FILENO)
@@ -540,7 +546,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
   int n_left = (int) size;
   int n_written = 0;
 
-  struct file *f;
+  struct file *f = NULL;
   if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
@@ -555,22 +561,21 @@ syscall_write (int fd, const void *buffer, unsigned size)
      See Piazza, but basically the FS makes no atomicity guarantees in the presence of races. */
   while (n_left)
   {
-    ASSERT (0 < n_left);
     int amount_to_write = PGSIZE;
     /* If buffer is not page-aligned, only write up to the end of the page so that 
        subsequent non-final writes will be page-aligned. */
     uint32_t mod_PGSIZE = (uint32_t) buffer % PGSIZE;
     if (mod_PGSIZE != 0)
-      /* (write from buffer to the end of its containing page) */
+      /* Write from buffer to the end of its containing page. */
       amount_to_write = PGSIZE - mod_PGSIZE;
-    /* n_left is an upper bound on the amount to write. */
+    /* n_left is the upper bound on the amount to write. */
     if (n_left < amount_to_write)
       amount_to_write = n_left;
 
     /* For each page in buffer, pin the page to a frame so that we cannot
        page fault while we are holding filesys_lock(). */
     struct page *pg = process_page_table_find_page (buffer);
-    /* Bad buffer? Bail out. */
+    /* Invalid mem access? Bail out. */
     if (pg == NULL)
       syscall_exit (-1);
 
@@ -579,7 +584,9 @@ syscall_write (int fd, const void *buffer, unsigned size)
     int32_t amount_written = -1;
     if (fd == STDOUT_FILENO)
     {
-      putbuf (buffer + n_written, amount_to_write);
+      /* TODO This was incorrect. No test did a good job of catching it. A test that calls printf on a giant string (multiple pages) would be useful.
+      putbuf (buffer + n_written, amount_to_write); */
+      putbuf (buffer, amount_to_write);
       amount_written = amount_to_write;
     }
     else

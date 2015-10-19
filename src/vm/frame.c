@@ -13,13 +13,13 @@
 #include "userprog/pagedir.h"
 #include "vm/page.h"
 
-/* System-wide frame table. List of.frames containing the resident pages
+/* System-wide frame table. List of frames containing the resident pages
    Processes use the functions defined in frame.h to interact with this table. */
 struct frame_table system_frame_table;
 
 
 /* Private function declarations. */
-static void frame_table_init_frame (struct frame *, id_t);
+static void frame_table_init_frame (struct frame *, void *);
 
 static void frame_table_incr_n_free_frames (void);
 static void frame_table_decr_n_free_frames (void);
@@ -41,7 +41,6 @@ void
 frame_table_init (size_t n_frames)
 {
   size_t i;
-  n_frames -= 10; /* Allow processes to load small executables. TODO TESTING ONLY. */
 
   system_frame_table.n_frames = n_frames;
 
@@ -57,7 +56,8 @@ frame_table_init (size_t n_frames)
   /* Initialize each frame. */
   struct frame *frames = (struct frame *) system_frame_table.frames;
   for (i = 0; i < system_frame_table.n_frames; i++)
-    frame_table_init_frame (&frames[i], i);
+    /* phys_pages is contiguous memory, so linear addressing works. */
+    frame_table_init_frame (&frames[i], system_frame_table.phys_pages + i*PGSIZE);
 
   /* Initialize the swap table: the ST is the FT's dirty little secret. */
   swap_table_init ();
@@ -128,6 +128,7 @@ frame_table_store_page (struct page *pg)
   page_update_owners_pagedir (pg, fr->paddr);
 
   /* Page safely in frame. */
+  lock_release (&fr->lock);
   if (!was_page_locked)
     lock_release (&pg->lock);
 }
@@ -148,7 +149,7 @@ frame_table_release_page (struct page *pg)
   struct frame *fr = (struct frame *) pg->location;
   ASSERT (fr != NULL);
   lock_acquire (&fr->lock);
-  ASSERT (fr->status == FRAME_OCCUPIED);
+  ASSERT (fr->status != FRAME_EMPTY);
   ASSERT (fr->pg == pg);
 
   bool is_dirty = page_unset_dirty (pg);
@@ -353,6 +354,8 @@ frame_table_unpin_page (struct page *pg)
 static struct frame * 
 frame_table_make_free_frame (void)
 {
+  /* TODO For testing, since eviction is currently too expensive. */
+  return NULL;
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
   {
@@ -480,16 +483,14 @@ frame_table_evict_page_from_frame (struct frame *fr)
   lock_release (&pg->lock);
 }
 
-/* Initialize frame FR. */
+/* Initialize frame FR based on physical mem beginning at PADDR. */
 static void 
-frame_table_init_frame (struct frame *fr, id_t id)
+frame_table_init_frame (struct frame *fr, void *paddr)
 {
   ASSERT (fr != NULL);
 
-  fr->id = id;
   lock_init (&fr->lock);
-  /* frames is contiguous memory, so linear addressing works. */
-  fr->paddr = system_frame_table.phys_pages + id*PGSIZE;
+  fr->paddr = paddr;
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
 }
@@ -516,7 +517,13 @@ frame_table_obtain_free_locked_frame (void)
 }
 
 /* Searches the system frame table and retrieves a free locked frame. 
-   Returns NULL if no free frames are available (necessitates eviction). */
+   Returns NULL if no free frames are available (necessitates eviction). 
+   
+   TODO We can optimize this in a few ways:
+    1. If there are no free frames, return immediately.
+    2. Start from a randomly-chosen point (or from the last obtained frame)
+       each time. Always starting from the same place almost guarantees wasted
+       search time. */
 static struct frame *
 frame_table_find_free_frame (void)
 { 

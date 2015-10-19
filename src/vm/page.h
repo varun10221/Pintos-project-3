@@ -81,8 +81,8 @@ struct segment_mapping_info
 struct segment
 {
   /* An address belongs to this segment if (start <= addr && addr < end). */
-  void *start; /* Starting address of this segment (virtual address). */
-  void *end; /* One byte past the final address of this segment (virtual address). i.e., the beginning of the first page NOT in this segment. */
+  void *start; /* Starting address of this segment (virtual address). Might not be page-aligned (e.g. stack segment).*/
+  void *end; /* One byte past the final address in this segment (virtual address). Might not be page-aligned (e.g. mmap). */
 
   /* Allows us to map from segment page number to page. 
      Points to either a struct segment_mapping_info* or to a struct shared_mappings*. 
@@ -178,8 +178,7 @@ void supp_page_table_init (struct supp_page_table *);
 void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
-struct page * supp_page_table_find_page (struct supp_page_table *, const void *vaddr);
-void supp_page_table_grow_stack (struct supp_page_table *, int);
+struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
 struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct mmap_details *md, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 

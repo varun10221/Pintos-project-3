@@ -29,7 +29,7 @@ struct ro_shared_mappings_table ro_shared_mappings_table;
 /* Private function declarations. */
 
 /* Supp page table. */
-static struct segment * supp_page_table_find_segment (struct supp_page_table *, const void *);
+static struct segment * supp_page_table_find_segment (struct supp_page_table *, void *);
 static struct segment * supp_page_table_get_stack_segment (struct supp_page_table *);
 static bool supp_page_table_is_range_valid (struct supp_page_table *, const void *, const void *);
 
@@ -41,6 +41,7 @@ static struct page * segment_get_page (struct segment *, int32_t);
 static int32_t segment_calc_page_num (struct segment *, const void *);
 static void * segment_calc_vaddr (struct segment *, int32_t);
 static bool segment_list_less_func (const struct list_elem *, const struct list_elem *, void *);
+static int32_t segment_size (struct segment *);
 
 /* Page. */
 static struct page * page_create (struct segment_mapping_info *, int32_t);
@@ -228,7 +229,8 @@ supp_page_table_destroy (struct supp_page_table *spt)
   {
     struct list_elem *e = list_pop_front (&spt->segment_list);
     ASSERT (e != NULL);
-    segment_destroy (list_entry (e, struct segment, elem));
+    struct segment *seg = list_entry (e, struct segment, elem);
+    segment_destroy (seg);
   }
 }
 
@@ -238,7 +240,7 @@ supp_page_table_destroy (struct supp_page_table *spt)
    Will add pages to the stack segment to accommodate growth if needed.
    Will only do so if vaddr is above the min_observed_esp (i.e. a valid stack access). */
 struct page * 
-supp_page_table_find_page (struct supp_page_table *spt, const void *vaddr)
+supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
 {
   ASSERT (spt != NULL);
   if (PHYS_BASE <= vaddr)
@@ -257,17 +259,6 @@ supp_page_table_find_page (struct supp_page_table *spt, const void *vaddr)
   }
 
   return ret;
-}
-
-/* Grow the stack N_PAGES pages. */
-void 
-supp_page_table_grow_stack (struct supp_page_table *spt, int n_pages)
-{
-  ASSERT (spt != NULL);
-  struct segment *seg = supp_page_table_get_stack_segment (spt);
-  ASSERT (seg != NULL);
-
-  seg->start -= PGSIZE*n_pages;
 }
 
 /* Add a memory mapping to supp page table SPT
@@ -301,8 +292,7 @@ supp_page_table_add_mapping (struct supp_page_table *spt, struct mmap_details *m
   }
   else
     mmap_len = md->read_bytes + md->zero_bytes;
-  uint32_t end_exact = (uint32_t) start + mmap_len;
-  void *end = (void *) ROUND_UP (end_exact, PGSIZE);
+  void *end = (void *) start + mmap_len; /* One byte beyond legal range. */
   if (!supp_page_table_is_range_valid (spt, start, end))
     return NULL;
 
@@ -329,37 +319,30 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
 /* Returns the segment to which vaddr belongs, or NULL.
    Grows the stack if it looks like a legal stack access. */
 static struct segment * 
-supp_page_table_find_segment (struct supp_page_table *spt, const void *vaddr)
+supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
 {
   ASSERT (spt != NULL);
 
   struct list_elem *e = NULL;
   struct segment *seg = NULL;
 
-  struct segment *stack_seg = supp_page_table_get_stack_segment (spt);
   for (e = list_begin (&spt->segment_list); e != list_end (&spt->segment_list);
        e = list_next (e))
   {
     seg = list_entry (e, struct segment, elem);
-    /* Handle stack segment specially below. */
-    if (seg != stack_seg && seg->start <= vaddr && vaddr < seg->end)
+    if (seg->start <= vaddr && vaddr < seg->end)
       return seg;
   }
 
-  /* No segment found. */
-
-  /* Is this vaddr below the minimum observed sp? If so, we may need to grow the stack. */
-  if (process_get_min_observed_stack_pointer () <= vaddr)
+  /* No segment found, check if it is stack segment and we need to grow it. */
+  if (process_get_min_observed_stack_address () <= vaddr)
   {
-    if (stack_seg->start <= vaddr)
-      /* Already big enough, no need to grow. */
-      return stack_seg;
-
     /* Not big enough yet. Extend stack to include vaddr. 
-       Don't go all the way to min_observed_stack_pointer -- only do that
+       Don't go all the way to min_observed_stack_address -- only do that
        if they actually go that low. */
-    seg = supp_page_table_get_stack_segment (spt);
-    seg->start = (void *) ROUND_DOWN ((uint32_t) vaddr, PGSIZE);
+    struct segment *stack_seg = supp_page_table_get_stack_segment (spt);
+    ASSERT (vaddr <= stack_seg->start);
+    stack_seg->start = vaddr;
     return stack_seg;
   }
 
@@ -395,7 +378,8 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, const void *start, 
   uint32_t end_addr = (uint32_t) end;
 
   /* Start must precede end. See page.h for definition of end. */
-  ASSERT (start < end);
+  if (end_addr <= start_addr)
+    return false;
 
   /* - must start above 0 */
   if (start_addr == 0)
@@ -415,8 +399,10 @@ supp_page_table_is_range_valid (struct supp_page_table *spt, const void *start, 
   {
     seg = list_entry (e, struct segment, elem);
     ASSERT (seg != NULL);
-    /* We don't overlap if: segment ends before we begin, or we end before segment begins. */
-    bool does_not_overlap = ((uint32_t) seg->end <= start_addr || end_addr <= (uint32_t) seg->start);
+    /* We don't overlap if: segment ends before we begin, or we end before segment begins. 
+       We inflate the segment's range to make sure there's no possibility of "page sharing". */
+    bool does_not_overlap = (ROUND_UP ((uint32_t) seg->end, PGSIZE) <= start_addr) || 
+                            (end_addr <= ROUND_DOWN ((uint32_t) seg->start, PGSIZE));
     if (does_not_overlap)
       continue;
     else
@@ -435,7 +421,6 @@ segment_create (void *start, void *end, struct mmap_details *md, int flags, enum
 
   ASSERT ((uint32_t) start < (uint32_t) end);
   ASSERT ((uint32_t) start % PGSIZE == 0); 
-  ASSERT ((uint32_t) end % PGSIZE == 0); 
 
   seg->start = start;
   seg->end = end;
@@ -574,8 +559,8 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   ASSERT (seg != NULL);
   ASSERT (seg->mappings != NULL);
 
-  int32_t seg_n_pages = ((uint32_t) seg->end - (uint32_t) seg->start) / PGSIZE;
-  ASSERT (0 <= relative_page_num && relative_page_num < seg_n_pages);
+  int32_t seg_size = segment_size (seg);
+  ASSERT (0 <= relative_page_num && relative_page_num < seg_size);
 
   /* Create a dummy page for searching the mappings hash. */
   struct page dummy;
@@ -655,15 +640,14 @@ int32_t
 segment_calc_page_num (struct segment *seg, const void *vaddr)
 {
   ASSERT (seg != NULL);
-  /* TODO @Jamie: Can we have vaddr as start and end segement numbers? */
   ASSERT ((uint32_t) seg->start <= (uint32_t) vaddr && (uint32_t) vaddr < (uint32_t) seg->end);
 
   void *vpgaddr = (void *) ROUND_DOWN ( (uint32_t) vaddr, PGSIZE);
 
   /* If segment grows up (all segments but stack), then we calculate
-       page number based on seg->start. seg->end is fixed.
+       page number based on seg->start. seg->end may change.
      If segment grows down (stack segment), then we calculate
-       page number based on seg->end. seg->start is fixed.
+       page number based on seg->end. seg->start may change.
 
      NB If we need to grow mmap'd files in P4, make growth direction
        a member of a segment.
@@ -673,10 +657,10 @@ segment_calc_page_num (struct segment *seg, const void *vaddr)
 
   int32_t page_no;
   if (segment_grows_up)
-    page_no = ((uint32_t) vpgaddr - (uint32_t) seg->start) / PGSIZE;
+    page_no = ((uint32_t) vpgaddr - ROUND_DOWN ((uint32_t) seg->start, PGSIZE)) / PGSIZE;
   else
     /* 1 <= (end - vpgaddr)/PGSIZE, so to get indexing from 0 we subtract 1. */
-    page_no = (((uint32_t) seg->end - (uint32_t) vpgaddr) / PGSIZE) - 1;
+    page_no = ((ROUND_UP ((uint32_t) seg->end, PGSIZE) - (uint32_t) vpgaddr) / PGSIZE) - 1;
   return page_no;
 }
 
@@ -687,20 +671,20 @@ segment_calc_vaddr (struct segment *seg, int32_t relative_page_num)
 {
   ASSERT (seg != NULL);
 
-  int32_t max_page_num = (seg->end - seg->start) / PGSIZE;
-  ASSERT (relative_page_num < max_page_num);
+  int32_t seg_size = segment_size (seg);
+  ASSERT (relative_page_num < seg_size);
 
   /* Just like in segment_calc_page_num: 
        - determine if segment grows up or down
-       - calculate based on seg->start or seg->end as appropriate */
+       - calculate based on seg->start or seg->end, inflating appropriately. */
   bool segment_grows_up = (seg->end < PHYS_BASE ? true : false);
 
-  void * page_addr;
+  uint32_t page_addr;
   if (segment_grows_up)
-    page_addr = seg->start + relative_page_num*PGSIZE;
+    page_addr = ROUND_DOWN ((uint32_t) seg->start, PGSIZE) + relative_page_num*PGSIZE;
   else
-    page_addr = seg->end - (relative_page_num + 1)*PGSIZE;
-  return page_addr;
+    page_addr = ROUND_UP ((uint32_t) seg->end, PGSIZE) - (relative_page_num + 1)*PGSIZE;
+  return (void *) page_addr;
 }
 
 /* Segment list_less_func. */
@@ -714,6 +698,20 @@ segment_list_less_func (const struct list_elem *a, const struct list_elem *b, vo
   struct segment *b_seg = list_entry (b, struct segment, elem);
 
   return (uint32_t) a_seg->start < (uint32_t) b_seg->start;
+}
+
+/* Returns number of pages SEG can hold based on start, end. */
+static int32_t 
+segment_size (struct segment *seg)
+{
+  ASSERT (seg != NULL);
+  ASSERT (seg->start < seg->end);
+
+  /* Inflate segment. */
+  uint32_t start_pg = ROUND_DOWN ((uint32_t) seg->start, PGSIZE);
+  uint32_t end_pg = ROUND_UP ((uint32_t) seg->end, PGSIZE);
+
+  return (end_pg - start_pg) / PGSIZE;
 }
 
 /* Page functions. */

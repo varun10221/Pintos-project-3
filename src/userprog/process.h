@@ -65,14 +65,13 @@ struct mmap_info * process_mmap_lookup (mapid_t);
 void process_mmap_remove_all (void);
 
 /* Virtual memory interaction. */
-void * process_observe_stack_pointer (void *);
-void * process_get_min_observed_stack_pointer (void);
+void * process_observe_stack_address (void *);
+void * process_get_min_observed_stack_address (void);
 void process_page_table_init (void);
 void process_page_table_destroy (void);
-struct page * process_page_table_find_page (const void *);
+struct page * process_page_table_find_page (void *);
 void process_pin_page (struct page *);
 void process_unpin_page (struct page *);
-void process_grow_stack (void);
 struct mmap_info * process_add_mapping (struct mmap_details *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
 

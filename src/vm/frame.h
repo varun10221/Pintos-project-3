@@ -22,7 +22,6 @@ enum frame_status
 /* Entry in the frame table: "frame". */
 struct frame
 {
-  id_t id; /* Index into the frame table. */
   void *paddr; /* Physical address of this frame. */
   enum frame_status status; /* Status of this frame. */
 

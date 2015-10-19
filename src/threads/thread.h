@@ -148,8 +148,8 @@ struct thread
 
     /* Structures for virtual memory. */
 
-    /* The smallest observed stack pointer. Based on observations taken during stack growth and transitions from user to kernel mode. */
-    void *min_observed_sp; 
+    /* The smallest observed stack address. Based on observations during transitions from user to kernel mode. */
+    void *min_observed_stack_address; 
     /* Keeps us from growing the stack in order to get syscall args. If user gave us bad args in his
        syscall, we don't want to grow the stack for him. Just terminate him. */
     bool getting_syscall_args;
