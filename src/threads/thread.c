@@ -1143,7 +1143,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->my_executable = NULL;
 
   /* Start as high as possible. */
-  t->min_observed_sp = (void *) ((uint32_t) -1);
+  t->min_observed_stack_address = (void *) ((uint32_t) -1);
 
   t->getting_syscall_args = false;
 

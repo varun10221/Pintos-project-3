@@ -139,8 +139,8 @@ syscall_handler (struct intr_frame *f)
   }
   thread_current ()->getting_syscall_args = false;
 
-  /* We made it this far safely, so update the min observed esp. */
-  process_observe_stack_pointer (sp);
+  /* We made it this far safely, so update the min observed stack address. */
+  process_observe_stack_address (sp);
 
 /* Remove this testing for now. I think we don't need to
    worry about it -- if the reference memory is not resident,

@@ -160,7 +160,7 @@ page_fault (struct intr_frame *f)
 
      If the address is valid, proceed.
      Otherwise, copy eax to eip and set eax to 0xffffffff
-       to communicate with syscall.c::get_user, put_user. */
+       to communicate with syscall.c::get_user, put_user, then return. */
   struct page *pg = NULL;
   if (!user && thread_current ()->getting_syscall_args)
   {
@@ -176,19 +176,16 @@ page_fault (struct intr_frame *f)
 
   /* If user page fault, take opportunity to observe the stack pointer. */
   if (user)
-    process_observe_stack_pointer (f->esp);
-  void *min_sp = process_get_min_observed_stack_pointer ();
+    process_observe_stack_address (f->esp);
+  void *min_sp = process_get_min_observed_stack_address ();
 
-  /* printf ("page_fault: user %i fault_addr %p min_sp %p\n", user, fault_addr, min_sp); */
-  /* If we are at most 32 bytes below the stack pointer, we declare this a legal stack access and grow the stack. */
+  /* If we are at most 32 bytes below the stack pointer, this is a legal stack access.
+     Update the minimum observed stack address. */
   int MAX_DISTANCE_BELOW_STACK = 32;
   if (fault_addr < min_sp && min_sp <= fault_addr + MAX_DISTANCE_BELOW_STACK)
-  {
-    process_grow_stack ();
-    process_observe_stack_pointer (fault_addr); /* This is now the lowest we've seen a valid stack access. */
-  }
+    process_observe_stack_address (fault_addr); /* This is now the lowest we've seen a valid stack access. */
 
-  /* Now that we've grown the stack if needed, we're ready to find 
+  /* Now that we've updated the min observed stack address, we're ready to find 
        the page in our SPT...unless we already found it earlier, 
        if we page faulted on a valid stack page while getting syscall args. */
   if (!pg)

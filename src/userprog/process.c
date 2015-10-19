@@ -888,7 +888,7 @@ setup_stack (void **esp)
 {
 #ifdef VM
   *esp = PHYS_BASE;
-  process_observe_stack_pointer (PHYS_BASE);
+  process_observe_stack_address (PHYS_BASE);
   return true;
 #else
   uint8_t *kpage;
@@ -1087,19 +1087,19 @@ process_mmap_remove_all (void)
    Round SP down to PGSIZE.
    Returns the minimum observed stack pointer. */ 
 void * 
-process_observe_stack_pointer (void *sp)
+process_observe_stack_address (void *sp)
 {
   struct thread *thr = thread_current ();
   sp = (void *) ROUND_DOWN ((uint32_t) sp, PGSIZE);
-  thr->min_observed_sp = (void *) MIN ((uint32_t) sp, (uint32_t) thr->min_observed_sp);
-  return thr->min_observed_sp;
+  thr->min_observed_stack_address = (void *) MIN ((uint32_t) sp, (uint32_t) thr->min_observed_stack_address);
+  return thr->min_observed_stack_address;
 }
 
 /* Get the minimum observed stack pointer. */
 void * 
-process_get_min_observed_stack_pointer (void)
+process_get_min_observed_stack_address (void)
 {
-  return thread_current ()->min_observed_sp;
+  return thread_current ()->min_observed_stack_address;
 }
 
 /* Initialize this process's supplemental page table. */

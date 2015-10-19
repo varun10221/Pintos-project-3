@@ -346,20 +346,19 @@ supp_page_table_find_segment (struct supp_page_table *spt, const void *vaddr)
       return seg;
   }
 
-  /* No segment found. */
+  /* No other segment found, check if it is stack segment. */
 
-  /* Is this vaddr below the minimum observed sp? If so, we may need to grow the stack. */
-  if (process_get_min_observed_stack_pointer () <= vaddr)
+  /* Legal stack address? */
+  if (process_get_min_observed_stack_address () <= vaddr)
   {
     if (stack_seg->start <= vaddr)
       /* Already big enough, no need to grow. */
       return stack_seg;
 
     /* Not big enough yet. Extend stack to include vaddr. 
-       Don't go all the way to min_observed_stack_pointer -- only do that
+       Don't go all the way to min_observed_stack_address -- only do that
        if they actually go that low. */
-    seg = supp_page_table_get_stack_segment (spt);
-    seg->start = (void *) ROUND_DOWN ((uint32_t) vaddr, PGSIZE);
+    stack_seg->start = (void *) ROUND_DOWN ((uint32_t) vaddr, PGSIZE);
     return stack_seg;
   }
 
