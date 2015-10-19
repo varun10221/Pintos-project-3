@@ -13,7 +13,7 @@
 #include "userprog/pagedir.h"
 #include "vm/page.h"
 
-/* System-wide frame table. List of.frames containing the resident pages
+/* System-wide frame table. List of frames containing the resident pages
    Processes use the functions defined in frame.h to interact with this table. */
 struct frame_table system_frame_table;
 
