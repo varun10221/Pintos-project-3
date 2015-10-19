@@ -455,7 +455,7 @@ syscall_read (int fd, void *buffer, unsigned size)
   int n_left = (int) size;
   int n_read = 0;
 
-  struct file *f;
+  struct file *f = NULL;
   if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
@@ -481,7 +481,7 @@ syscall_read (int fd, void *buffer, unsigned size)
     if (n_left < amount_to_read)
       amount_to_read = n_left;
 
-    /* For each page in buffer, pin the page to a frame so that we cannot
+    /* For each page spanned by buffer, pin the page to a frame so that we cannot
        page fault while we are holding filesys_lock(). */
     struct page *pg = process_page_table_find_page (buffer);
     /* Invalid mem access? Bail out. */
@@ -492,10 +492,10 @@ syscall_read (int fd, void *buffer, unsigned size)
 
     /* Attempt to modify buf -- if we're reading into a buffer in a read-only page, page_fault
        will error out here safely before we hold filesys_lock(). 
-       This code is not necessary in syscall_write because there the buffer is only being read from. */
-    char *c_buffer = (char *) buffer;
-    char c = c_buffer[0];
-    c_buffer[0] = c;
+       This code is not necessary in syscall_write because there the buffer is only being read from. 
+
+       The magic is to defeat compiler "optimization", a la http://stackoverflow.com/questions/2219829/how-to-prevent-gcc-optimizing-some-statements-in-c */
+    ((char volatile *)buffer)[0] = ((char *)buffer)[0];
 
     int32_t amount_read = -1;
     if (fd == STDOUT_FILENO)
@@ -546,7 +546,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
   int n_left = (int) size;
   int n_written = 0;
 
-  struct file *f;
+  struct file *f = NULL;
   if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
