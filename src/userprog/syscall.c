@@ -584,7 +584,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
     int32_t amount_written = -1;
     if (fd == STDOUT_FILENO)
     {
-      /* TODO This was incorrect. No test did a good job of catching it. A test that calls printf on a giant string (multiple pages) would be useful. */
+      /* TODO This was incorrect. No test did a good job of catching it. A test that calls printf on a giant string (multiple pages) would be useful.
       putbuf (buffer + n_written, amount_to_write); */
       putbuf (buffer, amount_to_write);
       amount_written = amount_to_write;
