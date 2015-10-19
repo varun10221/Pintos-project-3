@@ -17,6 +17,8 @@
    Processes use the functions defined in frame.h to interact with this table. */
 struct frame_table system_frame_table;
 
+/*global variable */
+static uint32_t hand;
 
 /* Private function declarations. */
 static void frame_table_init_frame (struct frame *, void *);
@@ -32,6 +34,7 @@ static struct frame * frame_table_obtain_free_locked_frame (void);
 static struct frame * frame_table_find_free_frame (void);
 static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
+static struct frame * frame_table_return_eviction_candidate (void);
 static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct page *, struct frame *);
 static void frame_table_read_mmap_page_from_file (struct page *, struct frame *);
@@ -356,7 +359,7 @@ frame_table_make_free_frame (void)
 {
   /* TODO For testing, since eviction is currently too expensive. */
   return NULL;
-  struct frame *victim = frame_table_get_eviction_victim ();
+  struct frame *victim = frame_table_return_eviction_candidate ();
   if (victim != NULL)
   {
     ASSERT (lock_held_by_current_thread (&victim->lock));
@@ -582,27 +585,44 @@ frame_table_get_n_free_frames (void)
   return system_frame_table.n_free_frames;
 }
 
+
+
+
+/* The hand moves over each frame in the table from its last left position 
+   the access bit is checked for each page in frame and is decided if its 
+   an suitable eviction candidate , returns a locked frame */
 struct frame *
-frame_table_return_eviction_candidate (int64_t hand)
+frame_table_return_eviction_candidate ()
 {
    int i;
    bool a;
+   /*variable keeps track of no. of frames searched */
+   uint32_t count = 0;
    struct frame *frames = (struct frame *) system_frame_table.frames;
-   for (i = hand; i < system_frame_table.n_frames; i++)
-    {    if(&frames[i] != NULL && &frames[i]->pg != NULL && &frames[i].status != FRAME_PINNED)
+   for (i = hand; i < system_frame_table.n_frames; i = i % system_frame_table.n_frames )
+    {   
+         struct frame *fr = &frames[i]; 
+        if(fr != NULL && fr->pg != NULL && fr->status != FRAME_PINNED)
            
-          a = page_update_accessbit_popularity_pagedir (&frames[i]->pg, &frames[i]); 
+          a = page_check_accessbit_decide_evicition_pagedir (fr->pg); 
           if(a)
-           break;
-     }
+           { 
+             lock_acquire (&fr->lock);
+             break;
+           }
+          count ++;
+         /*Assert if we have searched all the frames */
+         ASSERT (count < system_frame_table.n_frames);             
+
+
+    }     
   
-    return &frames [i];
+    return &frames[i];
   
 
    
 }        
           
-
 
 
 

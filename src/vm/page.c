@@ -1029,34 +1029,31 @@ page_update_owners_pagedir (struct page *pg, void *paddr)
 
 /* Check the page dir of each owner , if the page is not accessed 
    then we return true, which will be used to evict that frame.
-called in interrupt_context , dont lock any frames or pages as */
+   gets a locked frame and a page   */
 bool
-page_check_accessbit_decide_eviction_pagedir (struct *pg, struct frame *fr)
+page_check_accessbit_decide_eviction_pagedir (struct page *pg)
 {
   ASSERT (pg != NULL);
-  int i;
-  fr->popularity = false;
+  bool accessed = false;
   struct list_elem *e;
   for (e = list_begin (&pg->owners); e!= list_end (&pg->owners); 
        e = list_next(e))
    {
     struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);    
-    if(!pagedir_is_accessed (poi->owner->pagedir, poi->vpg_addr))
+    if(pagedir_is_accessed (poi->owner->pagedir, poi->vpg_addr))
       {
          /* set the acces bit to false after checking */     
          pagedir_set_accessed (poi->owner->pagedir , poi->vpg_addr, false);
-        /* it may be set true by other owner, so set false only otherwise */
-         if (fr -> popularity ! = true)
-              fr->popularity = false;
-  
-         
+         accessed = true;          
       }
-    else fr->popularity = true;
-       
-                               
+    else 
+      { 
+        accessed = true;
+        break;
       }
-    return fr->popularity;
    }
+  return accessed;
+}
 
     
 
