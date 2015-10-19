@@ -127,6 +127,7 @@ frame_table_store_page (struct page *pg)
   page_update_owners_pagedir (pg, fr->paddr);
 
   /* Page safely in frame. */
+  lock_release (&fr->lock);
   if (!was_page_locked)
     lock_release (&pg->lock);
 }
