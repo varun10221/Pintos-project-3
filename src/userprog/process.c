@@ -790,8 +790,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
 /* load() helpers. */
 
-static bool install_page (void *upage, void *kpage, bool writable);
-
 /* Checks whether PHDR describes a valid, loadable segment in
    FILE and returns true if so, false otherwise. */
 static bool
@@ -886,45 +884,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp) 
 {
-#ifdef VM
   *esp = PHYS_BASE;
   process_observe_stack_address (PHYS_BASE);
   return true;
-#else
-  uint8_t *kpage;
-  bool success = false;
-
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
-    }
-  return success;
-#endif
-}
-
-/* Adds a mapping from user virtual address UPAGE to kernel
-   virtual address KPAGE to the page table.
-   If WRITABLE is true, the user process may modify the page;
-   otherwise, it is read-only.
-   UPAGE must not already be mapped.
-   KPAGE should probably be a page obtained from the user pool
-   with palloc_get_page().
-   Returns true on success, false if UPAGE is already mapped or
-   if memory allocation fails. */
-static bool
-install_page (void *upage, void *kpage, bool writable)
-{
-  struct thread *t = thread_current ();
-
-  /* Verify that there's not already a page at that virtual
-     address, then map our page there. */
-  return (pagedir_get_page (t->pagedir, upage) == NULL
-          && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
 /* Functions for files. */
@@ -1119,7 +1081,7 @@ process_page_table_destroy (void)
 /* Return the appropriate page from supplemental page table,
      or NULL if no such page is defined. */
 struct page *
-process_page_table_find_page (const void *vaddr)
+process_page_table_find_page (void *vaddr)
 {
   return supp_page_table_find_page (&thread_current ()->supp_page_table, vaddr); 
 }
@@ -1142,6 +1104,8 @@ process_add_mapping (struct mmap_details *md, void *start, int flags)
   ASSERT (f != NULL);
 
   struct file *f_dup;
+  struct segment *seg = NULL;
+  struct mmap_info *mmap_info = NULL;
 
   filesys_lock ();
   f_dup = file_reopen (f);
@@ -1149,9 +1113,6 @@ process_add_mapping (struct mmap_details *md, void *start, int flags)
   if (f_dup == NULL)
     goto CLEANUP_AND_ERROR;
   md->mmap_file = f_dup;
-
-  struct segment *seg = NULL;
-  struct mmap_info *mmap_info = NULL;
 
   seg = supp_page_table_add_mapping (&thread_current ()->supp_page_table, md, start, flags, flags & MAP_SHARED);
   if (seg == NULL)
