@@ -3,6 +3,7 @@
 #include <round.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "threads/thread.h"
 #include "threads/malloc.h"
@@ -48,6 +49,7 @@ static struct page * page_create (struct segment_mapping_info *, int32_t);
 static void page_destroy (struct page *);
 static void page_set_hash (struct page *, unsigned);
 static unsigned page_hash_func (const struct hash_elem *, void *);
+void page_hash_action_func_print (struct hash_elem *, void *);
 static bool page_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
 static bool page_remove_owner (struct page *, struct segment *);
 static bool page_add_owner (struct page *, struct segment *);
@@ -57,17 +59,17 @@ static void page_update_owners_pagedir_list_action_func (struct list_elem *, voi
 static void page_unset_dirty_list_action_func (struct list_elem *, void *);
 
 /* Shared mappings. */
-static struct shared_mappings * shared_mappings_create (struct file *, int);
+static struct shared_mappings * shared_mappings_create (struct mmap_details *, int);
 static void shared_mappings_destroy (struct shared_mappings *);
 static void shared_mappings_destroy_hash_func (struct hash_elem *, void *);
 static void shared_mappings_incr_ref_count (struct shared_mappings *);
 static void shared_mappings_decr_ref_count (struct shared_mappings *);
-static void shared_mappings_set_hash (struct shared_mappings *, unsigned);
+static void shared_mappings_set_hash (struct shared_mappings *, struct mmap_details *);
 static unsigned shared_mappings_hash_func (const struct hash_elem *, void *);
 static bool shared_mappings_hash_less_func (const struct hash_elem *, const struct hash_elem *, void *);
 
 /* ro_shared_mappings_table. */
-static struct shared_mappings *ro_shared_mappings_table_add (struct file *, int); 
+static struct shared_mappings *ro_shared_mappings_table_add (struct mmap_details *, int); 
 
 /* page_owner_info. */
 static bool page_owner_info_list_less_func (const struct list_elem *, const struct list_elem *, void *);
@@ -76,7 +78,7 @@ static bool page_owner_info_list_less_func (const struct list_elem *, const stru
 void 
 ro_shared_mappings_table_init (void)
 {
-  hash_init (&ro_shared_mappings_table.inumber_to_segment, shared_mappings_hash_func, shared_mappings_hash_less_func, NULL);
+  hash_init (&ro_shared_mappings_table.mmap_details_to_shared_mappings, shared_mappings_hash_func, shared_mappings_hash_less_func, NULL);
   lock_init (&ro_shared_mappings_table.hash_lock);
 }
 
@@ -84,27 +86,29 @@ ro_shared_mappings_table_init (void)
 void 
 ro_shared_mappings_table_destroy (void)
 {
-  hash_destroy (&ro_shared_mappings_table.inumber_to_segment, shared_mappings_destroy_hash_func);
+  hash_destroy (&ro_shared_mappings_table.mmap_details_to_shared_mappings, shared_mappings_destroy_hash_func);
 }
 
-/* Get the shared_mappings associated with file F.
+/* Get the shared_mappings associated with mmap_details MD.
    If no such segment yet exists, one is created. 
-   If such a segment exists already, we close F. 
-     In this case, acquires and releases filesys_lock. */
+   If such a segment exists already, we close the F in MD. 
+
+   Acquires and releases filesys_lock. */
 struct shared_mappings * 
-ro_shared_mappings_table_get (struct file *f, int flags)
+ro_shared_mappings_table_get (struct mmap_details *md, int flags)
 {
+  ASSERT (md != NULL);
+  struct file *f = md->mmap_file;
   ASSERT (f != NULL);
 
   struct shared_mappings *match = NULL;
 
   struct shared_mappings dummy;
-  block_sector_t inumber = inode_get_inumber (file_get_inode (f));
-  shared_mappings_set_hash (&dummy, inumber);
+  shared_mappings_set_hash (&dummy, md);
 
   lock_acquire (&ro_shared_mappings_table.hash_lock);
 
-  struct hash_elem *e = hash_find (&ro_shared_mappings_table.inumber_to_segment, &dummy.elem);
+  struct hash_elem *e = hash_find (&ro_shared_mappings_table.mmap_details_to_shared_mappings, &dummy.elem);
   if (e)
   {
     match = hash_entry (e, struct shared_mappings, elem);
@@ -114,7 +118,8 @@ ro_shared_mappings_table_get (struct file *f, int flags)
     filesys_unlock ();
   }
   else
-    match = ro_shared_mappings_table_add (f, flags);
+    /* Create a new entry. */
+    match = ro_shared_mappings_table_add (md, flags);
 
   /* Increment ref count while we hold hash_lock to avoid race with ro_shared_mappings_table_remove. */
   shared_mappings_incr_ref_count (match);
@@ -128,15 +133,15 @@ ro_shared_mappings_table_get (struct file *f, int flags)
    Caller must have locked ro_shared_mappings_table. 
    Returns the shared segment we add. It has ref_count 0. 
 
-   F must be a "private" file*: a dup of whatever the original
+   MD->MMAP_FILE must be a "private" file*: a dup of whatever the original
      file was. */
 struct shared_mappings *
-ro_shared_mappings_table_add (struct file *f, int flags)
+ro_shared_mappings_table_add (struct mmap_details *md, int flags)
 {
-  ASSERT (f != NULL);
+  ASSERT (md != NULL);
 
-  struct shared_mappings *new_sm = shared_mappings_create (f, flags);
-  hash_insert (&ro_shared_mappings_table.inumber_to_segment, &new_sm->elem);
+  struct shared_mappings *new_sm = shared_mappings_create (md, flags);
+  hash_insert (&ro_shared_mappings_table.mmap_details_to_shared_mappings, &new_sm->elem);
 
   return new_sm;
 }
@@ -173,20 +178,21 @@ static bool page_owner_info_list_less_func (const struct list_elem *a, const str
 /* Remove the (unlocked) shared_mappings associated with F.
    (unless there is a reference to it). 
 
+   Acquires and releases filesys_lock.
    Beware of race conditions; see comments inside. */
 void 
-ro_shared_mappings_table_remove (struct file *f)
+ro_shared_mappings_table_remove (struct mmap_details *md)
 {
-  ASSERT (f != NULL);
+  ASSERT (md != NULL);
+
   struct shared_mappings *match = NULL;
 
-  block_sector_t inumber = inode_get_inumber (file_get_inode (f));
   struct shared_mappings dummy;
-  shared_mappings_set_hash (&dummy, inumber);
+  shared_mappings_set_hash (&dummy, md);
 
   lock_acquire (&ro_shared_mappings_table.hash_lock);
 
-  struct hash_elem *e = hash_find (&ro_shared_mappings_table.inumber_to_segment, &dummy.elem);
+  struct hash_elem *e = hash_find (&ro_shared_mappings_table.mmap_details_to_shared_mappings, &dummy.elem);
   /* If another process has established a mapping between when we were
      called and now, and has finished and called this function, then
      e may be NULL. */
@@ -437,7 +443,7 @@ segment_create (void *start, void *end, struct mmap_details *md, int flags, enum
     if (md)
       memcpy (&smi->mmap_details, md, sizeof(struct mmap_details));
     else
-      smi->mmap_details.mmap_file = NULL;
+      memset (&smi->mmap_details, 0, sizeof(struct mmap_details));
     smi->flags = flags;
   }
   else if (seg->type == SEGMENT_SHARED)
@@ -448,9 +454,7 @@ segment_create (void *start, void *end, struct mmap_details *md, int flags, enum
     ASSERT (mmap_file != NULL);
     /* Set mappings to the appropriate struct shared_mappings*.
        This will close mmap_file if we use an existing mapping. */
-    /* TODO Pass md itself, and re-work ro_shared_mappings_table to hash on both
-       inumber and offset. */
-    seg->mappings = (void *) ro_shared_mappings_table_get (md->mmap_file, flags);
+    seg->mappings = (void *) ro_shared_mappings_table_get (md, flags);
   }
   else
     NOT_REACHED ();
@@ -599,7 +603,13 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   {
     /* Add a new page. */
     ret = page_create (smi, relative_page_num);
-    hash_insert (h, &ret->elem);
+    struct hash_elem *was_already_present = hash_insert (h, &ret->elem); 
+    if (was_already_present)
+    {
+      /* If this fails, something has gone quite wrong. Dump the hash. */
+      hash_apply (h, page_hash_action_func_print);
+      ASSERT (!was_already_present);
+    }
   }
 
   /* Lock page so that the owners member is fixed. */
@@ -789,15 +799,28 @@ page_hash_func (const struct hash_elem *e, void *aux UNUSED)
   return pg->segment_page;
 }
 
+/* Print this page. For debugging. */
+void
+page_hash_action_func_print (struct hash_elem *e, void *aux UNUSED)
+{
+  ASSERT (e != NULL);
+  struct page *pg = hash_entry (e, struct page, elem);
+  printf ("Page: location %p status %i smi %p segment_page %i\n",
+    pg->location, pg->status, pg->smi, pg->segment_page);
+}
+
 /* Which page is the lesser? */ 
 bool 
-page_hash_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux)
+page_hash_less_func (const struct hash_elem *a, const struct hash_elem *b, void *aux UNUSED)
 {
   ASSERT (a != NULL);
   ASSERT (b != NULL);
   
+  struct page *pg_a = hash_entry (a, struct page, elem);
+  struct page *pg_b = hash_entry (b, struct page, elem);
+
   /* KISS. */
-  return page_hash_func (a, aux) < page_hash_func (b, aux);
+  return pg_a->segment_page < pg_b->segment_page;
 }
 
 /* Remove self from this locked page's list of owners. 
@@ -822,7 +845,9 @@ page_remove_owner (struct page *pg, struct segment *seg)
     struct page_owner_info *poi = list_entry (removed_poi_elem, struct page_owner_info, elem);
     /* If pagedir entry is dirty, set is_dirty on our way out. */
     if (pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr))
+    {
       pg->is_dirty = true;
+    }
     /* Wipe our pagedir entry. */
     pagedir_clear_page (poi->owner->pagedir, poi->vpg_addr);
     free (poi);
@@ -860,24 +885,30 @@ page_add_owner (struct page *pg, struct segment *seg)
 
 /* Shared mappings functions. */
 
-/* Create a new shared_mappings with F and ref_count 0. */
+/* Create a new shared_mappings with mmap_details MD and ref_count 0. 
+   Acquires and releases filesys_lock(). */
 struct shared_mappings *
-shared_mappings_create (struct file *f, int flags)
+shared_mappings_create (struct mmap_details *md, int flags)
 {
   struct shared_mappings *sm = (struct shared_mappings *) malloc (sizeof(struct shared_mappings));
 
   ASSERT (sm != NULL);
+  ASSERT (md != NULL);
+  struct file *f = md->mmap_file;
   ASSERT (f != NULL);
 
+  filesys_lock ();
   block_sector_t inumber = inode_get_inumber (file_get_inode (f));
-  sm->inumber = inumber;
+  filesys_unlock ();
 
-  hash_init (&sm->smi.mappings, shared_mappings_hash_func, shared_mappings_hash_less_func, NULL);
-  sm->smi.mmap_details.mmap_file = f;
+  sm->inumber = inumber;
+  memcpy (&sm->smi.mmap_details, md, sizeof (struct mmap_details));
   sm->smi.flags = flags;
+  sm->ref_count = 0;
+
+  hash_init (&sm->smi.mappings, page_hash_func, page_hash_less_func, NULL);
   lock_init (&sm->segment_mapping_info_lock);
 
-  sm->ref_count = 0;
   lock_init (&sm->ref_count_lock);
 
   return sm;
@@ -887,7 +918,8 @@ shared_mappings_create (struct file *f, int flags)
  
    Only call if there are no remaining referrers and we are 
      guaranteed that no new referrers will race with us. 
-   This means that all pages must have no owners left. */
+   This means that all pages must have no owners left.
+   Acquires and releases filesys_lock(). */
 void 
 shared_mappings_destroy (struct shared_mappings *sm)
 {
@@ -898,10 +930,11 @@ shared_mappings_destroy (struct shared_mappings *sm)
   hash_destroy (&sm->smi.mappings, NULL);
   /* Must do this after destroying the hash table, so that frame table still 
        has the file to work with. */
-  if (sm->smi.mmap_details.mmap_file != NULL)
+  struct file *f = sm->smi.mmap_details.mmap_file;
+  if (f != NULL)
   {
     filesys_lock ();
-    file_close (sm->smi.mmap_details.mmap_file);
+    file_close (f);
     filesys_unlock ();
   }
 }
@@ -933,7 +966,7 @@ shared_mappings_decr_ref_count (struct shared_mappings * sm)
   /* If it looks like we're the last user, ask the ro shared segment table
      to remove this segment. */
   if (sm->ref_count == 0)
-    ro_shared_mappings_table_remove (sm->smi.mmap_details.mmap_file);
+    ro_shared_mappings_table_remove (&sm->smi.mmap_details);
 }
 
 /* Atomically increment the ref count of SM.
@@ -951,13 +984,27 @@ shared_mappings_incr_ref_count (struct shared_mappings *sm)
   lock_release (&sm->ref_count_lock);
 }
 
-/* Set SM's fields to hash to KEY. */
+/* Set SM's fields to hash to whatever a shared_mappings using 
+   MD would hash to. 
+   Acquires and releases filesys_lock(). 
+   
+   NB We're not considering whether the file is mmap'd read-only
+     vs. read-write. */
 void 
-shared_mappings_set_hash (struct shared_mappings *sm, unsigned key)
+shared_mappings_set_hash (struct shared_mappings *sm, struct mmap_details *md)
 {
   ASSERT (sm != NULL);
+  ASSERT (md != NULL);
+  struct file *f = md->mmap_file;
+
   memset (sm, 0, sizeof(struct shared_mappings));
-  sm->inumber = (block_sector_t) key;
+
+  filesys_lock ();
+  block_sector_t inumber = inode_get_inumber (file_get_inode (f));
+  filesys_unlock ();
+
+  sm->inumber = (block_sector_t) inumber;
+  memcpy (&sm->smi.mmap_details, md, sizeof(struct mmap_details));
 }
 
 /* Hash this shared segment. */
@@ -967,7 +1014,7 @@ shared_mappings_hash_func (const struct hash_elem *e, void *aux UNUSED)
   ASSERT (e != NULL);
   struct shared_mappings *sm = hash_entry (e, struct shared_mappings, elem);
   ASSERT (sm != NULL);
-  return sm->inumber;
+  return hash_int (sm->inumber) ^ hash_int (sm->smi.mmap_details.offset);
 }
 
 /* Which shared_mappings is the lesser? */
@@ -1024,8 +1071,6 @@ page_update_owners_pagedir (struct page *pg, void *paddr)
   ASSERT (lock_held_by_current_thread (&pg->lock));
   list_apply (&pg->owners, page_update_owners_pagedir_list_action_func, paddr);
 }
-
-
 
 /* Check the page dir of each owner , if the page is not accessed 
    then we return true, which will be used to evict that frame.
@@ -1084,10 +1129,11 @@ page_unset_dirty_list_action_func (struct list_elem *e, void *aux)
   struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
   /* Get and then wipe the is_dirty status. */
   bool local_is_dirty = pagedir_is_dirty (poi->owner->pagedir, poi->vpg_addr);
-  pagedir_set_dirty (poi->owner->pagedir, poi->vpg_addr, false);
-
   if (local_is_dirty)
+  {
+    pagedir_set_dirty (poi->owner->pagedir, poi->vpg_addr, false);
     *global_is_dirty = true;
+  }
 }
 
 /* Set the mapping in the pagedir of this element of a page's owners list to AUX.
@@ -1102,17 +1148,3 @@ page_update_owners_pagedir_list_action_func (struct list_elem *e, void *aux)
   struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
   pagedir_set_page (poi->owner->pagedir, poi->vpg_addr, paddr, poi->writable);
 }
-
-
-
- 
-
-
-
-
-/*
-  QUESTION FROM VARUN:
-  how can we add and delete info about individual pages ?
-  say if a page is evicted out of a frame.
-  API's for that 
-*/

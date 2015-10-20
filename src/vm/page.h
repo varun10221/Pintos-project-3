@@ -104,7 +104,7 @@ struct segment
 struct shared_mappings
 {
   /* Sector of the inode to which the file is mapped; unique in the FS across 
-       the lifetime of the executable. Used as the hash field in ro_shared_mappings_table. */
+       the lifetime of the executable. Used along with the smi as the hash field in ro_shared_mappings_table. */
   block_sector_t inumber; 
 
   struct segment_mapping_info smi; /* All processes share this mapping info. */ 
@@ -119,7 +119,7 @@ struct shared_mappings
 /* A single global structure is defined to allow the sharing of the RO pages of executables. */
 struct ro_shared_mappings_table
 {
-  struct hash inumber_to_segment; /* Hash inode number to a shared_mappings. */
+  struct hash mmap_details_to_shared_mappings; /* Hash mmap details to a shared_mappings. */
   struct lock hash_lock; /* Lock before modifying the hash. */
 };
 
@@ -170,8 +170,8 @@ struct mmap_info
 void ro_shared_mappings_table_init (void);
 void ro_shared_mappings_table_destroy (void);
 
-struct shared_mappings * ro_shared_mappings_table_get (struct file *, int);
-void ro_shared_mappings_table_remove (struct file *);
+struct shared_mappings * ro_shared_mappings_table_get (struct mmap_details *, int);
+void ro_shared_mappings_table_remove (struct mmap_details *);
 
 /* Supplemental page table: Basic life cycle. */
 void supp_page_table_init (struct supp_page_table *);

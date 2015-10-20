@@ -1,5 +1,6 @@
 #include "vm/frame.h" 
 #include <stdint.h>
+#include <stdio.h>
 #include <debug.h>
 #include <list.h>
 #include <string.h>
@@ -87,6 +88,7 @@ frame_table_store_page (struct page *pg)
 {
   ASSERT (pg != NULL);
 
+  //printf ("frame_table_store_page: n_free_frames %i\n", frame_table_get_n_free_frames ());
   /* If already in a frame, nothing to do. */
   if (pg->status == PAGE_RESIDENT)
     return;
@@ -279,6 +281,9 @@ frame_table_read_mmap_page_from_file (struct page *pg, struct frame *fr)
     else
       /* All in the read portion. Zero nothing. */
       zero_start = size;
+    /* NB This works on a read-only mapping because we're accessing
+          it via kernel address, not virtual address. However, the 
+          pagedir will reporr it as dirty. This is not an error. */
     memset (fr->paddr + zero_start, 0, size - zero_start);
   }
 
@@ -358,7 +363,7 @@ static struct frame *
 frame_table_make_free_frame (void)
 {
   /* TODO For testing, since eviction is currently too expensive. */
- // return NULL;
+  return NULL;
   struct frame *victim = frame_table_return_eviction_candidate ();
   if (victim != NULL)
   {

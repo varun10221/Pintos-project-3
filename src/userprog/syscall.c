@@ -255,7 +255,8 @@ syscall_handler (struct intr_frame *f)
       f->eax = syscall_wait ((pid_t) args[0]);
       break;
     case SYS_CREATE:                 /* Create a file. */
-      f->eax = syscall_create ((char *) args[0], (unsigned) args[1]);
+      /* TODO Is this the correct return value for f->eax ?*/
+      f->eax = (syscall_create ((char *) args[0], (unsigned) args[1]) ? 1 : 0);
       break;
     case SYS_REMOVE:                 /* Delete a file. */
       f->eax = (syscall_remove ((char *) args[0]) ? 1 : 0);
