@@ -163,7 +163,7 @@ swap_table_discard_page (struct page *pg)
   /* Page must be swapped out. */
   ASSERT (pg->status == PAGE_SWAPPED_OUT);
   /* Only the final owner can release a page. */
-  ASSERT (list_size (&pg->owners) == 1);
+  ASSERT (list_size (&pg->owners) == 0);
 
   ASSERT (pg->location != NULL);
 

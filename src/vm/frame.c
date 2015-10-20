@@ -124,7 +124,7 @@ frame_table_store_page (struct page *pg)
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
   fr->pg = pg;
-  fr->popularity = POPULARITY_START;
+  fr->popularity = false;
 
   pg->status = PAGE_RESIDENT;
   pg->location = fr;
@@ -165,7 +165,7 @@ frame_table_release_page (struct page *pg)
   /* Update frame. */
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
-  fr->popularity = POPULARITY_START;
+  fr->popularity = false;
   frame_table_incr_n_free_frames ();
   lock_release (&fr->lock);
 
@@ -374,6 +374,8 @@ frame_table_make_free_frame (void)
   return victim;
 }
 
+
+#if 0
 /* Identify a victim frame whose resident page (if any) is locked and can be evicted.
    Return the locked frame containing its locked page (if any).
 
@@ -432,7 +434,7 @@ frame_table_get_eviction_victim (void)
    return NULL;
 }
 
-
+#endif
 /* Evict the page in locked frame FR. 
    FR may be empty.
    FR may have a resident page, in which case the page
@@ -515,7 +517,7 @@ frame_table_obtain_free_locked_frame (void)
   if (fr == NULL)
     fr = frame_table_make_free_frame ();
 
-  if (fr != NULL)
+  else if (fr != NULL)
   {
     ASSERT (lock_held_by_current_thread (&fr->lock));
     ASSERT (fr->status == FRAME_EMPTY);
@@ -599,31 +601,39 @@ frame_table_get_n_free_frames (void)
 struct frame *
 frame_table_return_eviction_candidate ()
 {
-   int i;
+   uint32_t i;
    bool a;
    /*variable keeps track of no. of frames searched */
    uint32_t count = 0;
    struct frame *frames = (struct frame *) system_frame_table.frames;
-   for (i = hand; i < system_frame_table.n_frames; i = i % system_frame_table.n_frames )
-    {   
-         struct frame *fr = &frames[i]; 
+   for (i = hand; i < system_frame_table.n_frames; i = ( (i+1) % system_frame_table.n_frames) )
+    {  
+        hand = (hand + 1) % system_frame_table.n_frames; 
+        struct frame *fr = &frames[i]; 
         if(fr != NULL && fr->pg != NULL && fr->status != FRAME_PINNED)
-           
-          a = page_check_accessbit_decide_eviction_pagedir (fr->pg); 
-          if(a)
-           { 
-             lock_acquire (&fr->lock);
-             break;
+          { lock_acquire (&fr-> lock);
+            if (fr->status != FRAME_PINNED)
+             {
+               if (lock_try_acquire (&fr->pg->lock))
+                { 
+                 a = page_check_accessbit_decide_eviction_pagedir (fr->pg);
+                 /*checking status again after an optimistic search */
+                 if(a)
+                   return fr;
+                 else lock_release (&fr->pg->lock);
+                 }
+                 
+              }
+             
+             lock_release (&fr->lock);
            }
           count ++;
          /*Assert if we have searched all the frames */
          ASSERT (count < system_frame_table.n_frames);             
 
-
     }     
   
-    return &frames[i];
-  
+  return NULL;
 
    
 }        
