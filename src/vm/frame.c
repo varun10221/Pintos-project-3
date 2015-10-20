@@ -494,31 +494,47 @@ frame_table_evict_page_from_frame (struct frame *fr)
 
   /* Update each owner's pagedir so that they page fault when they next access this page. 
      Do this BEFORE copying the contents so that the owners will page fault on access and have to wait for us
-     to finish evicting it. */
+     to finish evicting it (we hold the lock on PG). */
   page_clear_owners_pagedir (pg);
 
-  if (pg->smi->mmap_details.mmap_file != NULL)
+  if (pg->smi->mmap_details.mmap_file == NULL)
+    /* Not mmap: store in swap table. */
+    swap_table_store_page (pg);
+  else
   {   
-    /* mmap (uses file as backing store): only need to write back if page is dirty. */
-    if (page_unset_dirty (pg))
+    bool discard = false;
+    /* MMAP_BACKING_INITIAL (i.e. the executable): We may or may not need to swap this out. */
+    if (pg->smi->mmap_details.backing_type == MMAP_BACKING_INITIAL)
     {
-      /* If dirty and a permanent map, write to file. */
-      if (pg->smi->mmap_details.backing_type == MMAP_BACKING_PERMANENT)
-        frame_table_write_mmap_page_to_file (pg, fr);
-      else
-      /* If dirty and a non-permanent map, swap out instead. */
+      /* If it's an mmap'd text/bss segment, always swap it out. Even if it's not dirty NOW, it might 
+         have been dirtied before, swapped out, and swapped back in. Once modified, always dirty.
+         TODO Could track this in pg->status instead for a minor optimization. See https://piazza.com/class/idq470rbl1o41f?cid=84 */
+      bool is_text_bss = (0 < pg->smi->mmap_details.offset);
+      if (is_text_bss)
         swap_table_store_page (pg);
+      else
+      {
+        /* Code portion of executable. Can discard and get back from file when needed. */
+        ASSERT (!page_unset_dirty (pg));
+        discard = true;
+      }
     }
     else
     {
-      /* mmap and not dirty, so whether or not its permanent we can get it back again from the mapping file. */
+      /* User-level mmap (uses file as backing store): only need to write back if page is dirty. */
+      if (page_unset_dirty (pg))
+        frame_table_write_mmap_page_to_file (pg, fr);
+      else
+        discard = true;
+    }
+
+    if (discard)
+    {
+      /* Safe to get it back from the mapping file later. */
       pg->location = NULL; 
       pg->status = PAGE_IN_FILE;
     }
-  }  
-  else
-    /* Not mmap: store in swap table. */
-    swap_table_store_page (pg);
+  } /* mmap */
 
   ASSERT (pg->status != PAGE_RESIDENT);
 
