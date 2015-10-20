@@ -359,7 +359,7 @@ frame_table_unpin_page (struct page *pg)
 /* Private helper functions. */
 
 /* This function will evict the page from a frame
-   and return the frame to you, locked.
+   and return the frame to you, empty and locked.
  
    Returns NULL if all frames have their page pinned
      or no victims could be identified. See frame_table_get_eviction_victim. */
@@ -553,11 +553,8 @@ frame_table_obtain_free_locked_frame (void)
   if (fr == NULL)
     fr = frame_table_make_free_frame ();
 
-  else if (fr != NULL)
-  {
-    ASSERT (lock_held_by_current_thread (&fr->lock));
-    ASSERT (fr->status == FRAME_EMPTY);
-  }
+  ASSERT (lock_held_by_current_thread (&fr->lock));
+  ASSERT (fr->status == FRAME_EMPTY);
 
   return fr;
 }
