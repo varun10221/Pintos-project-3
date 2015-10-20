@@ -63,6 +63,10 @@ frame_table_init (size_t n_frames)
     /* phys_pages is contiguous memory, so linear addressing works. */
     frame_table_init_frame (&frames[i], system_frame_table.phys_pages + i*PGSIZE);
 
+  /* Prepare for eviction requests. */
+  lock_init (&system_frame_table.eviction_lock);
+  system_frame_table.hand = 0;
+
   /* Initialize the swap table: the ST is the FT's dirty little secret. */
   swap_table_init ();
 }
@@ -363,8 +367,9 @@ static struct frame *
 frame_table_make_free_frame (void)
 {
   /* TODO For testing, since eviction is currently too expensive. */
-  return NULL;
-  struct frame *victim = frame_table_return_eviction_candidate ();
+  //return NULL;
+  //struct frame *victim = frame_table_return_eviction_candidate ();
+  struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
   {
     ASSERT (lock_held_by_current_thread (&victim->lock));
@@ -374,8 +379,6 @@ frame_table_make_free_frame (void)
   return victim;
 }
 
-
-#if 0
 /* Identify a victim frame whose resident page (if any) is locked and can be evicted.
    Return the locked frame containing its locked page (if any).
 
@@ -389,52 +392,85 @@ frame_table_make_free_frame (void)
 static struct frame * 
 frame_table_get_eviction_victim (void)
 {
+  uint32_t victim_ix;
+  struct frame *frames = (struct frame *) system_frame_table.frames;
+  struct frame *victim = NULL;
+  uint32_t final_hand_value = system_frame_table.hand; /* Tmp variable carrying index of each victim in turn. */
 
-   uint32_t i;
-   struct frame *frames = (struct frame *) system_frame_table.frames;
+  struct frame *fr = NULL; /* tmp */
+  struct page *pg = NULL; /* tmp */
 
-   /* Preliminary eviction algorithm: Evict the first frame whose page is not pinned. */
+  /* We skip frames that contain a locked page, even if the page is evictable.
+     So "try again". In practice this is unlikely to affect us, since a process can have at most
+     one locked page at a time and there are far more frames than (expected) processes. */
+  int max_repeats = 3;
+  int repeat_counter = 0;
 
-   /* Try up to 5 times. We skip frames that contain a locked page, even if the page is evictable.
-      So "try again". In practice this is unlikely to affect us, since a process can have at most
-      one locked page at a time and there are far more frames than (expected) processes. */
-   int counter;
-   for (counter = 0; counter < 5; counter++)
-   {
-     for (i = 0; i <  system_frame_table.n_frames ; i++)
-     {
-       /* Optimistic search: search without locks, then lock to verify that it's valid. */
-       if (frames[i].status != FRAME_PINNED )
-       {
-          struct frame *fr = &frames[i];
-          lock_acquire (&fr->lock);
+  /* At most one process can be evicting at a time; */
+  lock_acquire (&system_frame_table.eviction_lock);
 
-          /* Can only evict non-pinned pages. */
-          if (fr->status != FRAME_PINNED)
-          {
-            /* If occupied, can only evict if we can lock the page. */
-            if (fr->status == FRAME_OCCUPIED)
-            {
-              if (lock_try_acquire (&fr->pg->lock))
-                return fr;
-            }
-            /* No resident, so an empty frame. */
-            else
-              return fr;
-          }
-          /* OK, guess we didn't find a candidate. Release and try again. */
-          lock_release (&fr->lock);
-       }
+  /* This loop and its logic is horribly nested, but here's the summary:
+      - for 1:max_repeats
+        - for each frame
+          - if empty: use it
+          - else if occupied: if not pinned AND we can lock the resident page AND the resident page was not recently accessed: use it
+          -                   else wipe the access bit and try another frame 
+          - else if pinned: try another frame */
+  for (repeat_counter = 0; repeat_counter < max_repeats; repeat_counter++)
+  {
+    /* The hand moves over each frame in the table from its last left position.
+       We evict the first un-accessed page not pinned in its frame. */
+    for (victim_ix = system_frame_table.hand; victim_ix != system_frame_table.hand; victim_ix = (victim_ix + 1) % system_frame_table.n_frames)
+    {
+      final_hand_value = victim_ix;
+      fr = &frames[victim_ix];
+      /* Optimistic search: search for un-pinned frame without locks, then lock to verify that it's valid. */
+      if (fr->status != FRAME_PINNED )
+      {
+         lock_acquire (&fr->lock);
 
-     } /* Loop over all frames. */
-   } /* Loop from 0 to 5. */
-   
- 
+         /* Can only evict non-pinned pages. */
+         if (fr->status != FRAME_PINNED)
+         {
+           /* If occupied, can only evict if we can lock the page. */
+           if (fr->status == FRAME_OCCUPIED)
+           {
+             pg = fr->pg;
+             /* If lock-able, only a victim if it was not accessed. */
+             if (lock_try_acquire (&pg->lock))
+             {
+               if (!page_unset_accessed (pg))
+               {
+                 /* Bingo! We have a locked, unaccessed page not pinned to its frame. */
+                 victim = fr;
+                 goto UNLOCK_AND_RETURN; 
+               }
+               lock_release (&pg->lock); /* PG was accessed, so unlock and try the next frame. */
+             }
+           }
+           /* Frame is not occupied, so we can use it. */
+           else
+           {
+             victim = fr;
+             goto UNLOCK_AND_RETURN; 
+           }
+         }
+         /* OK, guess we didn't find a candidate. Release and try the next frame. */
+         lock_release (&fr->lock);
+      } /* Frame != PINNED */
+      else {} /* Frame was pinned, can't evict its page. */
 
-   return NULL;
+    } /* Loop over all frames. */
+  } /* Loop from 0 to repeat_counter. */
+  
+  UNLOCK_AND_RETURN: 
+    /* Update hand if we found a victim. */
+    if (victim != NULL)
+      system_frame_table.hand = final_hand_value;
+    lock_release (&system_frame_table.eviction_lock);
+    return victim;
 }
 
-#endif
 /* Evict the page in locked frame FR. 
    FR may be empty.
    FR may have a resident page, in which case the page
@@ -606,6 +642,9 @@ frame_table_return_eviction_candidate ()
    /*variable keeps track of no. of frames searched */
    uint32_t count = 0;
    struct frame *frames = (struct frame *) system_frame_table.frames;
+   /* TODO This loop is still not right. You need to go until i == hand
+      again, or thereabouts. You'll loop forever here instead, never
+      exiting the loop -- the % ensures i will never equal n_frames. */
    for (i = hand; i < system_frame_table.n_frames; i = ( (i+1) % system_frame_table.n_frames) )
     {  
         hand = (hand + 1) % system_frame_table.n_frames; 

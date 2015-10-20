@@ -35,7 +35,7 @@ struct frame
    pages belonging to a process when it needs to use them. */
 struct frame_table
 {
-  int64_t n_free_frames; /* Number of available frames. Protected by n_free_frames_lock. */
+  uint32_t n_free_frames; /* Number of available frames. Protected by n_free_frames_lock. */
   struct lock n_free_frames_lock; /* For atomic updates to n_free_frames. */
 
   uint32_t n_frames; /* Total number of frames. */
@@ -44,6 +44,11 @@ struct frame_table
        of memory obtained by palloc_get_multiple. 
      Each frame refers to one of these physical pages. */
   void *phys_pages;
+
+  uint32_t hand; /* Clock algorithm: index of the frame we last evicted. */
+  /* In the clock algorithm, at most one process can be evicting at a time. 
+     Otherwise the access bit will be unwisely reset. */
+  struct lock eviction_lock; 
 };
 
 /* Basic life cycle. */
