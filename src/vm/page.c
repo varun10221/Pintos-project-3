@@ -57,6 +57,7 @@ static bool page_add_owner (struct page *, struct segment *);
 static void page_clear_owners_pagedir_list_action_func (struct list_elem *, void *);
 static void page_update_owners_pagedir_list_action_func (struct list_elem *, void *);
 static void page_unset_dirty_list_action_func (struct list_elem *, void *);
+static void page_unset_accessed_list_action_func (struct list_elem *, void *);
 
 /* Shared mappings. */
 static struct shared_mappings * shared_mappings_create (struct mmap_details *, int);
@@ -1062,6 +1063,22 @@ page_unset_dirty (struct page *pg)
   return was_dirty;
 }
 
+/* Returns true if PG is accessed, false else. 
+   Marks PAGE as un-accessed for all owners. 
+   PG must be locked. */
+bool 
+page_unset_accessed (struct page *pg)
+{
+  ASSERT (pg != NULL);
+  ASSERT (lock_held_by_current_thread (&pg->lock));
+
+  bool was_accessed = false;
+  /* Ask and clear current owners. */
+  list_apply (&pg->owners, page_unset_accessed_list_action_func, &was_accessed);
+
+  return was_accessed;
+}
+
 /* Update the pagedir of each owner: PG now resides at PADDR.
    PG must be locked. */
 void
@@ -1071,38 +1088,6 @@ page_update_owners_pagedir (struct page *pg, void *paddr)
   ASSERT (lock_held_by_current_thread (&pg->lock));
   list_apply (&pg->owners, page_update_owners_pagedir_list_action_func, paddr);
 }
-
-/* Check the page dir of each owner , if the page is not accessed 
-   then we return true, which will be used to evict that frame.
-   gets a locked frame and a page   */
-bool
-page_check_accessbit_decide_eviction_pagedir (struct page *pg)
-{
-  ASSERT (pg != NULL);
-  bool accessed = false;
-  struct list_elem *e;
-  for (e = list_begin (&pg->owners); e!= list_end (&pg->owners); 
-       e = list_next(e))
-   {
-    struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);    
-    if(pagedir_is_accessed (poi->owner->pagedir, poi->vpg_addr))
-      {
-         /* set the acces bit to false after checking */     
-         pagedir_set_accessed (poi->owner->pagedir , poi->vpg_addr, false);
-         accessed = true;          
-      }
-    else 
-      { 
-        accessed = true;
-        break;
-      }
-   }
-  return accessed;
-}
-
-    
-
-
 
 /* Clear the pagedir of this element of a page's owners list. 
    Helper for page_clear_owners_pagedir. */
@@ -1133,6 +1118,27 @@ page_unset_dirty_list_action_func (struct list_elem *e, void *aux)
   {
     pagedir_set_dirty (poi->owner->pagedir, poi->vpg_addr, false);
     *global_is_dirty = true;
+  }
+}
+
+/* Mark the pagedir of this element of a page's owners list as not accessed.
+   AUX is a pointer to a bool. If page was accessed, set AUX to true.
+   Helper for page_unset_accessed . */
+static void 
+page_unset_accessed_list_action_func (struct list_elem *e, void *aux)
+{
+  ASSERT (e != NULL);
+  ASSERT (aux != NULL);
+
+  bool *global_is_accessed = (bool *) aux;
+
+  struct page_owner_info *poi = list_entry (e, struct page_owner_info, elem);
+  /* Get and then wipe the is_accessed status. */
+  bool local_is_accessed = pagedir_is_accessed (poi->owner->pagedir, poi->vpg_addr);
+  if (local_is_accessed)
+  {
+    pagedir_set_accessed (poi->owner->pagedir, poi->vpg_addr, false);
+    *global_is_accessed = true;
   }
 }
 
