@@ -33,10 +33,12 @@ static struct frame * frame_table_obtain_free_locked_frame (void);
 static struct frame * frame_table_find_free_frame (void);
 static struct frame * frame_table_make_free_frame (void);
 static struct frame * frame_table_get_eviction_victim (void);
-static struct frame * frame_table_return_eviction_candidate (void);
 static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct page *, struct frame *);
 static void frame_table_read_mmap_page_from_file (struct page *, struct frame *);
+
+/* Private frame routines. */
+static uint32_t frame_get_ix (struct frame *);
 
 /* Initialize the system_frame_table. Not thread safe. Should be called once. */
 void
@@ -103,8 +105,6 @@ frame_table_store_page (struct page *pg)
   ASSERT (pg->status != PAGE_RESIDENT);
 
   struct frame *fr = frame_table_obtain_free_locked_frame ();
-  if (fr == NULL)
-    PANIC ("frame_table_store_page: Could not allocate a frame."); 
   ASSERT (lock_held_by_current_thread (&fr->lock));
 
   /*  Loading page contents into frame (swap in, zero out frame, mmap in, etc. depending on pg->status). */
@@ -583,13 +583,16 @@ frame_table_init_frame (struct frame *fr, void *paddr)
 
    Locate a free frame, mark it as used, lock it, and return it.
    May have to evict a page to obtain a free frame.
-   If no free or evict-able frames are available, returns null. */
+   If no free or evict-able frames are available, panics the kernel. */
 static struct frame * 
 frame_table_obtain_free_locked_frame (void)
 {
   struct frame *fr = frame_table_find_free_frame ();
   if (fr == NULL)
     fr = frame_table_make_free_frame ();
+
+  if (fr == NULL)
+    PANIC ("frame_table_obtain_free_locked_frame: Could not allocate a frame."); 
 
   ASSERT (lock_held_by_current_thread (&fr->lock));
   ASSERT (fr->status == FRAME_EMPTY);
@@ -679,4 +682,12 @@ static uint32_t
 frame_table_get_n_free_frames (void)
 {
   return system_frame_table.n_free_frames;
+}
+
+/* Returns the index of frame FR. For debugging purposes. */
+static uint32_t
+frame_get_ix (struct frame *fr)
+{
+  ASSERT (fr != NULL);
+  return (fr->paddr - system_frame_table.phys_pages) / PGSIZE;
 }
