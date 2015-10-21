@@ -16,7 +16,8 @@
 #include <syscall.h>
 #include <stdlib.h>
 #include "tests/lib.h"
-#include "tests/main.h"
+
+const char *test_name = "exec-sharing";
 
 char *done_file = "parent_done";
 void child_run (char *done_file);
@@ -86,9 +87,11 @@ main (int argc, char *argv[])
   int n_children = -1;
   if (argc == 2)
   {
+    msg ("begin");
     exec_name = argv[0];
     n_children = atoi (argv[1]);
     parent_run (exec_name, done_file, n_children);
+    msg ("parent ending...");
   }
   else if (argc == 1)
     child_run (done_file);
