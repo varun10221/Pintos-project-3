@@ -123,7 +123,7 @@ kill (struct intr_frame *f)
 static void
 page_fault (struct intr_frame *f) 
 {
-  bool not_present;  /* True: not-present page, false: writing r/o page. TODO As written we don't use this, nor do I think that we need to. However, might be a shortcut. */
+  bool not_present;  /* True: not-present page, false: writing r/o page. Not used, but handy for debugging. */
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */

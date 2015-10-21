@@ -85,7 +85,7 @@ stack_push_raw (void **sp, void *data, size_t n_bytes)
 }
 
 /* Returns pointer to the current value on the stack,
-   and increments the stack. */ 
+   and increments the stack by one pointer. */ 
 void *
 stack_pop (void **sp)
 {

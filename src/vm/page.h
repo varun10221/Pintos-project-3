@@ -11,7 +11,7 @@
 
 /* TODO Move the "implementation-level" declarations to page.c. Prefer an opaque interface where possible. */
 
-/* mmap flags */
+/* Page flags indicating mapping type. */
 
 /* Sharing between processes. */
 static const int MAP_PRIVATE = 1 << 0;
@@ -42,20 +42,13 @@ enum mmap_backing_type
   MMAP_BACKING_INITIAL    /* mmap is backed by a file temporarily: once read, it becomes swap'able. */
 };
 
-enum popularity_range
-
-{
-  POPULARITY_MIN = 0,  /* Lowest value a page's popularity can take on. */
-  POPULARITY_START = 127, /* Initial value for a new page's popularity. */
-  POPULARITY_MAX = 255 /* Highest value a page's popularity can take on. */
-};
-
 /* Maps all virtual addresses known to this process. */
 struct supp_page_table
 {
   struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends at PHYS_BASE). */
 };
 
+/* Details for a given memory mapping. */
 struct mmap_details
 {
   struct file *mmap_file; /* If not NULL, segment is backed by this file. */
@@ -182,8 +175,8 @@ void supp_page_table_init (struct supp_page_table *);
 void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
-struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
-struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct mmap_details *md, void *, int, bool);
+struct page * supp_page_table_find_page (struct supp_page_table *, const void *);
+struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct mmap_details *, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 
 /* Some page APIs for use by frame. */
