@@ -201,16 +201,18 @@ TODO VARUN
 
 >> B2: When a frame is required but none is free, some frame must be
 >> evicted.  Describe your code for choosing a frame to evict.
-<<<<<<< HEAD
-=======
-
-TODO VARUN
->>>>>>> 769bf00d0462ed60f5dbae9f8f0859c2503a69cb
    
-   We use a basic clock algorithm to take care of eviciton. The global frame table has a hand member, that starts at index zero and maintains it value, so that it points to the index, where eviction was last carried out. Whenever, a frame needs to evicted due to lack of free frames, the hand moves over the frame table skipping the PINNED FRAMES and inspecting the pagedirectory of the owners of the page in the frame, to find if the page is accessed or not. If the page is not accessed , it will be chosen for eviction, otherwise if its accessed the accesbit will be set to false and the search will continue until we land on an unaccessed page. Then the frame associated with the page will chosen for eviction an its content will be swapped out or written depending on the type of the page contained in the frame.   
-
-  
-
+We use a basic clock algorithm to take care of eviciton. The global frame 
+table has a hand member, that starts at index zero and maintains it value, so 
+that it points to the index, where eviction was last carried out. Whenever, a 
+frame needs to evicted due to lack of free frames, the hand moves over the 
+frame table skipping the PINNED FRAMES and inspecting the pagedirectory of the 
+owners of the page in the frame, to find if the page is accessed or not. If 
+the page is not accessed , it will be chosen for eviction, otherwise if its 
+accessed the accesbit will be set to false and the search will continue until 
+we land on an unaccessed page. Then the frame associated with the page will 
+chosen for eviction an its content will be swapped out or written depending on 
+the type of the page contained in the frame.   
 
 >> B3: When a process P obtains a frame that was previously used by a
 >> process Q, how do you adjust the page table (and any other data
@@ -284,8 +286,7 @@ For memory sharing, see D2.
 >> the page during the eviction process?  How do you avoid a race
 >> between P evicting Q's frame and Q faulting the page back in?
 
-<<<<<<< HEAD
-   If a frame is to evicted, initially a lock is obtained on that particular frame.
+If a frame is to evicted, initially a lock is obtained on that particular frame.
 Then we ensure that the frame is non-pinned and we try acquire a page-lock on the page,
 contained in the frame and we hold the locks till eviction if succesful.
 If we fail in obtaining a page-lock we discard the efforts to try evicting that frame and
@@ -293,26 +294,18 @@ try to find another frame candidate for eviction with an page that can be locked
 unaccessed. So if we acquire a lock , we eliminate the possibility of Q trying access page 
 at the same time, if we dint acquire lock , then the process Q might have got the lock and
 there will be no page fault. 
-=======
-TODO VARUN
->>>>>>> 769bf00d0462ed60f5dbae9f8f0859c2503a69cb
 
 >> B7: Suppose a page fault in process P causes a page to be read from
 >> the file system or swap.  How do you ensure that a second process Q
 >> cannot interfere by e.g. attempting to evict the frame while it is
 >> still being read in?
 
-<<<<<<< HEAD
-  We ensure the elimination of the race condition, by using frame and page locks.
+We ensure the elimination of the race condition, by using frame and page locks.
 Whenever a page needs to be read in to the frame, a free locked frame is obtained
 so that the data can be brought in. Further a page lock is also obtained on the page
 read in so that no other page owner is trying to read the page in. Since the frame is
 locked before transferring the data , we ensure that a second process cannot interfere. 
  
-=======
-TODO VARUN
->>>>>>> 769bf00d0462ed60f5dbae9f8f0859c2503a69cb
-
 >> B8: Explain how you handle access to paged-out pages that occur
 >> during system calls.  Do you use page faults to bring in pages (as
 >> in user programs), or do you have a mechanism for "locking" frames
