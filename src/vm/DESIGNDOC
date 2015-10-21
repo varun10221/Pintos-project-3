@@ -282,7 +282,7 @@ Other places where locking is used:
 
 None of these areas is a candidate for deadlock.
 
-TODO For memory sharing, I haven't figured out why my code is deadlocking. I'm sure it's something silly.
+For memory sharing, see D2. 
 
 >> B6: A page fault in process P can cause another process Q's frame
 >> to be evicted.  How do you ensure that Q cannot access or modify
@@ -514,7 +514,46 @@ page.h:
     struct list_elem elem;
   };
 
-       TODO JAMIE
+>> D2: Describe how memory sharing works.
+
+Segments can be one of two types: SEGMENT_PRIVATE and SEGMENT_SHARED.
+Mappings can be created with either of these two types. 
+
+I create a MAP_SHARED memory mapping for the read-only portion(s) of 
+the executable. These are then placed in a SEGMENT_SHARED segment.
+
+The underlying file's inode number and the starting offset
+of the mapping are combined to make a key in the mmap_details_to_shared_mappings hash
+of the system ro_shared_mappings_table.
+
+This design should accommodate sharing not only the code segment of executables,
+but more generally any memory mapping.
+
+When a process creates a shared segment, it sets its mappings field to point to the 
+appropriate entry in the mmap_details_to_shared_mappings hash. If no such
+entry exists, it inserts a new one for others to share.
+
+The process only adds itself as an owner to a page in the shared
+segment when it makes its first access to the page.
+On exit, a process removes itself from the list of owners of each of
+the pages it knows about.
+
+When a page's final owner removes itself from the list of
+owners, this final owner is responsible for destroying it.
+
+Adding and removing segments from the ro_shared_mappings_table is
+  serialized, protected by a lock in the ro_shared_mappings_table.
+For a shared mappings, adding, removing, and looking up pages is
+  serialized, protected by a lock in the shared_mappings.
+
+I ran some performance numbers using the test exec-sharing -- I didn't see any
+improvement. I believe this is because the exec-sharing executable is relatively small 
+and no swapping was incurred. Consequently, the cost of serializing operations on the
+ro_shared_mappings_table and the segment_mapping_info's mappings hash may outweigh
+the benefit of page sharing in such a case.
+
+I would be curious to see the effect on performance for mmap sharing and when
+sharing larger executables. Alas, I don't have time to try this out right now.
 
          SURVEY QUESTIONS
          ================
