@@ -42,14 +42,6 @@ enum mmap_backing_type
   MMAP_BACKING_INITIAL    /* mmap is backed by a file temporarily: once read, it becomes swap'able. */
 };
 
-enum popularity_range
-
-{
-  POPULARITY_MIN = 0,  /* Lowest value a page's popularity can take on. */
-  POPULARITY_START = 127, /* Initial value for a new page's popularity. */
-  POPULARITY_MAX = 255 /* Highest value a page's popularity can take on. */
-};
-
 /* Maps all virtual addresses known to this process. */
 struct supp_page_table
 {

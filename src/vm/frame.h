@@ -26,7 +26,6 @@ struct frame
   enum frame_status status; /* Status of this frame. */
 
   struct page *pg; /* Page resident in this frame. */
-  bool popularity; /* For LRU clock algorithm, set true/false  based on access bit. */
 
   struct lock lock; /* For mutex. */
 };

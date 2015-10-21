@@ -143,7 +143,6 @@ frame_table_store_page (struct page *pg)
   /* Tell each about the other. */
   fr->status = FRAME_OCCUPIED;
   fr->pg = pg;
-  fr->popularity = false;
 
   pg->status = PAGE_RESIDENT;
   pg->location = fr;
@@ -184,7 +183,6 @@ frame_table_release_page (struct page *pg)
   /* Update frame. */
   fr->status = FRAME_EMPTY;
   fr->pg = NULL;
-  fr->popularity = false;
   frame_table_incr_n_free_frames ();
   lock_release (&fr->lock);
 
