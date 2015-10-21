@@ -435,10 +435,12 @@ frame_table_get_eviction_victim (void)
           - else if pinned: try another frame */
   for (repeat_counter = 0; repeat_counter < max_repeats; repeat_counter++)
   {
-    /* The hand moves over each frame in the table from its last left position.
-       We evict the first un-accessed page not pinned in its frame. */
-    for (victim_ix = system_frame_table.hand; victim_ix != system_frame_table.hand; victim_ix = (victim_ix + 1) % system_frame_table.n_frames)
+    uint32_t i = 0;
+    for (i = 0; i < system_frame_table.n_frames; i++)
     {
+      /* The hand moves over each frame in the table from its last left position.
+         We evict the first un-accessed page not pinned in its frame. */
+      victim_ix = (system_frame_table.hand + i) % system_frame_table.n_frames; /* Index relative to hand. */
       final_hand_value = victim_ix;
       fr = &frames[victim_ix];
       /* Optimistic search: search for un-pinned frame without locks, then lock to verify that it's valid. */
