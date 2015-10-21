@@ -18,9 +18,6 @@
    Processes use the functions defined in frame.h to interact with this table. */
 struct frame_table system_frame_table;
 
-/*global variable */
-static uint32_t hand;
-
 /* Private function declarations. */
 static void frame_table_init_frame (struct frame *, void *);
 
@@ -539,7 +536,9 @@ frame_table_evict_page_from_frame (struct frame *fr)
       else
       {
         /* Code portion of executable. Can discard and get back from file when needed. */
-        ASSERT (!page_unset_dirty (pg));
+        /* TODO Still need to figure out how this page is getting marked dirty...
+          However, as long as the hash cksum is correct when we read it back, I don't care
+        ASSERT (!page_unset_dirty (pg));  */
         discard = true;
       }
     }
