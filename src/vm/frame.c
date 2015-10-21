@@ -383,9 +383,6 @@ frame_table_unpin_page (struct page *pg)
 static struct frame * 
 frame_table_make_free_frame (void)
 {
-  /* TODO For testing, since eviction is currently too expensive. */
-  //return NULL;
-  //struct frame *victim = frame_table_return_eviction_candidate ();
   struct frame *victim = frame_table_get_eviction_victim ();
   if (victim != NULL)
   {
@@ -499,9 +496,12 @@ frame_table_evict_page_from_frame (struct frame *fr)
 {
   ASSERT (fr != NULL);
 
-  /* If this frame is empty, nothing to do. */
+  /* If this frame is empty, the owner must have just released it (so it is a 'free frame'). */
   if (fr->status == FRAME_EMPTY)
+  {
+    frame_table_decr_n_free_frames ();
     return;
+  }
   ASSERT (fr->status == FRAME_OCCUPIED);
 
   /*   For mmap'd file page, check if the page is dirty. 
@@ -664,63 +664,3 @@ frame_table_get_n_free_frames (void)
 {
   return system_frame_table.n_free_frames;
 }
-
-
-
-
-/* The hand moves over each frame in the table from its last left position 
-   the access bit is checked for each page in frame and is decided if its 
-   an suitable eviction candidate , returns a locked frame */
-struct frame *
-frame_table_return_eviction_candidate ()
-{
-   uint32_t i;
-   bool a;
-   /*variable keeps track of no. of frames searched */
-   uint32_t count = 0;
-   struct frame *frames = (struct frame *) system_frame_table.frames;
-   /* TODO This loop is still not right. You need to go until i == hand
-      again, or thereabouts. You'll loop forever here instead, never
-      exiting the loop -- the % ensures i will never equal n_frames. */
-   for (i = hand; i < system_frame_table.n_frames; i = ( (i+1) % system_frame_table.n_frames) )
-    {  
-        hand = (hand + 1) % system_frame_table.n_frames; 
-        struct frame *fr = &frames[i]; 
-        if(fr != NULL && fr->pg != NULL && fr->status != FRAME_PINNED)
-          { lock_acquire (&fr-> lock);
-            if (fr->status != FRAME_PINNED)
-             {
-               if (lock_try_acquire (&fr->pg->lock))
-                { 
-                 //a = page_check_accessbit_decide_eviction_pagedir (fr->pg);
-                 /*checking status again after an optimistic search */
-                 if(a)
-                   return fr;
-                 else lock_release (&fr->pg->lock);
-                 }
-                 
-              }
-             
-             lock_release (&fr->lock);
-           }
-          count ++;
-         /*Assert if we have searched all the frames */
-         ASSERT (count < system_frame_table.n_frames);             
-
-    }     
-  
-  return NULL;
-
-   
-}        
-          
-
-
-
-
-
-
-
-
-
-
