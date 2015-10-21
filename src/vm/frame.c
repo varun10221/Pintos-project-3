@@ -110,13 +110,30 @@ frame_table_store_page (struct page *pg)
   ASSERT (lock_held_by_current_thread (&fr->lock));
 
   /*  Loading page contents into frame (swap in, zero out frame, mmap in, etc. depending on pg->status). */
+#ifdef VM_DEBUG
+  unsigned new_cksum = 0;
+#endif
   switch (pg->status)
   {
     case PAGE_IN_FILE:
       frame_table_read_mmap_page_from_file (pg, fr);
+    #ifdef VM_DEBUG
+      if (pg->cksum != 0) /* Uninitialized. */
+      {
+        new_cksum = hash_bytes (fr->paddr, PGSIZE);
+        ASSERT (new_cksum == pg->cksum);
+      }
+    #endif
       break;
     case PAGE_SWAPPED_OUT:
       swap_table_retrieve_page (pg, fr);
+    #ifdef VM_DEBUG
+      if (pg->cksum != 0) /* Uninitialized. */
+      {
+        new_cksum = hash_bytes (fr->paddr, PGSIZE);
+        ASSERT (new_cksum == pg->cksum);
+      }
+    #endif
       break;
     case PAGE_STACK_NEVER_ACCESSED:
       memset (fr->paddr, 0 , PGSIZE);
@@ -492,6 +509,11 @@ frame_table_evict_page_from_frame (struct frame *fr)
   /* Synchronize with frame_table_pin_page. */
   ASSERT (pg->status == PAGE_RESIDENT);
 
+#ifdef VM_DEBUG
+  /* Calculate the "before" hash. Use fr->paddr to avoid setting the access bit in the owners' pagedirs. */
+  pg->cksum = hash_bytes (fr->paddr, PGSIZE);
+#endif
+
   /* Update each owner's pagedir so that they page fault when they next access this page. 
      Do this BEFORE copying the contents so that the owners will page fault on access and have to wait for us
      to finish evicting it (we hold the lock on PG). */
@@ -668,7 +690,7 @@ frame_table_return_eviction_candidate ()
              {
                if (lock_try_acquire (&fr->pg->lock))
                 { 
-                 a = page_check_accessbit_decide_eviction_pagedir (fr->pg);
+                 //a = page_check_accessbit_decide_eviction_pagedir (fr->pg);
                  /*checking status again after an optimistic search */
                  if(a)
                    return fr;

@@ -155,6 +155,10 @@ struct page
   struct lock lock; /* Used to protect owners and location+status. */
   struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
   struct list_elem dead_elem; /* For adding to a list of dead pages in segment_destroy. A page must be present in exactly one segment_mapping_info's mappings hash. */
+
+#ifdef VM_DEBUG
+  unsigned cksum; /* For use by frame.c. Hash before eviction and after store_page should match. */ 
+#endif
 };
 
 /* Tracks the segment* associated with a given mapid_t. 
