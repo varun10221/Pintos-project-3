@@ -203,7 +203,10 @@ ro_shared_mappings_table_remove (struct mmap_details *md)
     /* If another process has established a mapping between when we were 
        called and now, then the shared_mappings may have a non-zero ref count. */
     if (match->ref_count == 0)
+    {
+      hash_delete (&ro_shared_mappings_table.mmap_details_to_shared_mappings, &match->elem);
       shared_mappings_destroy (match);
+    }
   }
 
   lock_release (&ro_shared_mappings_table.hash_lock);
@@ -505,7 +508,7 @@ segment_destroy (struct segment *seg)
   {
     next = hash_next (&hi);
     struct page *pg = (struct page *) hash_entry (he, struct page, elem);
-    /* Lock to protect owners -- coordinate with frame_table_evict_page_from_frame. */
+    /* Lock to protect owners -- coordinate with frame_table_evict_page_from_frame and segment_get_page. */
     lock_acquire (&pg->lock);
     bool was_sole_owner = page_remove_owner (pg, seg);
     lock_release (&pg->lock);
@@ -593,19 +596,19 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   ASSERT (h != NULL);
 
   if (sm)
-    /* Lock to ensure mutex on hash_insert. */
+    /* Lock to ensure mutex on hash_find/hash_insert. */
     lock_acquire (&sm->segment_mapping_info_lock);
 
-  struct page *ret = NULL;
+  struct page *pg = NULL;
   /* Find the page. Add a new one if there isn't one yet. */
   struct hash_elem *e = hash_find (h, &dummy.elem);
   if (e)
-    ret = hash_entry (e, struct page, elem);
+    pg = hash_entry (e, struct page, elem);
   else
   {
     /* Add a new page. */
-    ret = page_create (smi, relative_page_num);
-    struct hash_elem *was_already_present = hash_insert (h, &ret->elem); 
+    pg = page_create (smi, relative_page_num);
+    struct hash_elem *was_already_present = hash_insert (h, &pg->elem); 
     if (was_already_present)
     {
       /* If this fails, something has gone quite wrong. Dump the hash. */
@@ -615,7 +618,7 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
   }
 
   /* Lock page so that the owners member is fixed. */
-  lock_acquire (&ret->lock);
+  lock_acquire (&pg->lock);
 
   if (sm)
     /* The lock on the page protects us from here on. */
@@ -623,27 +626,27 @@ segment_get_page (struct segment *seg, int32_t relative_page_num)
 
   /* Now that we've got a page, we need to make sure we are on the list of owners of the page. 
      In the event that it's a shared page, we may or may not already be on the list. 
-     If it's a new page, we're definitely not on the list (and the list is empty). 
+     If it's a new page (shared or unshared), we're definitely not on the list (and the list is empty). 
      
      If a shared page, we hold sm->segment_mapping_info_lock, so the page we found/created is 
        not going to disappear out from under us.
        
      If a shared page, it may be resident, in which case we can update our pagedir. */
-  bool did_add = page_add_owner (ret, seg);
+  bool did_add = page_add_owner (pg, seg);
   if (sm && did_add)
   {
-    if (ret->status == PAGE_RESIDENT)
+    if (pg->status == PAGE_RESIDENT)
     {
     /* Resident shared page and we just added ourselves to it. Update our pagedir. 
        NB This implies that frame needs to lock its page before eviction. */
-      struct frame *fr = (struct frame *) ret->location;
-      pagedir_set_page (thread_current ()->pagedir, segment_calc_vaddr (seg, ret->segment_page), fr->paddr, smi->flags & MAP_RDWR);
+      struct frame *fr = (struct frame *) pg->location;
+      pagedir_set_page (thread_current ()->pagedir, segment_calc_vaddr (seg, pg->segment_page), fr->paddr, smi->flags & MAP_RDWR);
     }
   }
 
-  lock_release (&ret->lock);
+  lock_release (&pg->lock);
 
-  return ret;
+  return pg;
 }
 
 /* Calculate the relative page number of VADDR in segment SEG.
@@ -920,7 +923,7 @@ shared_mappings_create (struct mmap_details *md, int flags)
   return sm;
 }
 
-/* Destroy this shared mappings. 
+/* Destroy this shared mappings, freeing its memory. 
  
    Only call if there are no remaining referrers and we are 
      guaranteed that no new referrers will race with us. 
@@ -943,6 +946,8 @@ shared_mappings_destroy (struct shared_mappings *sm)
     file_close (f);
     filesys_unlock ();
   }
+
+  free (sm);
 }
 
 /* For use with hash_destroy. */
@@ -970,7 +975,8 @@ shared_mappings_decr_ref_count (struct shared_mappings * sm)
   lock_release (&sm->ref_count_lock);
 
   /* If it looks like we're the last user, ask the ro shared segment table
-     to remove this segment. */
+     to remove this segment. Another user could come through and add himself
+     between now and then. */
   if (sm->ref_count == 0)
     ro_shared_mappings_table_remove (&sm->smi.mmap_details);
 }
