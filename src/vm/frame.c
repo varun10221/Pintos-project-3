@@ -501,7 +501,9 @@ frame_table_evict_page_from_frame (struct frame *fr)
 
   /* If this frame is empty, nothing to do. */
   if (fr->status == FRAME_EMPTY)
-    return;
+      { frame_table_decr_n_free_frames ();
+       return;
+      }
   ASSERT (fr->status == FRAME_OCCUPIED);
 
   /*   For mmap'd file page, check if the page is dirty. 
