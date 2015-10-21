@@ -867,8 +867,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   md.zero_bytes = zero_bytes;
   int flags = 0;
   flags |= (writable ? MAP_RDWR : MAP_RDONLY); 
-  //flags |= (writable ? MAP_PRIVATE : MAP_SHARED); /* If read-only we can share it. */
-  flags |= MAP_PRIVATE; /* Share nothing. */
+  flags |= (writable ? MAP_PRIVATE : MAP_SHARED); /* If read-only we can share it. */
 
   filesys_unlock ();
   struct mmap_info *mi = process_add_mapping (&md, upage, flags);
