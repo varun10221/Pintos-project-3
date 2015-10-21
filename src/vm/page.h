@@ -11,7 +11,7 @@
 
 /* TODO Move the "implementation-level" declarations to page.c. Prefer an opaque interface where possible. */
 
-/* mmap flags */
+/* Page flags indicating mapping type. */
 
 /* Sharing between processes. */
 static const int MAP_PRIVATE = 1 << 0;
@@ -48,6 +48,7 @@ struct supp_page_table
   struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends at PHYS_BASE). */
 };
 
+/* Details for a given memory mapping. */
 struct mmap_details
 {
   struct file *mmap_file; /* If not NULL, segment is backed by this file. */
