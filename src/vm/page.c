@@ -30,7 +30,7 @@ struct ro_shared_mappings_table ro_shared_mappings_table;
 /* Private function declarations. */
 
 /* Supp page table. */
-static struct segment * supp_page_table_find_segment (struct supp_page_table *, void *);
+static struct segment * supp_page_table_find_segment (struct supp_page_table *, const void *);
 static struct segment * supp_page_table_get_stack_segment (struct supp_page_table *);
 static bool supp_page_table_is_range_valid (struct supp_page_table *, const void *, const void *);
 
@@ -247,7 +247,7 @@ supp_page_table_destroy (struct supp_page_table *spt)
    Will add pages to the stack segment to accommodate growth if needed.
    Will only do so if vaddr is above the min_observed_esp (i.e. a valid stack access). */
 struct page * 
-supp_page_table_find_page (struct supp_page_table *spt, void *vaddr)
+supp_page_table_find_page (struct supp_page_table *spt, const void *vaddr)
 {
   ASSERT (spt != NULL);
   if (PHYS_BASE <= vaddr)
@@ -326,7 +326,7 @@ supp_page_table_remove_segment (struct supp_page_table *spt, struct segment *seg
 /* Returns the segment to which vaddr belongs, or NULL.
    Grows the stack if it looks like a legal stack access. */
 static struct segment * 
-supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
+supp_page_table_find_segment (struct supp_page_table *spt, const void *vaddr)
 {
   ASSERT (spt != NULL);
 
@@ -349,7 +349,8 @@ supp_page_table_find_segment (struct supp_page_table *spt, void *vaddr)
        if they actually go that low. */
     struct segment *stack_seg = supp_page_table_get_stack_segment (spt);
     ASSERT (vaddr <= stack_seg->start);
-    stack_seg->start = vaddr;
+    uint32_t value = (uint32_t) vaddr; /* Avoid compiler complaints. */
+    stack_seg->start = (void *) value;
     return stack_seg;
   }
 

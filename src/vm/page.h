@@ -182,8 +182,8 @@ void supp_page_table_init (struct supp_page_table *);
 void supp_page_table_destroy (struct supp_page_table *);
 
 /* Usage. */
-struct page * supp_page_table_find_page (struct supp_page_table *, void *vaddr);
-struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct mmap_details *md, void *, int, bool);
+struct page * supp_page_table_find_page (struct supp_page_table *, const void *);
+struct segment * supp_page_table_add_mapping (struct supp_page_table *, struct mmap_details *, void *, int, bool);
 void supp_page_table_remove_segment (struct supp_page_table *, struct segment *);
 
 /* Some page APIs for use by frame. */
