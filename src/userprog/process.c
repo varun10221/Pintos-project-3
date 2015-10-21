@@ -527,7 +527,8 @@ process_wait (tid_t child)
 
 /* Free the current process's resources. 
    All exiting processes must come through here to avoid leaks. 
-   Called from thread_exit. */
+   Called from thread_exit. 
+   Acquires and releases filesys_lock. */
 void
 process_exit (void)
 {
@@ -545,7 +546,11 @@ process_exit (void)
 
   /* Unlock executable, if we opened one. */
   if (cur->my_executable != NULL)
+  {
+    filesys_lock ();
     file_close (cur->my_executable);
+    filesys_unlock ();
+  }
 
   /* Done with our scratch page, if we allocated one. */
   process_scratch_page_free ();
