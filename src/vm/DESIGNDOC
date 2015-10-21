@@ -10,6 +10,7 @@
 
 Jamie Davis <davisjam@vt.edu>
 Varun Subramanian <varuns92@vt.edu>
+
 ---- PRELIMINARIES ----
 
 >> If you have any preliminary comments on your submission, notes for the
@@ -18,6 +19,8 @@ Varun Subramanian <varuns92@vt.edu>
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
+
+N/A
 
       PAGE TABLE MANAGEMENT
       =====================
@@ -28,32 +31,160 @@ Varun Subramanian <varuns92@vt.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-JAMIE
+page.h:
+  /* Page flags indicating mapping type. */
+  /* Sharing between processes. */
+  static const int MAP_PRIVATE = 1 << 0;
+  static const int MAP_SHARED  = 1 << 1;
+  
+  /* Access info for the segment holding the pages. */
+  static const int MAP_RDONLY  = 1 << 2;
+  static const int MAP_RDWR    = 1 << 3;
+  
+  enum page_status
+  {
+    PAGE_RESIDENT, /* This page is in a frame. */
+    PAGE_SWAPPED_OUT, /* This page is in a swap slot. */
+    PAGE_IN_FILE, /* This page is in a file (mmap). */
+    PAGE_STACK_NEVER_ACCESSED, /* This stack page has never been accessed. Zero it out before storing in frame please. */
+    PAGE_DISCARDED /* This page has been discarded by its owner and is going to be deleted. */
+  };
+  
+  /* Maps all virtual addresses known to this process. */
+  struct supp_page_table
+  {
+    struct list segment_list; /* List of segments, sorted by their starting addresses. (Stack segment is always last, since it is contiguous and ends at PHYS_BASE). */
+  };
+  
+  /* Info needed to:
+       - map 'relative page numbers' to 'pages'
+       - evict and replace such pages. 
+     A segment points to either one of these or to a struct shared_mappings*. */
+  struct segment_mapping_info
+  {
+    struct hash mappings; /* Maps relative page number to page. */
+    struct mmap_details mmap_details; /* Info about whether or not this is an mmap'd segment. */
+    int flags;
+  };
+  
+  /* Tracks a particular address range for a process. */
+  struct segment
+  {
+    /* An address belongs to this segment if (start <= addr && addr < end). */
+    void *start; /* Starting address of this segment (virtual address). Might not be page-aligned (e.g. stack segment).*/
+    void *end; /* One byte past the final address in this segment (virtual address). Might not be page-aligned (e.g. mmap). */
+  
+    /* Allows us to map from segment page number to page. 
+       Points to either a struct segment_mapping_info* or to a struct shared_mappings*. 
+       The pointer type is determined by segment.type. */
+    void *mappings; 
+    /* SEGMENT_PRIVATE: We are the only one using mappings. mappings points to a struct segment_mapping_info*
+       SEGMENT_SHARED: We share mappings. mappings points to a struct shared_mappings*. */
+    enum segment_type type; 
+  
+    struct list_elem elem; /* For inclusion in the segment list of a struct supp_page_table. */
+  };
+  
+  /* Structure tracking the mapping between a virtual address (page) and its location. */
+  struct page
+  {
+    /* List of page_owner_info's of the processes that use this page. 
+       NB The pagedirs (HW page tables) of the owners are updated and invalidated
+       by the frame table. The SPT itself should not modify the pagedir at all. 
+  
+       Use lock to control access to this field. */
+    struct list owners; 
+    bool is_dirty; /* If an owner with a dirty pagedir entry for this page calls page_remove_owner, he sets this to true. */ 
+  
+    void *location; /* If page is in frame or swap table, this is the struct frame* or struct slot* in which this page resides. */
+    enum page_status status; /* Status of this page. */
+  
+    struct segment_mapping_info *smi; /* Info for mmap and knowledge about rw status. */
+    int32_t segment_page; /* Which page in its segment is this? Segments hash pages by segment_page. */
+  
+    struct lock lock; /* Used to protect owners and location+status. */
+    struct hash_elem elem; /* For inclusion in the hash of a struct segment. Hash on segment_page. */
+    struct list_elem dead_elem; /* For adding to a list of dead pages in segment_destroy. A page must be present in exactly one segment_mapping_info's mappings hash. */
+  
+  #ifdef VM_DEBUG
+    unsigned cksum; /* For use by frame.c. Hash before eviction and after store_page should match. */ 
+  #endif
+  };
+
+thread.h:
+  struct thread: 
+    /* The smallest observed stack address. Based on observations during transitions from user to kernel mode. */
+    void *min_observed_stack_address; 
+    /* Keeps us from growing the stack in order to get syscall args. If user gave us bad args in his
+       syscall, we don't want to grow the stack for him. Just terminate him. */
+    bool getting_syscall_args;
+
+    /* Used to map virtual addresses to pages. */
+    struct supp_page_table supp_page_table;
 
 ---- ALGORITHMS ----
 
 >> A2: In a few paragraphs, describe your code for locating the frame,
 >> if any, that contains the data of a given page.
 
-JAMIE
+The `struct page' includes a 'void *location' and a 'enum page_status status'.
+These fields are protected by the 'struct lock' of the page. 
+
+When a process page faults, it calls supp_page_table_find_page, which goes
+and locates the page associated with the faulting address. To do this it must
+first locate the segment to which the page belongs, by comparing the faulting address
+to the 'start' and 'end' boundaries of the segment. Once the matching page is found...
+ 
+If status == PAGE_RESIDENT, then location points to the `struct frame' containing it.
+
+Otherwise, a frame is allocated and the page's contents have to be found.
+  If status == PAGE_SWAPPED_OUT, location points to the `struct swap_slot' containing it.
+  If status == PAGE_IN_FILE (mmap or executable), it is read from the backing file.
+  If status == PAGE_STACK_NEVER_ACCESSED, it is zero'd out.
 
 >> A3: How does your code coordinate accessed and dirty bits between
 >> kernel and user virtual addresses that alias a single frame, or
 >> alternatively how do you avoid the issue?
+
+TODO JAMIE -- Need to explore pagedir status when zero'ing out and memcpy'ing in.
 
 ---- SYNCHRONIZATION ----
 
 >> A4: When two user processes both need a new frame at the same time,
 >> how are races avoided?
 
-VARUN
+TODO VARUN
 
 ---- RATIONALE ----
 
 >> A5: Why did you choose the data structure(s) that you did for
 >> representing virtual-to-physical mappings?
 
-JAMIE
+My fundamental motivation was to implement executable sharing. 
+In such a setting, the use of segments makes sense: multiple
+processes define their own segments for a given shared region
+(including, for example, different virtual addresses),
+but the mappings (page -> frame/swap) contained in the segment can be shared.
+
+The `struct page' itself then tracked not its virtual address, but rather
+its relative page number in its segment. This meant that if two processes shared the same
+mappings (e.g. an executable) but mapped it at different starting addresses, 
+both would be able to find the page based on its address relative to the 
+starting address of the segment.
+
+The goal of sharing also meant that a `struct page' keeps a list of owners, allowing
+us to use list functions to test the pagedir entry of each owner for dirty or accessed,
+or to invalidate the pagedir entry when needed. Each entry in 'owners' included the
+virtual page address in its owner's address space for querying of the pagedir.
+
+The expectation is that many more pages than frames will exist, so avoiding wasted space was important.
+I chose to track the location of the page using a combination of the page's `void *location' field
+and its `status' field, rather than having a `void *paddr'. When a page was resident, its physical 
+address could be obtained by accessing its frame. When not resident, we wouldn't be wasting 
+the space for a `void *' in the `struct page'.
+
+I also felt that putting the paddr directly into the page would violate modularity -- I wanted the
+frame to define the physical location, rather than the page itself.
 
            PAGING TO AND FROM DISK
            =======================
@@ -64,14 +195,14 @@ JAMIE
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-VARUN
+TODO VARUN
 
 ---- ALGORITHMS ----
 
 >> B2: When a frame is required but none is free, some frame must be
 >> evicted.  Describe your code for choosing a frame to evict.
 
-VARUN
+TODO VARUN
    
    Each frame is associated with a popularity that varies between 0 and 255.
    Whenever the number of free frames, fall below a certain threshold in the
@@ -90,13 +221,26 @@ VARUN
 >> process Q, how do you adjust the page table (and any other data
 >> structures) to reflect the frame Q no longer has?
 
-VARUN
+TODO VARUN
 
 >> B4: Explain your heuristic for deciding whether a page fault for an
 >> invalid virtual address should cause the stack to be extended into
 >> the page that faulted.
 
-JAMIE
+At every transition from user to kernel mode, we call process_observe_stack_address.
+These transitions are in page_fault and syscall_handler. Additionally, in setup_stack
+we initialize the stack address to PHYS_BASE.
+
+In page_fault, if the user's access is <= 32 bytes of the min_observed_stack_address,
+then we update the stack address to the location of the access. 32 bytes was chosen because
+that is how far below the stack a legal access can be (due to use of the PUSHA instruction).
+
+In process_observe_stack_address, if the observed address is lower than the thread's `void *min_observed_stack_address',
+then we update the min_observed_stack_address field. 
+
+When looking for a segment (supp_page_table_find_segment), if we fail to find a segment
+in which the address belongs, we then check if the min_observed_stack_address is at or below the virtual address being queried.
+If it is, then we grow the stack by lowering the stack segment's `start' field to the virtual address.
 
 ---- SYNCHRONIZATION ----
 
@@ -105,21 +249,54 @@ JAMIE
 >> textbook for an explanation of the necessary conditions for
 >> deadlock.)
 
-JAMIE
+A page and a frame both have a lock. In order to manipulate a
+page (owner, location, status) you need to hold the page's lock.
+In order to manipulate a frame (pg) you need to hold the frame's lock.
+
+The locking order is 
+  lock page
+  lock frame
+
+This cannot be honored in the case of eviction, where first the
+non-pinned frame is locked and then its page (if any) is locked.
+To avoid deadlock, in eviction try_lock is used to lock the page,
+and if the page cannot be locked then the frame is considered
+unavailable. The next frame is examined. 
+
+This leads to an imperfect clock eviction algorithm, since we don't examine 
+the access bit of all pages, just the lock-able ones. Consequently, when 
+searching for an eviction victim, we scan the list of frames up to 3 times times
+looking for a victim. This gives us time to come back to pages that were locked,
+in the event that we can't find any other pages to evict.
+
+Other places where locking is used:
+  - When getting a new swap slot, the swap table's usage_lock is acquired to protect
+    access to the usage bitmap.
+
+  - When evicting, the frame table's eviction_lock is acquired to protect the 'hand' field.
+    This ensures that pages aren't unfairly evicted earlier than they should be (process 1 
+    begins at hand and looks for a victim; process 2 begins at hand and evicts the very first page,
+    already cleared by process 1).
+
+  - Atomically updating the frame table's n_free_frames field.
+
+None of these areas is a candidate for deadlock.
+
+TODO For memory sharing, I haven't figured out why my code is deadlocking. I'm sure it's something silly.
 
 >> B6: A page fault in process P can cause another process Q's frame
 >> to be evicted.  How do you ensure that Q cannot access or modify
 >> the page during the eviction process?  How do you avoid a race
 >> between P evicting Q's frame and Q faulting the page back in?
 
-VARUN
+TODO VARUN
 
 >> B7: Suppose a page fault in process P causes a page to be read from
 >> the file system or swap.  How do you ensure that a second process Q
 >> cannot interfere by e.g. attempting to evict the frame while it is
 >> still being read in?
 
-VARUN
+TODO VARUN
 
 >> B8: Explain how you handle access to paged-out pages that occur
 >> during system calls.  Do you use page faults to bring in pages (as
@@ -127,7 +304,27 @@ VARUN
 >> into physical memory, or do you use some other design?  How do you
 >> gracefully handle attempted accesses to invalid virtual addresses?
 
-JAMIE
+I have two mechanisms to deal with this. 
+
+1. When the user provides a file name as a string (create, remove, open), 
+I use strlcpy to store the string in a kernel buffer (the thread 
+member `void *scratch_page', allocated only if the process needs it). 
+If the strlcpy triggers page fault(s), they are handled by page_fault.
+
+This allows me to avoid pinning multiple pages at once in the event
+that the user's string spans multiple pages.
+
+Once the string is copied to the thread's kernel buffer, there is no
+risk of page fault while calling the filesys commands under the filesys_lock.
+
+2. When the user provides a buffer for I/O, I split the request into
+pieces, one piece for each page that the buffer spans. For each piece
+I pin the buffer to a frame and then am safe from page faults.
+
+In the case of read, after pinning the relevant portion of the buffer
+to a frame, I attempt to modify the first byte of that portion of the
+buffer. This will cause a page fault if the buffer is read-only.
+If no page fault occurs, I'm safe to acquire filesys_lock and do the IO.
 
 ---- RATIONALE ----
 
@@ -138,7 +335,44 @@ JAMIE
 >> where your design falls along this continuum and why you chose to
 >> design it this way.
 
-JAMIE
+Our VM design allows for high parallelism in finding a free frame, and 
+low parallelism in eviction.
+
+Free frames are searched for optimistically (find a frame with status EMPTY
+and then lock it and confirm) so that multiple free frames can be found
+simultaneously. The search for free frames begins at a random index each time
+to mitigate the following scenario:
+
+  P1: Locate free frame 0. Lock it and begin reading data back from swap.
+  P2: Locate free frame 0. Try to lock it...wait for P1
+  P1: Finish reading from swap and mark free frame 0 as OCCUPIED
+  P2: Lock acquired. See P1 is OCCUPIED and keep looking.
+
+If starting from the same index each time, this scenario is relatively likely.
+By starting from a random index the scenario becomes less likely.
+This seems to result in about a 5% performance improvement, averaged over 10
+invocations of page-parallel, as compared to starting from 0 each time.
+
+Locating a free frame is the ``fast path'' -- when the system is not heavily loaded,
+there should be free frames available, and finding one needs to be as fast as possible.
+
+On the other hand, if eviction is necessary than the system is fairly heavily loaded
+already, so a further performance degradation seemed relatively inconsequential.
+Thus, eviction is a sequential operation.  The operation of {clear access bits until 
+you find a victim, then move hand} seems to need to be atomic to avoid unwisely evicting 
+just-cleared pages. See B5 for more discussion. 
+I suspect this bottleneck can be improved, but did not have time to address this.
+
+I did make two concession to improving this path.
+1. By keeping the frame table's n_free_frames field up to date, a process can quickly
+see that there are no free frames (i.e. n_free_frames == 0) and proceed to
+eviction without having to ``needlessly'' scan all of the frames. Of course a frame
+could open up due to a process exiting, but this frame would be found by frame_table_get_eviction_victim
+anyway.
+
+2. The search for evictable frames is also optimistic: it skips frames marked pinned and only
+locks frames that are empty or occupied. It then locks the frame and verifies its assessment
+before proceeding to see if it has been accessed.
 
        MEMORY MAPPED FILES
        ===================
@@ -149,7 +383,37 @@ JAMIE
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-JAMIE
+page.h:
+  enum mmap_backing_type
+  {
+    MMAP_BACKING_PERMANENT, /* mmap is backed by a file forever. */
+    MMAP_BACKING_INITIAL    /* mmap is backed by a file temporarily: once read, it becomes swap'able. */
+  };
+
+  /* Details for a given memory mapping. */
+  struct mmap_details
+  {
+    struct file *mmap_file; /* If not NULL, segment is backed by this file. */
+    off_t offset; /* mmap is based on this offset in the file. */
+  
+    enum mmap_backing_type backing_type;
+    uint32_t read_bytes; /* Used for MMAP_BACKING_INITIAL. The first READ_BYTES of the executable are read. */
+    uint32_t zero_bytes; /* Used for MMAP_BACKING_INITIAL. Bytes after READ_BYTES are zero'd. */
+  };
+  
+  /* Tracks the segment* associated with a given mapid_t. 
+     Stored in a thread's mmap_table.
+     The segment tracks the corresponding file* for loading data into a frame.
+     On munmap we use this to find the segment* whose pages need to be handled. */
+  struct mmap_info
+  {
+    struct segment *seg; /* The segment* corresponding to this mapping. */
+  };
+
+thread.h:
+  struct thread:
+    /* Maps mmap_id_t to struct mmap_info*. */
+    struct vector mmap_table;
 
 ---- ALGORITHMS ----
 
@@ -157,17 +421,19 @@ JAMIE
 >> memory subsystem.  Explain how the page fault and eviction
 >> processes differ between swap pages and other pages.
 
-VARUN
+TODO VARUN
 
 >> C3: Explain how you determine whether a new file mapping overlaps
 >> any existing segment.
 
-JAMIE
-
-       MEMORY SHARING
-       ===================
-
-       JAMIE
+Each process's supplemental page table is a list of segments,
+sorted by their starting offset. Given a new mapping request,
+I take the start address and compute the end address based on the file size.
+I then iterate over the existing segments and determine if the {start,end} pair
+of the new segment overlaps with the {start,end} of each existing segments.
+Because the list of segments is sorted, I don't always need to scan the entire
+list, just far enough to see a segment whose start is greater than the proposed 
+mapping's end.
 
 ---- RATIONALE ----
 
@@ -178,7 +444,77 @@ JAMIE
 >> implementation either does or does not share much of the code for
 >> the two situations.
 
-JAMIE
+The implementation of mmap mappings is strongly shared with the demand-paging
+for executables. Demand paging is treated as a special form of mmap.
+The backing type for normal mmap is MMAP_BACKING_PERMANENT, while the backing
+type for executables is MMAP_BACKING_INITIAL. When evicting and loading,
+this type is checked and we decide to swap out or write back or discard appropriately.
+
+This means that if memory sharing works for read-only executable pages, it should
+be a simple extension to allow it to work for sharing general mmap'd pages. 
+
+This makes the conceptual load required to understand the code easier. I thought it
+was cleaner to have a ``sub-type'' than to have two unrelated types with very similar
+semantics.
+
+
+       MEMORY SHARING
+       ===================
+
+---- DATA STRUCTURES ----
+
+>> D1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+page.h:  
+  enum segment_type
+  {
+    SEGMENT_PRIVATE, /* Not shared between multiple processes. */
+    SEGMENT_SHARED /* RO shared segment. */
+  };
+
+  /* Container for mappings shared between multiple processes.
+     Only supports mappings for mmap'd files, but I think it should
+     generalize pretty easily if need be.
+   
+     Allocated by the first process to access the shared segment.
+     Cleaned up by the last process to release the shared segment. */
+  struct shared_mappings
+  {
+    /* Sector of the inode to which the file is mapped; unique in the FS across 
+         the lifetime of the executable. Used along with the smi as the hash field in ro_shared_mappings_table. */
+    block_sector_t inumber; 
+  
+    struct segment_mapping_info smi; /* All processes share this mapping info. */ 
+    struct lock segment_mapping_info_lock; /* Protects smi. Must acquire this to add or remove pages from this mapping. */
+  
+    int ref_count; /* How many processes are using this shared segment? Last one done has to clean up. */
+    struct lock ref_count_lock; /* Protects ref_count. */
+  
+    struct hash_elem elem; /* For storage in the ro_segment_table. */ 
+  };
+  
+  /* A single global structure is defined to allow the sharing of the RO pages of executables. */
+  struct ro_shared_mappings_table
+  {
+    struct hash mmap_details_to_shared_mappings; /* Hash mmap details to a shared_mappings. */
+    struct lock hash_lock; /* Lock before modifying the hash. */
+  };
+
+  /* A page tracks a list of its "owners": processes that need to be notified
+     if the page's location changes. 
+     A page_owner_info contains enough information to update the pagedir for
+     each owning process. */
+  struct page_owner_info
+  {
+    struct thread *owner; /* This thread has a reference to this page. */
+    void *vpg_addr; /* This is the virtual page address in the owner's address space. */
+    bool writable; /* Whether or not this mapping is writable. */
+    struct list_elem elem;
+  };
+
+       TODO JAMIE
 
          SURVEY QUESTIONS
          ================
@@ -192,15 +528,36 @@ the quarter.
 >> In your opinion, was this assignment, or any one of the three problems
 >> in it, too easy or too hard?  Did it take too long or too little time?
 
+I thought this project was fairly demanding. Much of the effort went into
+figuring out a design that would cleanly accommodate memory sharing, though,
+and I think it would have been much easier had I not been trying to figure
+out how to get that to work nicely.
+
 >> Did you find that working on a particular part of the assignment gave
 >> you greater insight into some aspect of OS design?
+
+Forgetting to clear the owner's pagedir on eviction led to some really
+interesting bugs. That really illuminated a lot of the concepts for me.
 
 >> Is there some particular fact or hint we should give students in
 >> future quarters to help them solve the problems?  Conversely, did you
 >> find any of our guidance to be misleading?
 
+I think the suggestion I posted on Pintos about keeping a cksum for a page
+was a useful technique to automatically detect issues as a result of page
+eviction. I think adding this as a hint in the assignment would be useful.
+
 >> Do you have any suggestions for the TAs to more effectively assist
 >> students, either for future quarters or the remaining projects?
 
+No.
+
 >> Any other comments?
 
+I think requiring us to evaluate the performance of different eviction algorithms 
+would be a neat tweak/alternate suggestion for extra credit. So far we've focused
+on building stuff but it would be cool to get a sense of the relative performance
+of what we're building.
+
+Alternatively, ``racing'' our implementations on the various tests
+and putting up a scoreboard might be a fun way to motivate this organically.
