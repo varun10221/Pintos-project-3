@@ -20,15 +20,20 @@ const uint32_t BLOCK_SECTORS_PER_PAGE = DIV_ROUND_UP (PGSIZE, BLOCK_SECTOR_SIZE)
 uint32_t SWAP_TABLE_N_SLOTS = 0;
 struct block *SWAP_BLOCK = NULL;
 
-/* TODO Declare private function APIs. */
+/* Private function APIs. */
+static uint32_t get_swap_table_n_slots (void);
+static void swap_table_init_swap_slot (struct swap_slot *, id_t);
 
+/* Definitions. */
+
+/* Return the total number of slots in the swap table. */
 static uint32_t 
 get_swap_table_n_slots (void)
 { 
   struct block *blk = block_get_role (BLOCK_SWAP);
   ASSERT (blk != NULL);
 
-  return block_size (blk) / BLOCK_SECTORS_PER_PAGE;/* returns no. of pages swap holds*/
+  return block_size (blk) / BLOCK_SECTORS_PER_PAGE;
 }
 
 /* Initialize this swap slot. */
@@ -103,7 +108,7 @@ swap_table_store_page (struct page *pg)
   /* Make sure slot is in a correct state. */
   struct swap_slot *slots = (struct swap_slot *) system_swap_table.slots; /* Cleaner than compiler warnings. */
   struct swap_slot *s = &slots[free_slot];
-  ASSERT ((size_t) s->id == free_slot); /* TODO Remove this later. Just initial debugging. */
+  ASSERT ((size_t) s->id == free_slot); /* Paranoia. */
 
   /* Update slot state and contents. */
   s->pg = pg;
