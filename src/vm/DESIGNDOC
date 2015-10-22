@@ -16,6 +16,16 @@ Varun Subramanian <varuns92@vt.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
+This designdoc is written in a mix of singular ("I") and plural ("we").
+I hope this is not too disorienting.
+
+Two new tests:
+ exec-sharing: an ``introductory'' test for submissions that carry out memory sharing.
+ mmap-simple: a ``bare bones'' mmap test: mmaps and munmaps without actually accessing
+   the memory. A handy way to see whether or not your mmap syscalls are getting their 
+   arguments correctly without requiring that the frame table and supplemental page table
+   support be present for dealing with the mmap'd pages.
+
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
@@ -146,21 +156,29 @@ Otherwise, a frame is allocated and the page's contents have to be found.
 >> kernel and user virtual addresses that alias a single frame, or
 >> alternatively how do you avoid the issue?
 
-TODO JAMIE -- Need to explore pagedir status when zero'ing out and memcpy'ing in.
+For memory sharing, each page maintains a list of struct page_owner_info's.
+This structure includes the thread *owner and the void *vpg_addr so that
+the corresponding pagedir entry for each process can be queried.
+
+The pages are only modified through the user virtual addresses, so querying
+the vpg_addr of each owner is sufficient.
+
+One exception is in reading executable pages from the file: some of these pages
+must be zero'd out. This zero'ing is done from the kernel address so as not
+to affect the user virtual addresses access or dirty bits.
 
 ---- SYNCHRONIZATION ----
 
 >> A4: When two user processes both need a new frame at the same time,
 >> how are races avoided?
-  Now the frame table is searched in an optimistic way without locks to arrive at an empty frame.
-The empty frame is then locked and re-checked if its indeed empty. This lock ensures that no,
-other process is using the same frame, and the re-checking of the frame_status ensures that no
-thread has taken the frame before the current process. If the frame status is not empty anymore,
-we continue the search in frame table until we find a free frame. 
 
-
-
-TODO VARUN
+Each frame has a lock field to ensure mutex on accesses to the frame.
+To find a new frame, processes call frame_table_obtain_free_locked_frame. 
+Processes first to look for a free frame, and if that fails they try to evict a page from its frame.
+Either way, they lock the frame while they examine (and possibly use) it. 
+A process unlocks the frame once it has placed the page in it -- at this point 
+the supplemental page table and the frame table agree about the status, and eviction 
+can take place if needed.
 
 ---- RATIONALE ----
 
@@ -202,78 +220,70 @@ frame to define the physical location, rather than the page itself.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-TODO VARUN
-For the swap_table:
+swap.h:
+  /* Entry in the swap table: "swap slot". */
+  struct swap_slot
+  {
+    id_t id; /* Index into the swap table. */
+    struct page *pg; /* Page resident in this swap slot, or NULL if no page. */
+  };
+  
+  /* The global swap table is used to store pages belong to a process
+     when it is not using them. It is the "backup" for the frame table. */
+  struct swap_table
+  {
+    struct bitmap *usage; /* 0 if available, 1 if in use. */
+    struct lock usage_lock; /* For atomic updates to usage. */
+  
+    uint32_t n_slots; /* Total number of slots. */
+    struct swap_slot *slots; /* Array of n_slots slots. */
+  };
 
-/* Entry in the swap table: "swap slot". */
-struct swap_slot
-{
-  id_t id; /* Index into the swap table. */
-  struct page *pg; /* Page resident in this swap slot, or NULL if no page. */
-};
-
-/* The global swap table is used to store pages belong to a process
-   when it is not using them. It is the "backup" for the frame table. */
-struct swap_table
-{
-  struct bitmap *usage; /* 0 if available, 1 if in use. */
-  struct lock usage_lock; /* For atomic updates to usage. */
-
-  uint32_t n_slots; /* Total number of slots. */
-  struct swap_slot *slots; /* Array of n_slots slots. */
-};
-
-For the frame_table:
-
-enum frame_status
-{
-  FRAME_EMPTY, /* There is no page occupying this frame. */
-  FRAME_OCCUPIED, /* There is a page resident in this frame. */
-  FRAME_PINNED /* There is a page resident in this frame. It is pinned (cannot be evicted). */
-};
-
-/* Entry in the frame table: "frame". */
-struct frame
-{
-  void *paddr; /* Physical address of this frame. */
-  enum frame_status status; /* Status of this frame. */
-
-  struct page *pg; /* Page resident in this frame. */
-
-  struct lock lock; /* For mutex. */
-};
-
-/* The global frame table is used to store 
-   pages belonging to a process when it needs to use them. */
-struct frame_table
-{
-  uint32_t n_free_frames; /* Number of available frames. Protected by n_free_frames_lock. */
-  struct lock n_free_frames_lock; /* For atomic updates to n_free_frames. */
-
-  uint32_t n_frames; /* Total number of frames. */
-  struct frame *frames; /* Array of n_frames frames. */
-  /* Array of physical pages: n_frames contiguous PGSIZE regions
-       of memory obtained by palloc_get_multiple. 
-     Each frame refers to one of these physical pages. */
-  void *phys_pages;
-
-  uint32_t hand; /* Clock algorithm: index of the frame we last evicted. */
-  /* In the clock algorithm, at most one process can be evicting at a time. 
-     Otherwise the access bit will be unwisely reset. */
-  struct lock eviction_lock;
-};
-
-
-
-
-
+frame.h:
+  enum frame_status
+  {
+    FRAME_EMPTY, /* There is no page occupying this frame. */
+    FRAME_OCCUPIED, /* There is a page resident in this frame. */
+    FRAME_PINNED /* There is a page resident in this frame. It is pinned (cannot be evicted). */
+  };
+  
+  /* Entry in the frame table: "frame". */
+  struct frame
+  {
+    void *paddr; /* Physical address of this frame. */
+    enum frame_status status; /* Status of this frame. */
+  
+    struct page *pg; /* Page resident in this frame. */
+  
+    struct lock lock; /* For mutex. */
+  };
+  
+  /* The global frame table is used to store 
+     pages belonging to a process when it needs to use them. */
+  struct frame_table
+  {
+    uint32_t n_free_frames; /* Number of available frames. Protected by n_free_frames_lock. */
+    struct lock n_free_frames_lock; /* For atomic updates to n_free_frames. */
+  
+    uint32_t n_frames; /* Total number of frames. */
+    struct frame *frames; /* Array of n_frames frames. */
+    /* Array of physical pages: n_frames contiguous PGSIZE regions
+         of memory obtained by palloc_get_multiple. 
+       Each frame refers to one of these physical pages. */
+    void *phys_pages;
+  
+    uint32_t hand; /* Clock algorithm: index of the frame we last evicted. */
+    /* In the clock algorithm, at most one process can be evicting at a time. 
+       Otherwise the access bit will be unwisely reset. */
+    struct lock eviction_lock;
+  };
 
 ---- ALGORITHMS ----
 
 >> B2: When a frame is required but none is free, some frame must be
 >> evicted.  Describe your code for choosing a frame to evict.
    
-We use a basic clock algorithm to take care of eviciton. The global frame 
+We use a basic clock algorithm to take care of eviction. The global frame 
 table has a hand member, that starts at index zero and maintains it value, so 
 that it points to the index, where eviction was last carried out. Whenever, a 
 frame needs to evicted due to lack of free frames, the hand moves over the 
@@ -289,17 +299,18 @@ the type of the page contained in the frame.
 >> process Q, how do you adjust the page table (and any other data
 >> structures) to reflect the frame Q no longer has?
 
-TODO VARUN
+Whenever a page gets evicted from a frame, the page and frame are locked by the
+evicting process. The page's owners then have their pagedir entries cleared, causing
+them to pagefault when they next try to access the page. The pagefault path requires
+locking the page, so the faulting process must wait for the evicting process to finish.
 
-   Whenever a page gets evicted from a frame, the frame status will be marked as empty 
-and all the page related references are cleared from the frame. For the page, 
-the page details will be updated depending on how and why i got evicted. 
-If its an mmap file the status will read file, if its in swap, page status 
-will be set to PAGE_SWAPPED_OUT etc and a reference will updated to match the current location
-of the page.Now if a page of new process gets added to the frame, then both frame and
-page details like status, location etc gets updated accordingly. 
+The evicting process swaps out, writes back, or discards the page depending on its type.
+It then updates the former page's details with its new location and status (swap or in the file).
+This page is a member of the owner's supplemental page table, so the owner can now find out
+where his page went.
 
-
+Now when the page of the new process is stored in the frame, the frame's and
+the newly-resident page's details like pg (for frame) and status+location (for page) are updated appropriately. 
 
 >> B4: Explain your heuristic for deciding whether a page fault for an
 >> invalid virtual address should cause the stack to be extended into
@@ -309,12 +320,14 @@ At every transition from user to kernel mode, we call process_observe_stack_addr
 These transitions are in page_fault and syscall_handler. Additionally, in setup_stack
 we initialize the stack address to PHYS_BASE.
 
-In page_fault, if the user's access is <= 32 bytes of the min_observed_stack_address,
-then we update the stack address to the location of the access. 32 bytes was chosen because
-that is how far below the stack a legal access can be (due to use of the PUSHA instruction).
-
 In process_observe_stack_address, if the observed address is lower than the thread's `void *min_observed_stack_address',
 then we update the min_observed_stack_address field. 
+
+Now that we have an up-to-date record of the lowest stack address...
+
+In page_fault, if the user's access is below the min_observed_stack_address by no more than 32 bytes, 
+then we update the stack address to the location of the access. 32 bytes was chosen because
+that is how far below the stack a legal access can be (through use of the PUSHA instruction).
 
 When looking for a segment (supp_page_table_find_segment), if we fail to find a segment
 in which the address belongs, we then check if the min_observed_stack_address is at or below the virtual address being queried.
@@ -367,14 +380,13 @@ For memory sharing, see D2.
 >> the page during the eviction process?  How do you avoid a race
 >> between P evicting Q's frame and Q faulting the page back in?
 
-If a frame is to evicted, initially a lock is obtained on that particular frame.
-Then we ensure that the frame is non-pinned and we try acquire a page-lock on the page,
-contained in the frame and we hold the locks till eviction if succesful.
-If we fail in obtaining a page-lock we discard the efforts to try evicting that frame and
-try to find another frame candidate for eviction with an page that can be locked and
-unaccessed. So if we acquire a lock , we eliminate the possibility of Q trying access page 
-at the same time, if we dint acquire lock , then the process Q might have got the lock and
-there will be no page fault. 
+This was already described a bit in B3.
+
+When evicting a page, the evicting process holds a lock on the frame and the page.
+He then invalidates the page owners' pagedirs so that they will fault.
+When one or more of those owners fault, they need to lock the page, 
+so they are forced to wait for the evicting process to finish before they can
+fault the page back in.
 
 >> B7: Suppose a page fault in process P causes a page to be read from
 >> the file system or swap.  How do you ensure that a second process Q
@@ -385,7 +397,9 @@ We ensure the elimination of the race condition, by using frame and page locks.
 Whenever a page needs to be read in to the frame, a free locked frame is obtained
 so that the data can be brought in. Further a page lock is also obtained on the page
 read in so that no other page owner is trying to read the page in. Since the frame is
-locked before transferring the data , we ensure that a second process cannot interfere. 
+locked before transferring the data, we ensure that a second process cannot interfere;
+any interfering process must lock the frame, and he cannot do that until we have put
+the frame table and the supplemental page table into a consistent state.
  
 >> B8: Explain how you handle access to paged-out pages that occur
 >> during system calls.  Do you use page faults to bring in pages (as
@@ -510,20 +524,20 @@ thread.h:
 >> memory subsystem.  Explain how the page fault and eviction
 >> processes differ between swap pages and other pages.
 
-TODO VARUN
-    The memory mapped file system is modelled in such a way, that each file Mmaped file
-holds a segement of virtual addresses, where as all other pages are distributed between swap , frames and stack.
 Most of the page operations are treated the same, although eviction and release of mmap file pages are treated different
-from the non-mmaped ones.
-  In case of a page-fault , based on the faulted address, we determine the segment to which the page belongs to.
-If the segment belongs to swap,then we obtain a free frame in the frame table and swap in the contents from the disk 
-using swap_table_retrieve page. If the page belongs to an  MMapped file, then the page is read in to free-frame using
-file_read functions.
+from the non-mmapped ones.
 
-Similarly for eviction, if we evict a non- mmapped page then a free slot in swap is determined and then the contents are written
-back to swap slot and the frame is cleared.If its an executabel page we discard it.
-If its an mmaped page, we check if the page is dirty and if so we write it back to the file
-using file_write function.
+Each page includes a pointer to a segment_mapping_info, which includes an mmap_details, which has the file* and the offset in the file to which the
+page belongs if it is an mmap'd page.
+
+In case of a page-fault, based on the faulted address, we determine the page to which the address belongs. 
+If the page is mmap'd, we retrieve the data from the appropriate offset in the file. 
+If it's a stack page we zero out the memory. 
+If it's swapped out, we swap the contents back in from the disk.
+
+For eviction, if we evict a non-mmapped page then a free slot in swap is determined and then the contents are written out to swap.
+If it's mmap'd and from the code segment of an executable page we discard it. For the text/bss segment we always swap it out.
+If it's a 'normal' mmapped page, we check if the page is dirty and if so we write it back to the file. Otherwise we discard it.
  
 >> C3: Explain how you determine whether a new file mapping overlaps
 >> any existing segment.
@@ -555,10 +569,13 @@ this type is checked and we decide to swap out or write back or discard appropri
 This means that if memory sharing works for read-only executable pages, it should
 be a simple extension to allow it to work for sharing general mmap'd pages. 
 
-This makes the conceptual load required to understand the code easier. I thought it
-was cleaner to have a ``sub-type'' than to have two unrelated types with very similar
+This lets us re-use code and also makes the conceptual load required to understand the code easier. 
+I thought it was cleaner to have a ``sub-type'' than to have two unrelated types with very similar
 semantics.
 
+Extra details required for mmapping from executables: 
+1. Need to track read_bytes and zero_bytes in order to zero out the page properly.
+2. Need to track the file offset at which the memory mapping begins.
 
        MEMORY SHARING
        ===================
@@ -619,9 +636,32 @@ page.h:
 >> D2: Describe how memory sharing works.
 
 Segments can be one of two types: SEGMENT_PRIVATE and SEGMENT_SHARED.
-Mappings can be created with either of these two types. 
+Mappings can be created with either of these two types. At the moment
+only mmap'd mappings can be shared, though it shouldn't be too hard to
+extend to allow something like shmget.
 
-       TODO JAMIE
+When a SEGMENT_SHARED segment is created, its inode number and file offset are combined
+to make a key into the ro_shared_mappings_table's mmap_details_to_shared_mappings hash.
+If no such key exists, a new mapping is added. If such a key is already present, the
+process's segment points to the existing shared_mappings struct residing in the
+ro_shared_mappings_table's mmap_details_to_shared_mappings hash.
+
+Reference counting is used to prevent memory leaks.
+
+Each page maintains a list of owners; this is a list of `struct page_owner_info',
+which provides enough information to interact with each owners' pagedir. That
+way when a process goes to access a page in a SEGMENT_SHARED segment, it
+adds itself to the list of owners of that page (protected by the page's lock).
+This allows processes evicting shared pages to update all of the owners, and
+similarly to check the dirty bit and the access bit across all owners of a page.
+
+Removal and cleanup is done appropriately.
+
+A single file* is used by all processes sharing a given memory mapping, and is
+closed by the last person to use the shared_mappings structure.
+As all file system operations are protected by filesys_lock, there is no risk
+of a race between two processes both trying to use this file* to read from different
+parts of the executable at once.
 
          SURVEY QUESTIONS
          ================
