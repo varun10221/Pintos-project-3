@@ -92,7 +92,6 @@ frame_table_store_page (struct page *pg)
 {
   ASSERT (pg != NULL);
 
-  //printf ("frame_table_store_page: n_free_frames %i\n", frame_table_get_n_free_frames ());
   /* If already in a frame, nothing to do. */
   if (pg->status == PAGE_RESIDENT)
     return;
