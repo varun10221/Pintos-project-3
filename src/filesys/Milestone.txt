@@ -1,0 +1,26 @@
+         +-------------------------+
+         |    CS 140               |
+         | PROJECT 4: MILESTONE    |
+         |     DESIGN DOCUMENT     |
+         +-------------------------+
+
+---- GROUP ----
+
+Jamie Davis <davisjam@vt.edu>
+Varun Subramanian <varuns92@vt.edu>
+
+To successfully implement this project, you will need to design a number of on-disk data structures to represent files. In this milestone, you're asked to describe them. Although you are free to implement your file system in whichever way, we assume a traditional, Unix-style design.
+
+1. Describe the format of the on-disk inode. Use a C struct.
+
+2. How are inodes numbered/addressed on disk?
+
+3. What is the blocksize of your filesystem?
+
+4. Describe your index data structure to keep track of where a file's blocks are located. If you're using traditional index blocks, explain how many sector/block numbers are stored in each index block. Show the math to support the requirements listed in Section 5.3.2
+
+5. Based on your index design, describe the algorithm for finding a block's on-disk location based on the offset.
+
+6. Do you plan to implement sparse files (that is, the on-demand allocation of blocks/index blocks)?
+
+7. Describe the (on-disk) directory data structures you'll use. Do you plan on changing the provided implementation and if so, for what benefit? 
