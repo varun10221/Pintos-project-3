@@ -9,18 +9,133 @@
 Jamie Davis <davisjam@vt.edu>
 Varun Subramanian <varuns92@vt.edu>
 
-To successfully implement this project, you will need to design a number of on-disk data structures to represent files. In this milestone, you're asked to describe them. Although you are free to implement your file system in whichever way, we assume a traditional, Unix-style design.
+To successfully implement this project, you will need to design a number of on-disk 
+data structures to represent files. In this milestone, you're asked to describe them. 
+Although you are free to implement your file system in whichever way, we assume 
+a traditional, Unix-style design.
 
 1. Describe the format of the on-disk inode. Use a C struct.
 
+/* Must sum to the number of addresses available in the inode_disk. */
+#define INODE_N_DIRECT_BLOCKS 93       /* Number of addresses of data blocks. */
+#define INODE_N_INDIRECT_1_BLOCKS 16   /* Number of addresses of blocks of direct blocks. */
+#define INODE_N_INDIRECT_2_BLOCKS 15   /* Number of addresses of INDIRECT_1 blocks. */
+#define INODE_N_INDIRECT_3_BLOCKS 1    /* Number of addresses of INDIRECT_2 blocks. */
+
+enum inode_type
+{
+  FILE,
+  DIRECTORY
+};
+
+/* On-disk inode.
+   Must be exactly BLOCK_SECTOR_SIZE bytes long. */
+struct inode_disk
+{
+  enum inode_type type; /* What type of file is represented by this inode? *?
+  off_t length;         /* File size in bytes. */
+  unsigned magic;       /* Magic number. */
+  /* TODO cksum */
+  /* This leaves space for 125 uint32_t addresses. */
+  uint32_t direct_blocks     [INODE_N_DIRECT_BLOCKS];     /* Each is the address of a data block. */
+  uint32_t indirect_1_blocks [INODE_N_INDIRECT_1_BLOCKS]; /* Each is the address of a sector of direct blocks. */
+  uint32_t indirect_2_blocks [INODE_N_INDIRECT_2_BLOCKS]; /* Each is the address of a sector of indirect_1 blocks. */
+  uint32_t indirect_3_blocks [INODE_N_INDIRECT_3_BLOCKS]; /* Each is the address of a sector of indirect_2 blocks. */
+};
+
 2. How are inodes numbered/addressed on disk?
+
+Inodes are numbered by the sector number at which they reside.
+They are addressed by reading the data from that sector number.
 
 3. What is the blocksize of your filesystem?
 
-4. Describe your index data structure to keep track of where a file's blocks are located. If you're using traditional index blocks, explain how many sector/block numbers are stored in each index block. Show the math to support the requirements listed in Section 5.3.2
+#define BLOCKSIZE 4*BLOCK_SECTOR_SIZE /* 2KB TODO 64 sectors in buffer cache == 16 blocks? How does this work? */
 
-5. Based on your index design, describe the algorithm for finding a block's on-disk location based on the offset.
+According to http://research.microsoft.com/pubs/72896/fast07-final.pdf, about 50% of files in a file system
+are less than or equal to about 4KB in size.
+The blocksize will therefore be a 4*BLOCK_SECTOR_SIZE (2KB) bytes, though this is a compile-time constant and
+can be changed as desired. This means that just two direct blocks can address 4KB.
+This means that a 4KB file can be addressed from a single direct block, which should minimize
+metadata disk usage for (the 50% of) files at or beneath 4KB.
 
-6. Do you plan to implement sparse files (that is, the on-demand allocation of blocks/index blocks)?
+4. Describe your index data structure to keep track of where a file's blocks 
+   are located. If you're using traditional index blocks, explain how many 
+   sector/block numbers are stored in each index block. Show the math to 
+   support the requirements listed in Section 5.3.2
 
-7. Describe the (on-disk) directory data structures you'll use. Do you plan on changing the provided implementation and if so, for what benefit? 
+I'm using traditional index blocks. 
+An inode has INODE_N_DIRECT_BLOCKS direct blocks that point to data blocks. 
+An inode has INODE_N_INDIRECT_1_BLOCKS indirect blocks that point to direct blocks.
+An inode has INODE_N_INDIRECT_2_BLOCKS doubly-indirect blocks that point to indirect blocks.
+An inode has INODE_N_INDIRECT_3_BLOCKS triply-indirect blocks that point to doubly-indirect blocks.
+
+With INODE_N_DIRECT_BLOCKS 93, the inode can directly address 93*BLOCKSIZE = 93*2KB = 186 KB.
+Using its 16 indirect blocks, it can address 16*(128*BLOCKSIZE) = 4096KB = 4MB
+Using its 15 doubly-indirect blocks, it can address 15*(128*128*BLOCKSIZE) ~= 500MB
+Using its 1 triply-indirect block, it can address 1*(128*128*128*BLOCKSIZE) = 4GB
+
+In total the inode can address 4GB + 500MB + 4MB + 186KB ~= 4.5GB.
+This is far more than the 8MB minimum requirement and should allow 
+interesting cases for sparse files.
+
+5. Based on your index design, describe the algorithm for finding a block's
+   on-disk location based on the offset.
+
+/* Number of blocks addressed by each type of index. */
+#define N_BLOCKS_FROM_DIRECT_BLOCK  1
+#define N_BLOCKS_FROM_INDIRECT_1    128*N_BLOCKS_FROM_DIRECT_BLOCK
+#define N_BLOCKS_FROM_INDIRECT_2    128*N_BLOCKS_FROM_INDIRECT_1
+#define N_BLOCKS_FROMINDIRECT_3     128*N_BLOCKS_FROM_INDIRECT_2
+
+/* How much the inode can address. */
+#define INODE_DIRECT_BLOCK_ADDRESSING       INODE_N_DIRECT_BLOCKS * N_BLOCKS_FROM_DIRECT_BLOCK
+#define INODE_INDIRECT_1_BLOCK_ADDRESSING   INODE_N_INDIRECT_1_BLOCKS * N_BLOCKS_FROM_INDIRECT_1_BLOCK
+#define INODE_INDIRECT_2_BLOCK_ADDRESSING   INODE_N_INDIRECT_2_BLOCKS * N_BLOCKS_FROM_INDIRECT_2_BLOCK
+#define INODE_INDIRECT_3_BLOCK_ADDRESSING   INODE_N_INDIRECT_3_BLOCKS * N_BLOCKS_FROM_INDIRECT_3_BLOCK
+
+For an offset X:
+  X_blocknum = X / BLOCKSIZE;
+
+  if (X < INODE_DIRECT_BLOCK_ADDRESSING)
+    /* Direct lookup */
+    X_address = inode.direct_blocks[X_blocknum];
+  else if (X < INODE_INDIRECT_1_BLOCK_ADDRESSING)
+  {
+    /* Block number relative to the blocks addressed by the indirect blocks. */
+    X_indirect_blocknum = X_blocknum - INODE_DIRECT_BLOCK_ADDRESSING;
+    X_indirect_ix = X_blocknum / N_BLOCKS_FROM_INDIRECT_1;
+    /* Block number relative to its indirect block. */
+    X_direct_blocknum -= X_indirect_ix*N_BLOCKS_FROM_INDIRECT_1;
+    X_indirect_address = inode.indirect_1_blocks [X_indirect_blocknum]
+    indirect_addresses = /* Read the indirect address and get the list of indirect addresses. */
+    X_address = indirect_addresses [X_direct_blocknum];
+  }
+  else if (X < INODE_INDIRECT_2_BLOCK_ADDRESSING)
+  {
+    /* Like previous but with an extra level of indirection. */
+  }
+  else if (X < INODE_INDIRECT_3_BLOCK_ADDRESSING)
+  {
+    /* Like previous but with an extra level of indirection. */
+  }
+
+TODO 
+  1. I'm sure the above algorithm can be written more cleanly using recursion, always counting relative blocks.
+  2. Just *describe* the algorithm, no need to write out code.
+
+6. Do you plan to implement sparse files (that is, the on-demand allocation 
+   of blocks/index blocks)?
+
+Yes. 
+
+Suppose we are accessing an offset and the index for it is NULL. 
+If doing a read, return zeros. 
+If doing a write, allocate the metadata required the index the offset, then write to the
+  newly allocated block.
+
+7. Describe the (on-disk) directory data structures you'll use. Do you plan 
+   on changing the provided implementation and if so, for what benefit? 
+
+We plan to use a linear list for simplicity. If we have time we may try a more advanced
+structure -- a hash table with recursive split ordering, or a B+ tree.
