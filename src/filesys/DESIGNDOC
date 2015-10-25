@@ -37,6 +37,10 @@ Varun Subramanian <varuns92@vt.edu>
 >> A3: Explain how your code avoids a race if two processes attempt to
 >> extend a file at the same time.
 
+- Probably an 'extend' lock in the in-memory inode.
+- Also need to track the size of the file in-memory so we know if it's
+  being grown.
+
 >> A4: Suppose processes A and B both have file F open, both
 >> positioned at end-of-file.  If A reads and B writes F at the same
 >> time, A may read all, part, or none of what B writes.  However, A
@@ -51,6 +55,8 @@ Varun Subramanian <varuns92@vt.edu>
 >> processes writing to a file cannot prevent another process forever
 >> from reading the file.
 
+Flag for 'reader waiting', 'writer waiting'. 
+
 ---- RATIONALE ----
 
 >> A6: Is your inode structure a multilevel index?  If so, why did you
@@ -58,6 +64,11 @@ Varun Subramanian <varuns92@vt.edu>
 >> indirect blocks?  If not, why did you choose an alternative inode
 >> structure, and what advantages and disadvantages does your
 >> structure have, compared to a multilevel index?
+
+Yes. Wanted to be able to address a decent amount of data directly
+without needing to use disk space for additional metadata. However,
+also wanted to be able address large files for sparse file purposes,
+so have 16 indirect-1, 15 indirect-2, and 1 indirect-3 block.
 
           SUBDIRECTORIES
           ==============
@@ -67,6 +78,8 @@ Varun Subramanian <varuns92@vt.edu>
 >> B1: Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
+
+- Add a 'type' field to dir_entry
 
 ---- ALGORITHMS ----
 
@@ -79,6 +92,10 @@ Varun Subramanian <varuns92@vt.edu>
 >> only one of two simultaneous attempts to remove a single file
 >> should succeed, as should only one of two simultaneous attempts to
 >> create a file with the same name, and so on.
+
+Hash file name. inode* has 4 locks. For create/delete, hash and % 4,
+lock the appropriate lock. Gives finer grained directory locking while
+not causing too much overhead.
 
 >> B5: Does your implementation allow a directory to be removed if it
 >> is open by a process or if it is in use as a process's current

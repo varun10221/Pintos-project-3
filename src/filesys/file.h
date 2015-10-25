@@ -4,8 +4,7 @@
 #include "filesys/off_t.h"
 
 struct inode;
-/* TODO Don't we need this?? Confused...
-struct file; */
+struct file;
 
 /* Opening and closing files. */
 struct file *file_open (struct inode *);
