@@ -6,6 +6,8 @@
 #include "devices/block.h"
 
 struct bitmap;
+struct inode;
+#define INODE_SIZE BLOCK_SECTOR_SIZE
 
 void inode_init (void);
 bool inode_create (block_sector_t, off_t);

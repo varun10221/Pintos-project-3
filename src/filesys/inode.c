@@ -11,7 +11,6 @@
 #define INODE_MAGIC 0x494e4f44
 
 #define ADDRESS_LEN sizeof(uint32_t)
-#define INODE_SIZE BLOCK_SECTOR_SIZE
 #define INODE_N_ADDRESSES (INODE_SIZE - 3*ADDRESS_LEN)/ADDRESS_LEN /* Number of addresses an inode can store. */
 
 #define INODE_N_INDIRECT_1_BLOCKS 16   /* Number of addresses of blocks of direct blocks. */
