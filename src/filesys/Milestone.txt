@@ -37,8 +37,8 @@ struct metainfo_s
 /* Inodes can be one of these types. */
 enum inode_type
 {
-  FILE,
-  DIRECTORY
+  INODE_FILE,
+  INODE_DIRECTORY
 };
 
 /* On-disk inode.
