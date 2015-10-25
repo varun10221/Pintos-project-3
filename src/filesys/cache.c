@@ -67,8 +67,13 @@ static struct sema readahead_queue_items_available;
 /* Private functions. */
 
 /* Buffer cache. */
-void buffer_cache_table_init (size_t);
-void buffer_cache_table_destroy (void);
+static void buffer_cache_init (struct block *);
+static void buffer_cache_destroy (void);
+
+/* Cache block. */
+static void cache_block_init (struct cache_block *);
+static size_t cache_block_alloc_contents (struct cache_block *);
+static void cache_block_evict (struct cache_block *);
 
 /* Kernel threads. */
 static void bdflush (void *arg);
@@ -114,11 +119,154 @@ cache_init (struct block *backing_block)
 
 }
 
+/* Initialize the global buffer_cache_table struct. */
+static void buffer_cache_init (struct block *backing_block)
+{
+  ASSERT (backing_block != NULL);
+  buffer_cache.backing_block = backing_block;
+
+  /* Initialize each block. */
+  int i;
+  for (i = 0; i < CACHE_SIZE; i++)
+    cache_block_init (&buffer_cache.blocks[i]);
+}
+
+/* Destroy the global buffer cache, flushing any dirty blocks to disk. */
+static void buffer_cache_destroy (void)
+{
+  /* TODO Signal to the kernel threads that we are done? */
+}
+
+/* Initialize this cache block. */
+void cache_block_init (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  memset (cb, 0, sizeof(struct cache_block));
+
+  lock_init (&cb->state_lock);
+
+  /* 0 readers and no writer: Not in use. */
+  cb->readers_count = 0;
+  cb->is_writer = 0;
+}
+
+/* Dynamically allocate the contents field of CB. 
+   Requires cb->type to be set appropriately. 
+   Returns the size of contents. */
+static size_t 
+cache_block_alloc_contents (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  ASSERT (!cb->is_valid);
+  ASSERT (cb->contents == NULL);
+
+  size_t n_bytes = 0;
+  switch (cb->type)
+  {
+    case CACHE_BLOCK_INODE:
+      n_bytes = INODE_SIZE;
+      break;
+    case CACHE_BLOCK_DATA:
+      n_bytes = DATA_BLOCKSIZE;
+      break;
+    case CACHE_BLOCK_METADATA:
+      n_bytes = METADATA_BLOCKSIZE;
+      break;
+    default:
+      NOT_REACHED ();
+  }
+
+  cb->contents = malloc (n_bytes);
+  ASSERT (cb->contents != NULL);
+
+  return n_bytes;
+}
+
+/* Evict the contents of CB. */
+static void 
+cache_block_evict (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  ASSERT (cb->is_dirty);
+}
+
 /* Destroy the buffer cache. */
 void 
 cache_destroy (void)
 {
 
+}
+
+/* Reserve a block in the buffer cache dedicated to hold this block.
+   This may evict another buffer.
+   Grants exclusive or shared access.
+   If the block is already in the buffer cache, we just return it. */
+struct cache_block * 
+cache_get_block (block_sector_t address, enum cache_block_type type, bool exclusive)
+{
+  return NULL;
+}
+
+/* Release access to this cache block. */
+void cache_put_block (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+
+  lock_acquire (&cb->state_lock);
+
+  /* If I was the writer, I'm done. */
+  if (cb->is_writer)
+  {
+    ASSERT (cb->readers_count == 0);
+    cb->is_writer = false;
+  }
+  /* If I was a reader, I'm done. */
+  else
+  {
+    ASSERT (0 < cb->readers_count);
+    cb->readers_count--;
+  }
+
+  lock_release (&cb->state_lock);
+}
+
+/* Fill CB with data and return pointer to the data. 
+   CB->TYPE and CB->BLOCK must be set correctly. */
+void * cache_read_block (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+
+  size_t i;
+  size_t n_bytes = cache_block_alloc_contents (cb);
+  size_t n_sectors = n_bytes / BLOCK_SECTOR_SIZE;
+
+  for (i = 0; i < n_sectors; i++)
+  {
+    size_t rel_offset = i*BLOCK_SECTOR_SIZE;
+    block_read (buffer_cache.backing_block, cb->block + rel_offset, cb->contents + rel_offset);
+  }
+
+  cb->is_valid = true;
+
+  return cb->contents;
+}
+
+/* Fill CB with zeros and return pointer to the data. 
+   CB->TYPE must be set correctly.
+   CB is marked dirty. */
+void * cache_zero_block (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+
+  /* Allocate and zero out contents. */
+  size_t n_bytes = cache_block_alloc_contents (cb);
+  ASSERT (cb->contents != NULL);
+  memset (cb->contents, 0, n_bytes);
+
+  cb->is_dirty = true;
+  cb->is_valid = true;
+
+  return cb->contents;
 }
 
 /* Flush all dirty pages from the cache. */
@@ -132,7 +280,15 @@ cache_flush (void)
   }
 }
 
-/* Put an entry for ADDRESS into the buffer cache. */
+/* Mark CB dirty. */
+void cache_mark_block_dirty (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  ASSERT (cb->is_valid);
+
+  cb->is_dirty = true;
+}
+
 /* Request that ADDRESS of TYPE be cached. It will be cached with
    no readers or writers.
 
