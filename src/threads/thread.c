@@ -135,17 +135,18 @@ thread_init (void)
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
-   Also creates the idle thread. */
+   Also creates the following kernel threads:
+    - idle thread ("idle") */
 void
 thread_start (void) 
 {
-  tid_t new_tid;
+  tid_t idle_tid;
 
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
-  new_tid = thread_create ("idle", PRI_MIN, idle, &idle_started);
-  ASSERT (new_tid != TID_ERROR);
+  idle_tid = thread_create ("idle", PRI_MIN, idle, &idle_started);
+  ASSERT (idle_tid != TID_ERROR);
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
