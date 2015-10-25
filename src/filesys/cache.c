@@ -127,6 +127,15 @@ cache_init (struct block *backing_block)
 
 }
 
+/* Destroy the buffer cache. */
+void 
+cache_destroy (void)
+{
+  /* TODO */
+  buffer_cache_destroy ();
+}
+
+
 /* Initialize the global buffer_cache_table struct. */
 static void buffer_cache_init (struct block *backing_block)
 {
@@ -137,6 +146,7 @@ static void buffer_cache_init (struct block *backing_block)
   int i;
   for (i = 0; i < CACHE_SIZE; i++)
     cache_block_init (&buffer_cache.blocks[i]);
+  /* TODO Anything else? */
 }
 
 /* Destroy the global buffer cache, flushing any dirty blocks to disk. */
@@ -168,41 +178,40 @@ cache_block_alloc_contents (struct cache_block *cb)
   ASSERT (!cb->is_valid);
   ASSERT (cb->contents == NULL);
 
-  size_t n_bytes = 0;
-  switch (cb->type)
-  {
-    case CACHE_BLOCK_INODE:
-      n_bytes = INODE_SIZE;
-      break;
-    case CACHE_BLOCK_DATA:
-      n_bytes = DATA_BLOCKSIZE;
-      break;
-    case CACHE_BLOCK_METADATA:
-      n_bytes = METADATA_BLOCKSIZE;
-      break;
-    default:
-      NOT_REACHED ();
-  }
-
+  size_t n_bytes = cache_block_get_contents_size (cb);
   cb->contents = malloc (n_bytes);
   ASSERT (cb->contents != NULL);
 
   return n_bytes;
 }
 
-/* Evict the contents of CB. */
+/* Evict the contents of CB so that another block can be stored in it. */
 static void 
-cache_block_evict (struct cache_block *cb)
+cache_evict_block (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+
+  if (cb->is_dirty)
+    cache_flush_block (cb);
+  free (cb->contents);
+}
+
+/* Flush this dirty CB to disk. */
+static void 
+cache_flush_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
   ASSERT (cb->is_dirty);
-}
 
-/* Destroy the buffer cache. */
-void 
-cache_destroy (void)
-{
+  size_t n_sectors = cache_block_get_n_sectors (cb);
+  size_t i;
+  for (i = 0; i < n_sectors; i++)
+  {
+    size_t rel_offset = i*BLOCK_SECTOR_SIZE;
+    block_write (buffer_cache.backing_block, cb->block + rel_offset, cb->contents + rel_offset);
+  }
 
+  cache_mark_clean (cb);
 }
 
 /* Reserve a block in the buffer cache dedicated to hold this block.
@@ -216,7 +225,8 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
 }
 
 /* Release access to this cache block. */
-void cache_put_block (struct cache_block *cb)
+void 
+cache_put_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
@@ -240,14 +250,15 @@ void cache_put_block (struct cache_block *cb)
 
 /* Fill CB with data and return pointer to the data. 
    CB->TYPE and CB->BLOCK must be set correctly. */
-void * cache_read_block (struct cache_block *cb)
+void * 
+cache_read_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
-  size_t i;
-  size_t n_bytes = cache_block_alloc_contents (cb);
-  size_t n_sectors = n_bytes / BLOCK_SECTOR_SIZE;
+  cache_block_alloc_contents (cb);
+  size_t n_sectors = cache_block_get_n_sectors (cb);
 
+  size_t i;
   for (i = 0; i < n_sectors; i++)
   {
     size_t rel_offset = i*BLOCK_SECTOR_SIZE;
@@ -262,7 +273,8 @@ void * cache_read_block (struct cache_block *cb)
 /* Fill CB with zeros and return pointer to the data. 
    CB->TYPE must be set correctly.
    CB is marked dirty. */
-void * cache_zero_block (struct cache_block *cb)
+void * 
+cache_zero_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
@@ -289,7 +301,8 @@ cache_flush (void)
 }
 
 /* Mark CB dirty. */
-void cache_mark_block_dirty (struct cache_block *cb)
+void 
+cache_mark_block_dirty (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
   ASSERT (cb->is_valid);
@@ -297,12 +310,59 @@ void cache_mark_block_dirty (struct cache_block *cb)
   cb->is_dirty = true;
 }
 
+/* Mark CB clean. */
+static void
+cache_mark_block_clean (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  ASSERT (cb->is_valid);
+
+  cb->is_dirty = false;
+}
+
+/* Return the number of sectors spanned by CB->CONTENTS. */
+static size_t
+cache_block_get_n_sectors (const struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  ASSERT (cb->is_valid);
+
+  return (cache_block_get_contents_size (cb) / BLOCK_SECTOR_SIZE);
+}
+
+/* Return the size in bytes of CB->CONTENTS. */
+static size_t
+cache_block_get_contents_size (const struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
+  ASSERT (cb->is_valid);
+
+  size_t n_bytes = 0;
+  switch (cb->type)
+  {
+    case CACHE_BLOCK_INODE:
+      n_bytes = INODE_SIZE;
+      break;
+    case CACHE_BLOCK_DATA:
+      n_bytes = DATA_BLOCKSIZE;
+      break;
+    case CACHE_BLOCK_METADATA:
+      n_bytes = METADATA_BLOCKSIZE;
+      break;
+    default:
+      NOT_REACHED ();
+  }
+
+  return n_bytes;
+}
+
 /* Request that ADDRESS of TYPE be cached. It will be cached with
    no readers or writers.
 
    This request may be fulfilled by the calling process before the 
    readahead thread handles it. */
-void cache_readahead (block_sector_t address, enum cache_block_type type)
+void 
+cache_readahead (block_sector_t address, enum cache_block_type type)
 {
   readahead_request_t *req = (readahead_request_t *) malloc (sizeof(readahead_request_t));
   if (req != NULL)
@@ -311,7 +371,7 @@ void cache_readahead (block_sector_t address, enum cache_block_type type)
     req->type = type;
     /* Safely add to list. */
     lock_acquire (&readahead_queue_lock);
-    list_push_back (&readahead_queue, &req->elem)
+    list_push_back (&readahead_queue, &req->elem);
     lock_release (&readahead_queue_lock);
     /* Signal the readahead thread. */
     sema_up (&readahead_queue_items_available);
@@ -348,9 +408,8 @@ readahead (void *arg)
   ASSERT (arg != NULL);
   struct semaphore *initialized_sema = (struct semaphore *) arg;
 
-  sema_up (initalized_sema);
+  sema_up (initialized_sema);
 
-  /* TODO Implement this. */
   for (;;)
   {
     sema_down (&readahead_queue_items_available);
@@ -362,12 +421,17 @@ readahead (void *arg)
     lock_release (&readahead_queue_lock);
     ASSERT (req != NULL);
 
-    struct cache_block *cb = cache_get_block (address, type, false);
+    struct cache_block *cb = cache_get_block (req->address, req->type, false);
     ASSERT (cb != NULL);
+
     /* If the request hasn't been read yet by whomever we are reading ahead for,
        read it now. */
     if (!cb->is_valid)
       cache_read_block (cb);
+    /* We are not using the block right now. Hopefully it is not evicted before 
+       it is cache_get_block'd by whoever asked for it. */
+    cache_put_block (cb);
+
     free (req);
   }
 
