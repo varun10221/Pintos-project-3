@@ -37,6 +37,8 @@ static void frame_table_evict_page_from_frame (struct frame *);
 static void frame_table_write_mmap_page_to_file (struct page *, struct frame *);
 static void frame_table_read_mmap_page_from_file (struct page *, struct frame *);
 
+/* TODO If we maintained a linked list of free frames, we could more quickly locate a free frame in frame_table_obtain_free_locked_frame. */
+
 /* Private frame routines. */
 static uint32_t frame_get_ix (struct frame *);
 
