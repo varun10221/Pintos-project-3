@@ -137,7 +137,6 @@ main (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
-  cache_init ();
 #endif
 
   /* Initialize virtual memory system. 

@@ -6,6 +6,7 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "filesys/cache.h"
 #include "threads/synch.h"
 
 /* Partition that contains the file system. */
@@ -31,6 +32,7 @@ filesys_init (bool format)
     do_format ();
 
   free_map_open ();
+  cache_init (fs_device);
 
   lock_init (&filesys_mutex);
 }
@@ -41,6 +43,7 @@ void
 filesys_done (void) 
 {
   free_map_close ();
+  cache_destroy ();
 }
 
 /* Creates a file named NAME with the given INITIAL_SIZE.
