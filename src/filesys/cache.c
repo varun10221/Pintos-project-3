@@ -1,25 +1,23 @@
 #include "cache.h"
 
+#include <string.h>
+#include "filesys/filesys.h"
+#include "filesys/inode.h"
 #include "threads/thread.h"
 #include "threads/synch.h"
+#include "threads/malloc.h"
 #include "devices/timer.h"
-#include "filesys/filesys.h"
+#include "devices/block.h"
 
-enum cache_block_type
-{
-  CACHE_BLOCK_DATA,
-  CACHE_BLOCK_METADATA
-};
-
-/* Entry in buffer_cache_table. In-memory cached version of on-disk data. */
+/* Entry in a buffer_cache_table. In-memory cached version of on-disk data. */
 struct cache_block
 {
   uint32_t cache_ix;            /* Index in the cache. */
   block_sector_t block;         /* Block address */
-  enum cache_block_type type;         /* Data or metadata? */
+  enum cache_block_type type;   /* Data or metadata? */
 
   bool is_dirty;                /* If the block has been modified. */
-  bool is_valid;                /* If the data is valid. */
+  bool is_valid;                /* If the data is valid. If true and if is_dirty, need to flush on eviction. */
   uint32_t readers_count;       /* No. of readers reading the block. */
   bool is_writer;               /* Is there a writer present? */
   struct lock state_lock;       /* For atomic updates to the above fields. */
@@ -29,18 +27,18 @@ struct cache_block
 
   /* TODO Usage information for eviction policy. */
 
-  /* TODO Where is the data? */
+  void *contents;               /* Pointer to the contents of this block. */
 };
 
-/* The global buffer_cache_table stores cache_blocks. */
-#define MAX_SECTORS_IN_CACHE 64
-#define CACHE_SIZE (64 / DATA_BLOCKSIZE)
+/* A global buffer_cache_table stores cache_blocks. */
+#define CACHE_SIZE 64
 struct buffer_cache_table
 {
   uint32_t n_free_cache_blocks; /* No. of free blocks. */
   uint32_t n_total_cache_blocks; /* Total no. of cache blocks in table. */
   struct cache_block blocks[CACHE_SIZE]; /* Array for cache_table, table utmost will hold 64 sector's worth of data */
   struct lock buffer_cache_lock; /* any atomic operations needs to be performed */
+  struct block *backing_block; /* The block on which this cache is built. */
 };
 
 /* Elements of readahead_queue. */
