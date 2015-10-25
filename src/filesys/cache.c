@@ -52,6 +52,33 @@ typedef struct readahead_request_s
 /* Private variables used to implement the buffer cache. */
 static struct buffer_cache_table buffer_cache;
 
+/* Private functions. */
+
+/* Buffer cache. */
+static void buffer_cache_init (struct block *);
+static void buffer_cache_destroy (void);
+
+static void cache_evict_block (struct cache_block *);
+static void cache_flush_block (struct cache_block *);
+static void cache_mark_block_clean (struct cache_block *);
+
+/* Cache block. */
+static void cache_block_init (struct cache_block *);
+static size_t cache_block_alloc_contents (struct cache_block *);
+static size_t cache_block_get_contents_size (const struct cache_block *);
+static size_t cache_block_get_n_sectors (const struct cache_block *cb);
+
+/* Kernel threads. */
+static void bdflush (void *arg);
+static void readahead (void *arg);
+
+/* Args passed to the bdflush thread. */
+struct bdflush_args_s
+{
+  struct semaphore sema;
+  int64_t flush_freq;
+};
+
 /* Readahead queue: A dynamically-sized queue of readahead requests.
  
    Items are enqueued by any thread that calls cache_readahead.
@@ -62,28 +89,9 @@ static struct buffer_cache_table buffer_cache;
      and Down'd by the readahead thread (to wait for a new item). */
 static struct list readahead_queue;
 static struct lock readahead_queue_lock;
-static struct sema readahead_queue_items_available;
+static struct semaphore readahead_queue_items_available;
 
-/* Private functions. */
-
-/* Buffer cache. */
-static void buffer_cache_init (struct block *);
-static void buffer_cache_destroy (void);
-
-/* Cache block. */
-static void cache_block_init (struct cache_block *);
-static size_t cache_block_alloc_contents (struct cache_block *);
-static void cache_block_evict (struct cache_block *);
-
-/* Kernel threads. */
-static void bdflush (void *arg);
-static void readahead (void *arg);
-
-struct bdflush_args_s
-{
-  struct semaphore sema;
-  int64_t flush_freq;
-};
+/* Function definitions. */
 
 /* Initialize the buffer cache module. */
 void 
