@@ -3,10 +3,14 @@
 
 #include <stdbool.h>
 #include "filesys/off_t.h"
+#include "devices/block.h"
 
 /* Sectors of system file inodes. */
 #define FREE_MAP_SECTOR 0       /* Free map file inode sector. */
 #define ROOT_DIR_SECTOR 1       /* Root directory file inode sector. */
+
+#define DATA_BLOCKSIZE 8*BLOCK_SECTOR_SIZE     /* 4KB. For data. */
+#define METADATA_BLOCKSIZE 4*BLOCK_SECTOR_SIZE /* 2KB. For indirect blocks. */
 
 /* Block device that contains the file system. */
 struct block *fs_device;
