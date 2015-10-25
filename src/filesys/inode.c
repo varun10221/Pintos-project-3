@@ -10,15 +10,52 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
+#define ADDRESS_LEN sizeof(uint32_t)
+#define INODE_SIZE BLOCK_SECTOR_SIZE
+#define INODE_N_ADDRESSES (INODE_SIZE - 3*ADDRESS_LEN)/ADDRESS_LEN /* Number of addresses an inode can store. */
+
+#define INODE_N_INDIRECT_1_BLOCKS 16   /* Number of addresses of blocks of direct blocks. */
+#define INODE_N_INDIRECT_2_BLOCKS 15   /* Number of addresses of INDIRECT_1 blocks. */
+#define INODE_N_INDIRECT_3_BLOCKS 1    /* Number of addresses of INDIRECT_2 blocks. */
+#define INODE_N_DIRECT_BLOCKS (INODE_N_ADDRESSES - INODE_N_INDIRECT_3_BLOCKS - INODE_N_INDIRECT_2_BLOCKS - INODE_N_INDIRECT_1_BLOCKS) /* Number of addresses of data blocks. */
+
+/* For processing the info_and_cksum field present in metadata structures. */
+#define METAINFO_MASK 0x7
+struct metainfo_s
+{
+  int8_t info;
+  unsigned cksum;
+};
+
+/* Inodes can be one of these types. */
+enum inode_type
+{
+  INODE_FILE,
+  INODE_DIRECTORY
+};
+
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
-  {
-    block_sector_t start;               /* First data sector. */
-    off_t length;                       /* File size in bytes. */
-    unsigned magic;                     /* Magic number. */
-    uint32_t unused[125];               /* Not used. */
-  };
+{
+  uint32_t info_and_cksum;   /* Bits 0-7 are an enum inode_type. Bits 8-31 are a cksum of the metadata in the inode. */
+  unsigned magic;       /* Magic number. */
+  off_t length;         /* File size in bytes. */
+  /* INODE_N_ADDRESSES addresses. */
+  uint32_t direct_blocks     [INODE_N_DIRECT_BLOCKS];     /* Each is the address of a block of data. */
+  uint32_t indirect_1_blocks [INODE_N_INDIRECT_1_BLOCKS]; /* Each is the address of a block of direct blocks. */
+  uint32_t indirect_2_blocks [INODE_N_INDIRECT_2_BLOCKS]; /* Each is the address of a block of indirect_1 blocks. */
+  uint32_t indirect_3_blocks [INODE_N_INDIRECT_3_BLOCKS]; /* Each is the address of a block of indirect_2 blocks. */
+};
+
+/* On-disk indirect block.
+   Must be exactly METADATA_BLOCKSIZE bytes long. */
+#define INDIRECT_BLOCK_N_ADDRESSES (METADATA_BLOCKSIZE - 1*ADDRESS_LEN)/ADDRESS_LEN /* The number of addresses contained in an indirect blcok. */
+struct indirect_block
+{
+  uint32_t info_and_cksum; /* Bits 0-7 are an integer for the indirect level. Bits 8-31 are a cksum of the addresses. */
+  uint32_t blocks [INDIRECT_BLOCK_N_ADDRESSES]; /* The block addresses tracked by this indirect block. */
+};
 
 /* Returns the number of sectors to allocate for an inode SIZE
    bytes long. */
@@ -48,7 +85,7 @@ byte_to_sector (const struct inode *inode, off_t pos)
 {
   ASSERT (inode != NULL);
   if (pos < inode->data.length)
-    return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+    return inode->data.direct_blocks[0] + pos / BLOCK_SECTOR_SIZE;
   else
     return -1;
 }
@@ -87,7 +124,7 @@ inode_create (block_sector_t sector, off_t length)
       size_t sectors = bytes_to_sectors (length);
       disk_inode->length = length;
       disk_inode->magic = INODE_MAGIC;
-      if (free_map_allocate (sectors, &disk_inode->start)) 
+      if (free_map_allocate (sectors, &disk_inode->direct_blocks[0])) 
         {
           block_write (fs_device, sector, disk_inode);
           if (sectors > 0) 
@@ -96,7 +133,7 @@ inode_create (block_sector_t sector, off_t length)
               size_t i;
               
               for (i = 0; i < sectors; i++) 
-                block_write (fs_device, disk_inode->start + i, zeros);
+                block_write (fs_device, disk_inode->direct_blocks[0]+ i, zeros);
             }
           success = true; 
         } 
@@ -177,7 +214,7 @@ inode_close (struct inode *inode)
       if (inode->removed) 
         {
           free_map_release (inode->sector, 1);
-          free_map_release (inode->data.start,
+          free_map_release (inode->data.direct_blocks[0],
                             bytes_to_sectors (inode->data.length)); 
         }
 
