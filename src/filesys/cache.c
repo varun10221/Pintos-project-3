@@ -43,6 +43,29 @@ struct buffer_cache_table
   struct lock buffer_cache_lock; /* any atomic operations needs to be performed */
 };
 
+/* Elements of readahead_queue. */
+typedef struct readahead_request_s
+{
+  block_sector_t address; /* What address to readahead? */
+  enum cache_block_type type; /* What type to readahead? */
+  struct list_elem elem; /* For inclusion in readahead_queue. */
+} readahead_request_t;
+
+/* Private variables used to implement the buffer cache. */
+static struct buffer_cache_table buffer_cache;
+
+/* Readahead queue: A dynamically-sized queue of readahead requests.
+ 
+   Items are enqueued by any thread that calls cache_readahead.
+   Items are dequeued by the readahead thread.
+
+   The lock is used for atomic access to the queue.
+   The sema is Up'd at the end of cache_readahead, 
+     and Down'd by the readahead thread (to wait for a new item). */
+static struct list readahead_queue;
+static struct lock readahead_queue_lock;
+static struct sema readahead_queue_items_available;
+
 /* Private functions. */
 
 /* Buffer cache. */
@@ -59,10 +82,12 @@ struct bdflush_args_s
   int64_t flush_freq;
 };
 
-/* Initialize the buffer cache. */
+/* Initialize the buffer cache module. */
 void 
-cache_init (void)
+cache_init (struct block *backing_block)
 {
+  ASSERT (backing_block != NULL);
+  buffer_cache_init (backing_block);
 
   /* Start kernel threads associated with the buffer cache. */
   tid_t bdflush_tid, readahead_tid;
@@ -77,6 +102,11 @@ cache_init (void)
   sema_down (&bdflush_args.sema);
 
   /* Create the readahead thread. */
+  /* Initialize the readahead queue used by the readahead thread. */
+  list_init (&readahead_queue);
+  lock_init (&readahead_queue_lock);
+  sema_init (&readahead_queue_items_available, 0);
+
   struct semaphore readahead_started;
   sema_init (&readahead_started, 0);
   readahead_tid = thread_create ("readahead", PRI_DEFAULT, readahead, &readahead_started);
@@ -101,6 +131,28 @@ cache_flush (void)
   for (i = 0; i < CACHE_SIZE; i++)
   {
 
+  }
+}
+
+/* Put an entry for ADDRESS into the buffer cache. */
+/* Request that ADDRESS of TYPE be cached. It will be cached with
+   no readers or writers.
+
+   This request may be fulfilled by the calling process before the 
+   readahead thread handles it. */
+void cache_readahead (block_sector_t address, enum cache_block_type type)
+{
+  readahead_request_t *req = (readahead_request_t *) malloc (sizeof(readahead_request_t));
+  if (req != NULL)
+  {
+    req->address = address;
+    req->type = type;
+    /* Safely add to list. */
+    lock_acquire (&readahead_queue_lock);
+    list_push_back (&readahead_queue, &req->elem)
+    lock_release (&readahead_queue_lock);
+    /* Signal the readahead thread. */
+    sema_up (&readahead_queue_items_available);
   }
 }
 
@@ -132,15 +184,31 @@ static void
 readahead (void *arg)
 {
   ASSERT (arg != NULL);
-  struct semaphore *sema = (struct semaphore *) arg;
+  struct semaphore *initialized_sema = (struct semaphore *) arg;
 
-  sema_up (sema);
+  sema_up (initalized_sema);
 
   /* TODO Implement this. */
   for (;;)
   {
-    timer_msleep (1000*30);
+    sema_down (&readahead_queue_items_available);
+
+    /* Get the readahead request. */
+    lock_acquire (&readahead_queue_lock);
+    ASSERT (!list_empty (&readahead_queue));
+    struct readahead_request_s *req = list_entry (list_pop_front (&readahead_queue), struct readahead_request_s, elem);
+    lock_release (&readahead_queue_lock);
+    ASSERT (req != NULL);
+
+    struct cache_block *cb = cache_get_block (address, type, false);
+    ASSERT (cb != NULL);
+    /* If the request hasn't been read yet by whomever we are reading ahead for,
+       read it now. */
+    if (!cb->is_valid)
+      cache_read_block (cb);
+    free (req);
   }
+
 }
 
 /* TODO Once this is "working", remove the filesys_lock() and filesys_unlock()
