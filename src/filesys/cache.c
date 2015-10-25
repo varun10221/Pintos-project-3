@@ -1,12 +1,53 @@
 #include "cache.h"
+
 #include "threads/thread.h"
 #include "threads/synch.h"
 #include "devices/timer.h"
+#include "filesys/filesys.h"
 
-/* TODO remove this */
-#include <stdio.h>
+enum cache_block_type
+{
+  CACHE_BLOCK_DATA,
+  CACHE_BLOCK_METADATA
+};
+
+/* Entry in buffer_cache_table. In-memory cached version of on-disk data. */
+struct cache_block
+{
+  uint32_t cache_ix;            /* Index in the cache. */
+  block_sector_t block;         /* Block address */
+  enum cache_block_type type;         /* Data or metadata? */
+
+  bool is_dirty;                /* If the block has been modified. */
+  bool is_valid;                /* If the data is valid. */
+  uint32_t readers_count;       /* No. of readers reading the block. */
+  bool is_writer;               /* Is there a writer present? */
+  struct lock state_lock;       /* For atomic updates to the above fields. */
+
+  /* TODO Synchronization mechanism to signal pending readers/writers. */
+  uint32_t pending_requests;    /* Pending requests waiting due to read/write regulation. */
+
+  /* TODO Usage information for eviction policy. */
+
+  /* TODO Where is the data? */
+};
+
+/* The global buffer_cache_table stores cache_blocks. */
+#define MAX_SECTORS_IN_CACHE 64
+#define CACHE_SIZE (64 / DATA_BLOCKSIZE)
+struct buffer_cache_table
+{
+  uint32_t n_free_cache_blocks; /* No. of free blocks. */
+  uint32_t n_total_cache_blocks; /* Total no. of cache blocks in table. */
+  struct cache_block blocks[CACHE_SIZE]; /* Array for cache_table, table utmost will hold 64 sector's worth of data */
+  struct lock buffer_cache_lock; /* any atomic operations needs to be performed */
+};
 
 /* Private functions. */
+
+/* Buffer cache. */
+void buffer_cache_table_init (size_t);
+void buffer_cache_table_destroy (void);
 
 /* Kernel threads. */
 static void bdflush (void *arg);
@@ -22,6 +63,8 @@ struct bdflush_args_s
 void 
 cache_init (void)
 {
+
+  /* Start kernel threads associated with the buffer cache. */
   tid_t bdflush_tid, readahead_tid;
 
   /* Create the bdflush thread. */
@@ -40,6 +83,7 @@ cache_init (void)
   ASSERT (readahead_tid != TID_ERROR);
   /* Wait for readahead to get started. */
   sema_down (&readahead_started);
+
 }
 
 /* Destroy the buffer cache. */
@@ -53,7 +97,11 @@ cache_destroy (void)
 void 
 cache_flush (void)
 {
+  int i;
+  for (i = 0; i < CACHE_SIZE; i++)
+  {
 
+  }
 }
 
 /* bdflush kernel thread. 
