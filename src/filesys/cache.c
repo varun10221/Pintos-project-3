@@ -105,13 +105,14 @@ static void cache_mark_block_clean (struct cache_block *);
 /* Cache block. */
 static void cache_block_init (struct cache_block *);
 static void cache_block_get_access (struct cache_block *, bool);
+static bool cache_block_is_usage_conflict (const struct cache_block *, bool);
 static size_t cache_block_alloc_contents (struct cache_block *);
 static void cache_block_destroy (struct cache_block *);
 static void cache_block_set_hash (struct cache_block *, block_sector_t, enum cache_block_type);
 static unsigned cache_block_hash_func (const struct hash_elem *, void *);
 static bool cache_block_less_func (const struct hash_elem *, const struct hash_elem *, void *);
 static size_t cache_block_get_contents_size (const struct cache_block *);
-static size_t cache_block_get_n_sectors (const struct cache_block *cb);
+static size_t cache_block_get_n_sectors (const struct cache_block *);
 
 /* Testing. */
 #ifdef CACHE_DEBUG
@@ -284,7 +285,7 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
   ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
 
   /* No starving process. Graduate to being the starving process if conflict. */
-  bool is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
+  bool is_conflict = cache_block_is_usage_conflict (cb, exclusive);
   while (is_conflict)
   {
     /* While there is a conflict, wait as the starving process. 
@@ -292,17 +293,33 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
          and since we only cond_signal() the starving_process condition when the user type can change,
          when I am woken there should no longer be a conflict. */
     cond_wait (&cb->starving_process, &cb->lock);
-    is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
+    is_conflict = cache_block_is_usage_conflict (cb, exclusive);
     ASSERT (!is_conflict);
   }
 
   /* There must now be no conflict between my intended usage and the block status. */
-  is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
+  is_conflict = cache_block_is_usage_conflict (cb, exclusive);
   ASSERT (!is_conflict);
   if (exclusive)
     cb->is_writer = true;
   else
     cb->readers_count++;
+
+  ASSERT (cb->is_writer || 0 < cb->readers_count);
+}
+
+/* Returns true if there is a conflict between EXCLUSIVE and current block usage.
+   CB must be locked. */
+static bool 
+cache_block_is_usage_conflict (const struct cache_block *cb, bool exclusive)
+{
+  ASSERT (cb != NULL);
+  ASSERT (lock_held_by_current_thread (&cb->lock));
+
+  bool any_usage = (cb->is_writer || 0 < cb->readers_count);
+  bool is_conflict = (exclusive && any_usage) || 
+                     (!exclusive && cb->is_writer);
+  return is_conflict;
 }
 
 /* Destroy this cache block. */
@@ -351,6 +368,7 @@ cache_evict_block (struct cache_block *cb)
          0 < cond_n_waiters (&cb->starving_process, &cb->lock) || 
          0 < cond_n_waiters (&cb->polite_processes, &cb->lock))
     cond_wait (&cb->polite_processes, &cb->lock);
+  ASSERT (!cb->is_writer && cb->readers_count == 0);
 
   /* Evict. */
   if (cb->is_dirty)
@@ -457,6 +475,7 @@ cache_put_block (struct cache_block *cb)
   ASSERT (cb != NULL);
 
   lock_acquire (&cb->lock);
+  ASSERT (cb->is_writer || 0 < cb->readers_count);
 
   bool any_other_users = true;
   /* If there's a writer, that's me and I'm done. */
@@ -786,6 +805,7 @@ cache_self_test_thread (void *args)
     int block = random_ulong () % (2*CACHE_SIZE);
     int exclusive = random_ulong () % 2;
     cb = cache_get_block (block, CACHE_BLOCK_INODE, exclusive ? true : false);
+    char *data = cache_read_block (cb);
     cache_put_block (cb);
   }
 
