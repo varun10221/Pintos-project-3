@@ -27,13 +27,13 @@ struct cache_block
      To avoid starvation, we assign equal weight to readers and writers. 
      Any time a process wishes to use the block but finds that the block is being used in a conflicting fashion, 
        it waits on the starving_process condition if there is no other waiter on that condition.
-     If a process comes to use the block and finds a waiter already on the starving_process condition, it waits on the polite_processs
+     If a process comes to use the block and finds a waiter already on the starving_process condition, it waits on the polite_processes
        condition instead of seeing if it can use the block immediately. 
        Thus, the presence of a waiter on the starving_process condition is used to guide threads
-       into the "lower-priority" polite_processs waiting list.
+       into the "lower-priority" polite_processes waiting list.
      When the cache_block changes state (the last reader finishes, or the writer finishes):
        - if there is a process waiting on starving_process, it signals that condition.
-       - else it broadcasts on the polite_processs condition variable, and lets those waiters "fight it out".
+       - else it broadcasts on the polite_processes condition variable, and lets those waiters "fight it out".
 
      If the block is evicted, the is_being_evicted bit is set to true. Upon waking a process tests this bit
        to see whether or not it should use this block.
@@ -50,13 +50,10 @@ struct cache_block
   struct condition starving_process;  /* A process that would like to use the block, but cannot due to a conflicting use. */
   struct condition polite_processes;  /* If there is a waiter on the starving_process condition, other processes queue up on this condition variable to give the starving process a turn. */
 
-  /* Eviction policy: We evict the LRU block. */
-  int64_t last_accessed_ticks; /* Time in ticks of the last cache_get_block for this block. */
-
   void *contents;               /* Pointer to the contents of this block. */
 
-  struct list_elem l_elem; /* For inclusion in the free_blocks list. */
-  struct hash_elem h_elem; /* For inclusion in the lookup hash. */
+  struct list_elem l_elem; /* For inclusion in one of the buffer_cache_table's lists. */
+  struct hash_elem h_elem; /* For inclusion in the buffer_cache_table's lookup hash. */
 };
 
 /* A global buffer_cache_table stores cache_blocks. */
@@ -64,8 +61,13 @@ struct cache_block
 struct buffer_cache_table
 {
   struct list free_blocks;               /* List of free cache blocks. */
+  struct list in_use_blocks;             /* List of in-use cache blocks, ordered with MRU at the head of the list. */
+  struct list being_evicted_blocks;      /* List of blocks that are being evicted. */
+  struct condition no_blocks_to_evict;   /* If all CACHE_SIZE blocks are being evicted at once, wait on this until signaled. */
+
   struct cache_block blocks[CACHE_SIZE]; /* The cache_blocks we use. */
   struct hash addr_to_block;             /* Maps address to cache_block. */
+
 
   struct lock lock;                      /* Serializes access to struct members. */
 
@@ -182,6 +184,9 @@ buffer_cache_init (struct block *backing_block)
 
   lock_init (&buffer_cache.lock);
   list_init (&buffer_cache.free_blocks);
+  list_init (&buffer_cache.in_use_blocks);
+  list_init (&buffer_cache.being_evicted_blocks);
+  cond_init (&buffer_cache.no_blocks_to_evict);
   hash_init (&buffer_cache.addr_to_block, cache_block_hash_func, cache_block_less_func, NULL);
 
   /* Initialize each cache block. */
