@@ -455,6 +455,19 @@ cond_broadcast (struct condition *cond, struct lock *lock)
     cond_signal (cond, lock);
 }
 
+/* Returns the number of waiters on COND.
+   LOCK must be held by the caller (otherwise this is a dangerous thing
+   to base decisions on). */
+size_t 
+cond_n_waiters (struct condition *cond, struct lock *lock)
+{
+  ASSERT (cond != NULL);
+  ASSERT (lock != NULL);
+  ASSERT (lock_held_by_current_thread (lock));
+
+  return list_size (&cond->waiters);
+}
+
 /* Input: The list_elem of two semaphore_elem elements
    in a condition variable's waiter list, with sort_val 
    set to the effective priority of the associated threads.
