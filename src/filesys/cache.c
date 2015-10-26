@@ -449,6 +449,10 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
      of the in_use_blocks list. */
   list_push_front (&buffer_cache.in_use_blocks, &cb->l_elem);
 
+  /* Signal anyone waiting for a block to evict. 
+     Once we have unlocked the buffer_cache lock, this block is a candidate for eviction. */
+  cond_signal (&buffer_cache.no_blocks_to_evict, &buffer_cache.lock);
+
 #ifdef CACHE_DEBUG
   ASSERT (list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks) + list_size (&buffer_cache.being_evicted_blocks) == CACHE_SIZE);
 #endif
