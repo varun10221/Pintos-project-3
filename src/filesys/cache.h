@@ -18,7 +18,11 @@ enum cache_block_type
 void cache_init (struct block *);
 void cache_destroy (void);
 
-/* Getting and releasing access to cache blocks. */
+/* Getting and releasing access to cache blocks. 
+
+   Usage: Call cache_get_block and cache_put_block in 
+   successive pairs. You cannot get a new block before put'ing the
+   previous block. */
 struct cache_block * cache_get_block (block_sector_t, enum cache_block_type, bool);
 void cache_put_block (struct cache_block *);
 
