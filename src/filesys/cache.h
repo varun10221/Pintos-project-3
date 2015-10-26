@@ -22,7 +22,10 @@ void cache_destroy (void);
 
    Usage: Call cache_get_block and cache_put_block in 
    successive pairs. You cannot get a new block before put'ing the
-   previous block. */
+   previous block. 
+   
+   Once a cache_block has been obtained by cache_get_block, it will not be
+   evicted until all of its users have finished (indicated by calling cache_put_block). */
 struct cache_block * cache_get_block (block_sector_t, enum cache_block_type, bool);
 void cache_put_block (struct cache_block *);
 

@@ -737,8 +737,9 @@ readahead (void *arg)
        read it now. */
     if (!cb->is_valid)
       cache_read_block (cb);
-    /* We are not using the block right now. Hopefully it is not evicted before 
-       it is cache_get_block'd by whoever asked for it. */
+    /* We are not using the block right now, so it can be evicted if need be.
+        Hopefully it is not evicted before it is cache_get_block'd by whoever 
+        asked for it. */
     cache_put_block (cb);
 
     free (req);
