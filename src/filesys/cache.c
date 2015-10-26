@@ -1,6 +1,8 @@
 #include "cache.h"
 
 #include <string.h>
+#include <hash.h>
+
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/thread.h"
@@ -12,32 +14,61 @@
 /* Entry in a buffer_cache_table. In-memory cached version of on-disk data. */
 struct cache_block
 {
-  uint32_t cache_ix;            /* Index in the cache. */
   block_sector_t block;         /* Block address */
   enum cache_block_type type;   /* Data or metadata? */
 
+  /* Acquire to modify this cache_block. Used as the "monitor lock" for the condition variables below. */
+  struct lock lock; 
+
   bool is_dirty;                /* If the block has been modified. */
-  bool is_valid;                /* If the data is valid. If true and if is_dirty, need to flush on eviction. */
+
+  /* Fields to handle a mix of readers and writers.
+   
+     To avoid starvation, we assign equal weight to readers and writers. 
+     Any time a process wishes to use the block but finds that the block is being used in a conflicting fashion, 
+       it waits on the starving_process condition if there is no other waiter on that condition.
+     If a process comes to use the block and finds a waiter already on the starving_process condition, it waits on the polite_processs
+       condition instead of seeing if it can use the block immediately. 
+       Thus, the presence of a waiter on the starving_process condition is used to guide threads
+       into the "lower-priority" polite_processs waiting list.
+     When the cache_block changes state (the last reader finishes, or the writer finishes):
+       - if there is a process waiting on starving_process, it signals that condition.
+       - else it broadcasts on the polite_processs condition variable, and lets those waiters "fight it out".
+
+     If the block is evicted, the is_being_evicted bit is set to true. Upon waking a process tests this bit
+       to see whether or not it should use this block.
+
+     To evict a block: Remove the block from the hash (so no new processes can use it), then wait until 
+       there are no active users and no pending users. Then modify block as desired.
+
+     There are inefficiencies in this approach, but it should prevent starvation and provide some fairness. */
+
   uint32_t readers_count;       /* No. of readers reading the block. */
   bool is_writer;               /* Is there a writer present? */
-  struct lock state_lock;       /* For atomic updates to the above fields. */
+  bool is_valid;                /* Is contents valid? */ 
 
-  /* TODO Synchronization mechanism to signal pending readers/writers. */
-  uint32_t pending_requests;    /* Pending requests waiting due to read/write regulation. */
+  struct condition starving_process;  /* A process that would like to use the block, but cannot due to a conflicting use. */
+  struct condition polite_processes;  /* If there is a waiter on the starving_process condition, other processes queue up on this condition variable to give the starving process a turn. */
 
-  /* TODO Usage information for eviction policy. */
+  /* Eviction policy: We evict the LRU block. */
+  int64_t last_accessed_ticks; /* Time in ticks of the last cache_get_block for this block. */
 
   void *contents;               /* Pointer to the contents of this block. */
+
+  struct list_elem l_elem; /* For inclusion in the free_blocks list. */
+  struct hash_elem h_elem; /* For inclusion in the lookup hash. */
 };
 
 /* A global buffer_cache_table stores cache_blocks. */
 #define CACHE_SIZE 64
 struct buffer_cache_table
 {
-  uint32_t n_free_cache_blocks; /* No. of free blocks. */
-  uint32_t n_total_cache_blocks; /* Total no. of cache blocks in table. */
-  struct cache_block blocks[CACHE_SIZE]; /* Array for cache_table, table utmost will hold 64 sector's worth of data */
-  struct lock buffer_cache_lock; /* any atomic operations needs to be performed */
+  struct list free_blocks;               /* List of free cache blocks. */
+  struct cache_block blocks[CACHE_SIZE]; /* The cache_blocks we use. */
+  struct hash addr_to_block;             /* Maps address to cache_block. */
+
+  struct lock lock;                      /* Serializes access to struct members. */
+
   struct block *backing_block; /* The block on which this cache is built. */
 };
 
@@ -64,7 +95,12 @@ static void cache_mark_block_clean (struct cache_block *);
 
 /* Cache block. */
 static void cache_block_init (struct cache_block *);
+void cache_block_get_access (struct cache_block *, bool);
 static size_t cache_block_alloc_contents (struct cache_block *);
+static void cache_block_destroy (struct cache_block *);
+static void cache_block_set_hash (struct cache_block *, block_sector_t, enum cache_block_type);
+static unsigned cache_block_hash_func (const struct hash_elem *, void *);
+static bool cache_block_less_func (const struct hash_elem *, const struct hash_elem *, void *);
 static size_t cache_block_get_contents_size (const struct cache_block *);
 static size_t cache_block_get_n_sectors (const struct cache_block *cb);
 
@@ -137,32 +173,47 @@ cache_destroy (void)
 
 
 /* Initialize the global buffer_cache_table struct. */
-static void buffer_cache_init (struct block *backing_block)
+static void 
+buffer_cache_init (struct block *backing_block)
 {
   ASSERT (backing_block != NULL);
   buffer_cache.backing_block = backing_block;
 
-  /* Initialize each block. */
+  lock_init (&buffer_cache.lock);
+  list_init (&buffer_cache.free_blocks);
+  hash_init (&buffer_cache.addr_to_block, cache_block_hash_func, cache_block_less_func, NULL);
+
+  /* Initialize each cache block. */
   int i;
   for (i = 0; i < CACHE_SIZE; i++)
-    cache_block_init (&buffer_cache.blocks[i]);
-  /* TODO Anything else? */
+  {
+    struct cache_block *cb = &buffer_cache.blocks[i];
+    cache_block_init (cb);
+    list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
+  }
 }
 
 /* Destroy the global buffer cache, flushing any dirty blocks to disk. */
-static void buffer_cache_destroy (void)
+static void 
+buffer_cache_destroy (void)
 {
   /* TODO Signal to the kernel threads that we are done? */
+  /* TODO Clean up internals (at minimum, need to hash_destroy ()). */
 }
 
 /* Initialize this cache block. */
-void cache_block_init (struct cache_block *cb)
+static void 
+cache_block_init (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
   memset (cb, 0, sizeof(struct cache_block));
 
-  lock_init (&cb->state_lock);
+  lock_init (&cb->lock);
+  cond_init (&cb->starving_process);
+  cond_init (&cb->polite_processes);
 
+  cb->is_valid = false;
+  cb->contents = NULL;
   /* 0 readers and no writer: Not in use. */
   cb->readers_count = 0;
   cb->is_writer = 0;
@@ -390,6 +441,7 @@ bdflush (void *arg)
   int64_t freq = bdflush_args->flush_freq;
   ASSERT (0 < freq);
 
+  /* Signal caller that we're initialized. */
   sema_up (&bdflush_args->sema);
 
   for (;;)
@@ -408,6 +460,7 @@ readahead (void *arg)
   ASSERT (arg != NULL);
   struct semaphore *initialized_sema = (struct semaphore *) arg;
 
+  /* Signal caller that we're initialized. */
   sema_up (initialized_sema);
 
   for (;;)
@@ -421,6 +474,7 @@ readahead (void *arg)
     lock_release (&readahead_queue_lock);
     ASSERT (req != NULL);
 
+    /* Fulfill the request. */
     struct cache_block *cb = cache_get_block (req->address, req->type, false);
     ASSERT (cb != NULL);
 
