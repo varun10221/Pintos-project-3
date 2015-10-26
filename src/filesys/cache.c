@@ -703,6 +703,63 @@ cache_readahead (block_sector_t address, enum cache_block_type type)
   }
 }
 
+/* Must be called before marking this block free.
+   If a cache block with this {address, type} pair is cached,
+     eliminate it. There should be no users of this cache block.
+     It should be clean.
+
+   Consider the following scenario:
+    File A is deleted, and its blocks are marked free. Its first block is still
+      cached.
+    File B is created, and re-uses A's cached block. A user calls read(),
+      we find the block in the cache, and we return A's old data to the reader
+      of B. 
+      
+    To avoid this scenario:
+      When deleting A, before we mark its blocks free, we call cache_discard.
+      Now any re-use of A's blocks will result in a cache miss. */ 
+void 
+cache_discard (block_sector_t address, enum cache_block_type type)
+{
+  /* Prepare to search hash. */
+  struct cache_block *cb = NULL;
+  struct cache_block dummy;
+  cache_block_set_hash (&dummy, address, type);
+
+  lock_acquire (&buffer_cache.lock);
+
+  /* Check for a match. */
+  struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
+  if (match)
+  {
+    /* Match found. Make sure block has no users and is clean. */
+    cb = hash_entry (match, struct cache_block, h_elem);
+    lock_acquire (&cb->lock);
+
+    ASSERT (!cb->is_writer && cb->readers_count == 0);
+
+    /* Remove from hash and wipe data. */
+    hash_delete (&buffer_cache.addr_to_block, &cb->h_elem);   
+
+    if (cb->is_dirty)
+      cache_flush_block (cb);
+    if (cb->contents != NULL)
+    {
+      free (cb->contents);
+      cb->contents = NULL;
+    }
+    cb->is_valid = false;
+
+    /* Remove from its current list (in_use_blocks) and place on the free list. */
+    list_remove (&cb->l_elem);
+    list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
+
+    lock_release (&cb->lock);
+  }
+
+  lock_release (&buffer_cache.lock);
+}
+
 /* bdflush ("buffer dirty flush") kernel thread. 
    ARG is a 'struct bdflush_args_s'.
    Flushes dirty pages from buffer cache to disk every FLUSH_FREQ seconds. */

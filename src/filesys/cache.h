@@ -33,7 +33,10 @@ void cache_put_block (struct cache_block *);
 void * cache_read_block (struct cache_block *);
 void * cache_zero_block (struct cache_block *);
 void cache_mark_block_dirty (struct cache_block *);
+
+/* Requests related to cache blocks. */
 void cache_readahead (block_sector_t, enum cache_block_type);
+void cache_discard (block_sector_t, enum cache_block_type);
 
 /* Periodic flushing of cache */
 void cache_flush (void);
