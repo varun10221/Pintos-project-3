@@ -233,6 +233,8 @@ buffer_cache_destroy (void)
 static struct cache_block * 
 buffer_cache_get_eviction_victim (void)
 {
+  /* TODO "You must implement a cache replacement algorithm that is at least as good as the "clock" algorithm. We encourage you to account for the generally greater value of metadata compared to data. Experiment to see what combination of accessed, dirty, and other information results in the best performance, as measured by the number of disk accesses." */
+
   ASSERT (lock_held_by_current_thread (&buffer_cache.lock));
 
 #ifdef CACHE_DEBUG
@@ -573,6 +575,7 @@ cache_zero_block (struct cache_block *cb)
 void 
 cache_flush (void)
 {
+  /* TODO Implement this. */
   int i;
   for (i = 0; i < CACHE_SIZE; i++)
   {
