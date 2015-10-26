@@ -95,7 +95,7 @@ static void cache_mark_block_clean (struct cache_block *);
 
 /* Cache block. */
 static void cache_block_init (struct cache_block *);
-void cache_block_get_access (struct cache_block *, bool);
+static void cache_block_get_access (struct cache_block *, bool);
 static size_t cache_block_alloc_contents (struct cache_block *);
 static void cache_block_destroy (struct cache_block *);
 static void cache_block_set_hash (struct cache_block *, block_sector_t, enum cache_block_type);
@@ -145,8 +145,6 @@ cache_init (struct block *backing_block)
   bdflush_args.flush_freq = 30;
   bdflush_tid = thread_create ("bdflush", PRI_DEFAULT, bdflush, &bdflush_args);
   ASSERT (bdflush_tid != TID_ERROR);
-  /* Wait for bdflush to get started (otherwise the bdflush_args pointer could be invalid). */
-  sema_down (&bdflush_args.sema);
 
   /* Create the readahead thread. */
   /* Initialize the readahead queue used by the readahead thread. */
@@ -158,6 +156,9 @@ cache_init (struct block *backing_block)
   sema_init (&readahead_started, 0);
   readahead_tid = thread_create ("readahead", PRI_DEFAULT, readahead, &readahead_started);
   ASSERT (readahead_tid != TID_ERROR);
+
+  /* Wait for bdflush to get started (otherwise the bdflush_args pointer could be invalid). */
+  sema_down (&bdflush_args.sema);
   /* Wait for readahead to get started. */
   sema_down (&readahead_started);
 
@@ -216,7 +217,50 @@ cache_block_init (struct cache_block *cb)
   cb->contents = NULL;
   /* 0 readers and no writer: Not in use. */
   cb->readers_count = 0;
-  cb->is_writer = 0;
+  cb->is_writer = false;
+}
+
+/* Obtain the appropriate access to locked CB.
+   Waits until CB is available.
+   Caller must hold the lock on CB. */
+static void 
+cache_block_get_access (struct cache_block *cb, bool exclusive)
+{
+  ASSERT (cb != NULL);
+  ASSERT (lock_held_by_current_thread (&cb->lock));
+
+  while (0 < cond_n_waiters (&cb->starving_process, &cb->lock))
+    /* While there is a starving process, wait politely. */
+    cond_wait (&cb->polite_processes, &cb->lock);
+  ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
+
+  /* No starving process. Graduate to being the starving process if needed. */
+  bool is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
+  while (is_conflict)
+  {
+    /* While there is a conflict, wait as the starving process. 
+       Since only one process can ever become the starving process at a time,
+         and since we only cond_signal() the starving_process condition when the user type can change,
+         when I am woken there should no longer be a conflict. */
+    cond_wait (&cb->starving_process, &cb->lock);
+    is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
+    ASSERT (!is_conflict);
+  }
+
+  /* There must now be no conflict between my intended usage and the block status. */
+  is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
+  ASSERT (!is_conflict);
+  if (exclusive)
+    cb->is_writer = true;
+  else
+    cb->readers_count++;
+}
+
+/* Destroy this cache block. */
+static void 
+cache_block_destroy (struct cache_block *cb)
+{
+  ASSERT (cb != NULL);
 }
 
 /* Dynamically allocate the contents field of CB. 
@@ -262,17 +306,50 @@ cache_flush_block (struct cache_block *cb)
     block_write (buffer_cache.backing_block, cb->block + rel_offset, cb->contents + rel_offset);
   }
 
-  cache_mark_clean (cb);
+  cache_mark_block_clean (cb);
 }
 
 /* Reserve a block in the buffer cache dedicated to hold this block.
-   This may evict another buffer.
+   This may evict another block.
    Grants exclusive or shared access.
-   If the block is already in the buffer cache, we just return it. */
+   If the block is already in the buffer cache, we re-use it. */
 struct cache_block * 
 cache_get_block (block_sector_t address, enum cache_block_type type, bool exclusive)
 {
-  return NULL;
+  /* Prepare to search hash. */
+  struct cache_block *cb = NULL;
+  struct cache_block dummy;
+  cache_block_set_hash (&dummy, address, type);
+
+  lock_acquire (&buffer_cache.lock);
+  /* Is this block already in the cache? */
+  struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
+  if (match)
+    cb = hash_entry (match, struct cache_block, h_elem);
+  else
+  {
+    /* No match. Either get a free block or evict a block. */
+    if (!list_empty (&buffer_cache.free_blocks))
+      cb = list_entry (list_pop_front (&buffer_cache.free_blocks), struct cache_block, l_elem);
+    else
+      ASSERT (0 == 1); /* TODO Eviction. */
+
+    /* Insert the new block into the hash so others can find it. */
+    cb->block = address;
+    cb->type = type;
+    hash_insert (&buffer_cache.addr_to_block, &cb->h_elem);
+  }
+
+  /* Lock CB so that we can release the buffer_cache lock. */
+  ASSERT (cb != NULL);
+  lock_acquire (&cb->lock);
+  lock_release (&buffer_cache.lock);
+
+  /* Update CB to indicate that we are using it. */
+  cache_block_get_access (cb, exclusive);
+  lock_release (&cb->lock);
+
+  return cb;
 }
 
 /* Release access to this cache block. */
@@ -281,7 +358,18 @@ cache_put_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
-  lock_acquire (&cb->state_lock);
+  /* TODO I am here. If we are the last user, revamp this as needed:
+      - update free_blocks 
+      - delete entry from buffer_cache.addr_to_block 
+      - free memory */
+
+#ifdef FS_DEBUG
+
+#else
+
+#endif
+
+  lock_acquire (&cb->lock);
 
   /* If I was the writer, I'm done. */
   if (cb->is_writer)
@@ -296,7 +384,7 @@ cache_put_block (struct cache_block *cb)
     cb->readers_count--;
   }
 
-  lock_release (&cb->state_lock);
+  lock_release (&cb->lock);
 }
 
 /* Fill CB with data and return pointer to the data. 
@@ -371,6 +459,52 @@ cache_mark_block_clean (struct cache_block *cb)
   cb->is_dirty = false;
 }
 
+/* Sets the fields of DUMMY appropriately. Keep in sync with cache_block_hash_func. */
+static void 
+cache_block_set_hash (struct cache_block *cb, block_sector_t address, enum cache_block_type type)
+{
+  ASSERT (cb != NULL);
+
+  memset (cb, 0, sizeof(struct cache_block));
+  cb->block = address;
+  cb->type = type;
+}
+
+
+/* For use with buffer_cache.addr_to_block. 
+   Hash is the hash of the CB's block field. 
+   Keep in sync with cache_block_set_hash. */ 
+static unsigned 
+cache_block_hash_func (const struct hash_elem *cb_elem, void *aux UNUSED)
+{
+  ASSERT (cb_elem != NULL);
+  struct cache_block *cb = hash_entry (cb_elem, struct cache_block, h_elem);
+  ASSERT (cb != NULL);
+
+  return hash_bytes (&cb->block, sizeof(block_sector_t));
+}
+
+/* For use with buffer_cache.addr_to_block. 
+   Returns true if A < B, else false.
+   Comparison is based on the block field of A and B.
+   NULL is less than everything else. */
+static bool 
+cache_block_less_func (const struct hash_elem *a_elem, const struct hash_elem *b_elem, void *aux UNUSED)
+{
+  ASSERT (a_elem != NULL || b_elem != NULL);
+  /* If a is NULL, a < b. */
+  if (a_elem == NULL)
+    return true;
+  /* If b is NULL, b < a. */
+  if (b_elem == NULL)
+    return false;
+
+  struct cache_block *a = hash_entry (a_elem, struct cache_block, h_elem);
+  struct cache_block *b = hash_entry (b_elem, struct cache_block, h_elem);
+
+  return (a->block < b->block);
+}
+
 /* Return the number of sectors spanned by CB->CONTENTS. */
 static size_t
 cache_block_get_n_sectors (const struct cache_block *cb)
@@ -429,7 +563,7 @@ cache_readahead (block_sector_t address, enum cache_block_type type)
   }
 }
 
-/* bdflush kernel thread. 
+/* bdflush ("buffer dirty flush") kernel thread. 
    ARG is a 'struct bdflush_args_s'.
    Flushes dirty pages from buffer cache to disk every FLUSH_FREQ seconds. */
 static void 
