@@ -1,6 +1,12 @@
 #include "cache.h"
 
 #include <string.h>
+
+#ifdef CACHE_DEBUG
+#include <stdio.h>
+#include <random.h>
+#endif
+
 #include <hash.h>
 
 #include "filesys/filesys.h"
@@ -106,6 +112,14 @@ static bool cache_block_less_func (const struct hash_elem *, const struct hash_e
 static size_t cache_block_get_contents_size (const struct cache_block *);
 static size_t cache_block_get_n_sectors (const struct cache_block *cb);
 
+/* Testing. */
+#ifdef CACHE_DEBUG
+static void cache_self_test_thread (void *);
+static void cache_self_test_single (void);
+static void cache_self_test_parallel (void);
+#endif
+  
+
 /* Kernel threads. */
 static void bdflush (void *arg);
 static void readahead (void *arg);
@@ -164,6 +178,10 @@ cache_init (struct block *backing_block)
   /* Wait for readahead to get started. */
   sema_down (&readahead_started);
 
+#ifdef CACHE_DEBUG
+  cache_self_test_single ();
+  cache_self_test_parallel ();
+#endif
 }
 
 /* Destroy the buffer cache. */
@@ -629,6 +647,85 @@ readahead (void *arg)
   }
 
 }
+
+#ifdef CACHE_DEBUG
+/* This is a test for the block cache. 
+   Cache must have been cache_init()'d before calling this. 
+   Hammers on the cache. 
+
+   Client for cache_self_test_{single, parallel}. */
+static void 
+cache_self_test_thread (void *args)
+{
+  struct semaphore *is_done = (struct semaphore *) args;
+
+  int i;
+  struct cache_block *cb = NULL;
+
+  /* Get CACHE_SIZE unique exclusive blocks. */
+  for (i = 0; i < CACHE_SIZE; i++)
+  {
+    cb = cache_get_block (i, CACHE_BLOCK_INODE, true);
+    cache_put_block (cb);
+  }
+
+  /* Get the same (new!) block 3*CACHE_SIZE times, shared. 
+     The first get* should cause eviction. */
+  for (i = 0; i < 3*CACHE_SIZE; i++)
+  {
+    cb = cache_get_block (CACHE_SIZE, CACHE_BLOCK_DATA, false);
+    cache_put_block (cb);
+  }
+
+  cb = cache_get_block (i, CACHE_BLOCK_METADATA, true);
+  char *data = cache_read_block (cb);
+  cache_put_block (cb);
+
+  /* Get a random block with random exclusive value. */
+  for (i = 0; i < 100*CACHE_SIZE; i++)
+  {
+    int block = random_ulong () % (2*CACHE_SIZE);
+    int exclusive = random_ulong () % 2;
+    cb = cache_get_block (block, CACHE_BLOCK_INODE, exclusive ? true : false);
+    cache_put_block (cb);
+  }
+
+  sema_up (is_done);
+}
+
+/* Single-threaded test of the cache. */
+static void 
+cache_self_test_single (void)
+{
+  struct semaphore is_done;
+  sema_init (&is_done, 0);
+
+  cache_self_test_thread (&is_done);
+  sema_down (&is_done);
+}
+
+/* Multi-threaded test of the cache. */
+static void
+cache_self_test_parallel (void)
+{
+  int n_threads = 30;
+
+  struct semaphore done_semas[n_threads];
+  char names[n_threads][16];
+
+  int i;
+  for (i = 0; i < n_threads; i++)
+  {
+    snprintf (names[i], 16, "cache_thread_%i", i);
+    sema_init (&done_semas[i], 0);
+    thread_create (names[i], PRI_DEFAULT, cache_self_test_thread, &done_semas[i]);
+  }
+
+  /* Wait for completion. */
+  for (i = 0; i < n_threads; i++)
+    sema_down (&done_semas[i]);
+}
+#endif
 
 /* TODO Once this is "working", remove the filesys_lock() and filesys_unlock()
    from the rest of the code base. */
