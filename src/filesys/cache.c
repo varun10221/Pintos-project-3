@@ -866,6 +866,17 @@ cache_self_test_thread (void *args)
     cache_put_block (cb);
   }
 
+  /* Test readahead. */
+  for (i = 0; i < 2*CACHE_SIZE; i++)
+    cache_readahead (i, CACHE_BLOCK_DATA);
+
+  /* Test discard -- must be a block nobody has used yet. */
+  for (i = 0; i < 2*CACHE_SIZE; i++)
+    cache_discard (999999999, CACHE_BLOCK_DATA);
+
+  /* Flush the cache (this is a no-op, as we haven't modified anything). */
+  cache_flush ();
+
   sema_up (is_done);
 }
 
