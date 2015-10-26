@@ -96,6 +96,7 @@ static struct buffer_cache_table buffer_cache;
 /* Buffer cache. */
 static void buffer_cache_init (struct block *);
 static void buffer_cache_destroy (void);
+static struct cache_block * buffer_cache_get_eviction_victim (void);
 
 static void cache_evict_block (struct cache_block *);
 static void cache_flush_block (struct cache_block *);
@@ -225,6 +226,31 @@ buffer_cache_destroy (void)
   /* TODO Clean up internals (at minimum, need to hash_destroy ()). */
 }
 
+/* Identify a cache block for eviction. 
+   Must hold lock on buffer cache. 
+   Places the victim cache block in the being_evicted_blocks list. */
+static struct cache_block * 
+buffer_cache_get_eviction_victim (void)
+{
+  ASSERT (lock_held_by_current_thread (&buffer_cache.lock));
+
+#ifdef CACHE_DEBUG
+  ASSERT (list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks) + list_size (&buffer_cache.being_evicted_blocks) == CACHE_SIZE);
+#endif
+
+  /* We must need to evict in order to get a block. */
+  ASSERT (list_empty (&buffer_cache.free_blocks));
+  /* Wait until there is a block to evict. */
+  while (list_empty (&buffer_cache.in_use_blocks))
+    cond_wait (&buffer_cache.no_blocks_to_evict, &buffer_cache.lock);
+  /* in_use_blocks is in MRU order, with MRU at front and LRU at back. */
+  struct list_elem *e = list_pop_back (&buffer_cache.in_use_blocks);
+  struct cache_block *cb = list_entry (e, struct cache_block, l_elem);
+
+  list_push_front (&buffer_cache.being_evicted_blocks, &cb->l_elem);
+  return cb;
+}
+
 /* Initialize this cache block. */
 static void 
 cache_block_init (struct cache_block *cb)
@@ -257,7 +283,7 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
     cond_wait (&cb->polite_processes, &cb->lock);
   ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
 
-  /* No starving process. Graduate to being the starving process if needed. */
+  /* No starving process. Graduate to being the starving process if conflict. */
   bool is_conflict = (exclusive && 0 < cb->readers_count) || (!exclusive && cb->is_writer);
   while (is_conflict)
   {
@@ -303,22 +329,48 @@ cache_block_alloc_contents (struct cache_block *cb)
   return n_bytes;
 }
 
-/* Evict the contents of CB so that another block can be stored in it. */
+/* Evict the contents of CB so that another block can be stored in it. 
+   Caller must hold lock on buffer_cache. 
+   Once eviction is completed, removes CB from being_evicted_blocks. 
+   On return, CB is not in any of the buffer_cache lists. */
 static void 
 cache_evict_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
+  ASSERT (lock_held_by_current_thread (&buffer_cache.lock));
 
+  lock_acquire (&cb->lock);
+
+  /* Remove block from the cache's addr table so no new processes
+     will be able to find it. Now the usage will only decrease
+     until we are the last with a reference to it. */
+  hash_delete (&buffer_cache.addr_to_block, &cb->h_elem);   
+
+  /* Wait until all other users are gone. */
+  while (cb->is_writer || cb->readers_count || 
+         0 < cond_n_waiters (&cb->starving_process, &cb->lock) || 
+         0 < cond_n_waiters (&cb->polite_processes, &cb->lock))
+    cond_wait (&cb->polite_processes, &cb->lock);
+
+  /* Evict. */
   if (cb->is_dirty)
     cache_flush_block (cb);
   free (cb->contents);
+  cb->contents = NULL;
+  cb->is_valid = false;
+
+  /* Remove from being_evicted_blocks list. */
+  list_remove (&cb->l_elem);
+
+  lock_release (&cb->lock);
 }
 
-/* Flush this dirty CB to disk. */
+/* Flush this dirty locked CB to disk. */
 static void 
 cache_flush_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
+  ASSERT (lock_held_by_current_thread (&cb->lock));
   ASSERT (cb->is_dirty);
 
   size_t n_sectors = cache_block_get_n_sectors (cb);
@@ -348,23 +400,43 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
   /* Is this block already in the cache? */
   struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
   if (match)
+  {
     cb = hash_entry (match, struct cache_block, h_elem);
+    /* Remove from current location in the in_use_blocks list. */
+    list_remove (&cb->l_elem);
+  }
   else
   {
     /* No match. Either get a free block or evict a block. */
     if (!list_empty (&buffer_cache.free_blocks))
       cb = list_entry (list_pop_front (&buffer_cache.free_blocks), struct cache_block, l_elem);
     else
-      ASSERT (0 == 1); /* TODO Eviction. */
+    {
+      cb = buffer_cache_get_eviction_victim ();
+      cache_evict_block (cb);
+    }
 
+    cb->is_valid = false;
+    cb->contents = NULL;
     /* Insert the new block into the hash so others can find it. */
     cb->block = address;
     cb->type = type;
     hash_insert (&buffer_cache.addr_to_block, &cb->h_elem);
   }
 
-  /* Lock CB so that we can release the buffer_cache lock. */
   ASSERT (cb != NULL);
+  /* At this point, CB is not in any list. */
+
+  /* This cache block is the most recently used, so put it at the front
+     of the in_use_blocks list. */
+  list_push_front (&buffer_cache.in_use_blocks, &cb->l_elem);
+
+#ifdef CACHE_DEBUG
+  ASSERT (list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks) + list_size (&buffer_cache.being_evicted_blocks) == CACHE_SIZE);
+#endif
+
+  /* Lock CB so that we can release the buffer_cache lock
+     without leaving a gap for eviction. */
   lock_acquire (&cb->lock);
   lock_release (&buffer_cache.lock);
 
@@ -375,79 +447,102 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
   return cb;
 }
 
-/* Release access to this cache block. */
+/* Release access to this cache block. 
+   starving_process and polite_processes are signaled appropriately.
+   Even if no users, leave the block around -- only eviction will
+   cause a block to leave the cache. */
 void 
 cache_put_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
-  /* TODO I am here. If we are the last user, revamp this as needed:
-      - update free_blocks 
-      - delete entry from buffer_cache.addr_to_block 
-      - free memory */
-
-#ifdef FS_DEBUG
-
-#else
-
-#endif
-
   lock_acquire (&cb->lock);
 
-  /* If I was the writer, I'm done. */
+  bool any_other_users = true;
+  /* If there's a writer, that's me and I'm done. */
   if (cb->is_writer)
   {
     ASSERT (cb->readers_count == 0);
     cb->is_writer = false;
+    any_other_users = false;
   }
-  /* If I was a reader, I'm done. */
-  else
+  else if (0 < cb->readers_count)
   {
-    ASSERT (0 < cb->readers_count);
+    ASSERT (!cb->is_writer);
     cb->readers_count--;
+    if (cb->readers_count == 0)
+      any_other_users = false;
+  }
+  else
+    NOT_REACHED ();
+
+  /* If we can change state, signal starving_process if there is one,
+     otherwise broadcast to polite_processes. */
+  if (!any_other_users)
+  {
+    if (cond_n_waiters (&cb->starving_process, &cb->lock))
+      cond_signal (&cb->starving_process, &cb->lock);
+    else if (cond_n_waiters (&cb->polite_processes, &cb->lock))
+      cond_broadcast (&cb->polite_processes, &cb->lock);
   }
 
   lock_release (&cb->lock);
 }
 
-/* Fill CB with data and return pointer to the data. 
+/* (If CB is not valid, fill CB with data and) return pointer to the data. 
    CB->TYPE and CB->BLOCK must be set correctly. */
 void * 
 cache_read_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
+  size_t n_sectors, rel_offset, i;
 
-  cache_block_alloc_contents (cb);
-  size_t n_sectors = cache_block_get_n_sectors (cb);
+  lock_acquire (&cb->lock);
 
-  size_t i;
-  for (i = 0; i < n_sectors; i++)
+  if (!cb->is_valid)
   {
-    size_t rel_offset = i*BLOCK_SECTOR_SIZE;
-    block_read (buffer_cache.backing_block, cb->block + rel_offset, cb->contents + rel_offset);
+    /* Not valid, so read from disk. 
+       If already valid, don't read from disk -- could be dirty in which case we would
+       drop the write. */
+    cache_block_alloc_contents (cb);
+    n_sectors = cache_block_get_n_sectors (cb);
+
+    for (i = 0; i < n_sectors; i++)
+    {
+      rel_offset = i*BLOCK_SECTOR_SIZE;
+      block_read (buffer_cache.backing_block, cb->block + rel_offset, cb->contents + rel_offset);
+    }
+
+    cb->is_valid = true;
   }
 
-  cb->is_valid = true;
-
+  lock_release (&cb->lock);
   return cb->contents;
 }
 
-/* Fill CB with zeros and return pointer to the data. 
+/* (If CB is not valid, fill CB with zeros and) return pointer to the data. 
    CB->TYPE must be set correctly.
-   CB is marked dirty. */
+   CB is marked dirty. There must be a writer of CB. */
 void * 
 cache_zero_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
-  /* Allocate and zero out contents. */
-  size_t n_bytes = cache_block_alloc_contents (cb);
-  ASSERT (cb->contents != NULL);
-  memset (cb->contents, 0, n_bytes);
+  lock_acquire (&cb->lock);
+  ASSERT (cb->is_writer);
 
-  cb->is_dirty = true;
-  cb->is_valid = true;
+  if (!cb->is_valid)
+  {
+    /* Allocate and zero out contents. */
+    size_t n_bytes = cache_block_alloc_contents (cb);
+    ASSERT (cb->contents != NULL);
+    memset (cb->contents, 0, n_bytes);
 
+    cb->is_dirty = true;
+    cb->is_valid = true;
+  }
+
+  lock_release (&cb->lock);
   return cb->contents;
 }
 
@@ -462,17 +557,22 @@ cache_flush (void)
   }
 }
 
-/* Mark CB dirty. */
+/* Mark CB dirty. There must be a writer. */
 void 
 cache_mark_block_dirty (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
   ASSERT (cb->is_valid);
 
+  lock_acquire (&cb->lock);
+
+  ASSERT (cb->is_writer);
   cb->is_dirty = true;
+
+  lock_release (&cb->lock);
 }
 
-/* Mark CB clean. */
+/* Internal function. Mark CB clean. Use with cache_flush_block. */
 static void
 cache_mark_block_clean (struct cache_block *cb)
 {
@@ -533,7 +633,6 @@ static size_t
 cache_block_get_n_sectors (const struct cache_block *cb)
 {
   ASSERT (cb != NULL);
-  ASSERT (cb->is_valid);
 
   return (cache_block_get_contents_size (cb) / BLOCK_SECTOR_SIZE);
 }
@@ -543,7 +642,6 @@ static size_t
 cache_block_get_contents_size (const struct cache_block *cb)
 {
   ASSERT (cb != NULL);
-  ASSERT (cb->is_valid);
 
   size_t n_bytes = 0;
   switch (cb->type)
