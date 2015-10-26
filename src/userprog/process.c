@@ -370,6 +370,7 @@ start_process (void *thr_args)
   /* Initialize our supplemental page table.
      Must occur prior to loading the executable. */
   process_page_table_init ();
+  thread_current ()->is_user_process = true;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);

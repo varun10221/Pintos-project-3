@@ -391,7 +391,8 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  process_exit ();
+  if (thread_current ()->is_user_process)
+    process_exit ();
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -1137,6 +1138,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->pending_lock = NULL;
 #ifdef USERPROG
   t->pagedir = NULL;
+  /* We're not a user process until process.c::start_process() says we are. */
+  t->is_user_process = false;
 #endif
   t->wake_me_at = 0;
 

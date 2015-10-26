@@ -139,6 +139,7 @@ struct thread
     struct file *my_executable;
 
     /* Owned by userprog/process.c. */
+    bool is_user_process;
     struct list child_list; /* List of direct children. */
     struct child_process_info *child_info_self; /* Pointer to my entry in my parent's child_list. */
 
@@ -146,6 +147,7 @@ struct thread
     void *scratch_page; /* PGSIZE-sized scratch page for syscall handling of user-provided memory. Safe from page fault. */
 #endif
 
+#ifdef VM
     /* Structures for virtual memory. */
 
     /* The smallest observed stack address. Based on observations during transitions from user to kernel mode. */
@@ -158,6 +160,7 @@ struct thread
     struct vector mmap_table;
     /* Used to map virtual addresses to pages. */
     struct supp_page_table supp_page_table;
+#endif
 
     /* Owned by devices/timer.c. */
     int64_t wake_me_at; /* Wake a thread in thread_status THREAD_BLOCKED when 0 < wake_me_at <= current timer tick */
