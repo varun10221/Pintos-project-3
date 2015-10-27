@@ -48,7 +48,7 @@ filesys_done (void)
 
 /* Creates a file named NAME with the given INITIAL_SIZE.
    Returns true if successful, false otherwise.
-   Fails if a file named NAME already exists,
+   Fails if an FS object named NAME already exists,
    or if internal memory allocation fails. */
 bool
 filesys_create (const char *name, off_t initial_size) 
@@ -82,6 +82,29 @@ filesys_open (const char *name)
   dir_close (dir);
 
   return file_open (inode);
+}
+
+/* Creates a dir named NAME.
+   Returns true if successful, false otherwise.
+   Fails if an FS object named NAME already exists,
+   or if internal memory allocation fails. */
+bool
+filesys_create_dir (const char *name) 
+{
+  /* TODO */
+  return false;
+}
+
+/* Opens the dir with the given NAME.
+   Returns the new dir if successful or a null pointer
+   otherwise.
+   Fails if no dir named NAME exists,
+   or if an internal memory allocation fails. */
+struct dir *
+filesys_open_dir (const char *name)
+{
+  /* TODO */
+  return NULL;
 }
 
 /* Deletes the file named NAME.

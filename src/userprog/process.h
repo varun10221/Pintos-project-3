@@ -44,6 +44,14 @@ struct child_process_info
   struct list_elem elem;
 };
 
+/* These are the types of fds a process can have open. */
+enum fd_type
+{
+  FD_FILE, /* This fd is for a file. */
+  FD_DIRECTORY /* This fd is for a directory. */
+};
+
+
 tid_t process_execute (const char *file_name);
 int process_wait (tid_t);
 void process_exit (void);
@@ -54,15 +62,11 @@ void process_set_exit_status (int exit_status);
 
 /* Functions for files. */
 int process_new_file (const char *file);
-struct file * process_fd_lookup (int fd);
+int process_new_dir (const char *dir);
+void * process_fd_lookup (int fd, enum fd_type);
+int process_fd_inumber (int fd);
 void process_fd_delete (int fd);
-void process_close_all_files (void);
-
-/* mmap support. */
-mapid_t process_mmap_add (struct mmap_info *);
-void process_mmap_remove (mapid_t);
-struct mmap_info * process_mmap_lookup (mapid_t);
-void process_mmap_remove_all (void);
+void process_close_all_fds (void);
 
 /* Virtual memory interaction. */
 void * process_observe_stack_address (void *);
@@ -74,6 +78,12 @@ void process_pin_page (struct page *);
 void process_unpin_page (struct page *);
 struct mmap_info * process_add_mapping (struct mmap_details *, void *, int);
 void process_delete_mapping (struct mmap_info *mmap_info);
+
+/* mmap support (part of virtual memory). */
+mapid_t process_mmap_add (struct mmap_info *);
+void process_mmap_remove (mapid_t);
+struct mmap_info * process_mmap_lookup (mapid_t);
+void process_mmap_remove_all (void);
 
 /* Syscall handling. */
 void * process_scratch_page_get (void);

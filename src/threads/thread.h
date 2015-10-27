@@ -132,7 +132,7 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     /* Owned by userprog/process.c. 
-       Maps fd's to struct file *s. */
+       Maps fd's to 'struct fd_entry *'s (defined in userprog/process.h). */
     struct vector fd_table;
     /* Owned by userprog/process.c. Used to keep the
        executable from being modified. */

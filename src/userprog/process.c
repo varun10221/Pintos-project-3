@@ -36,6 +36,18 @@ static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 bool load_args_onto_stack (void **esp, struct cl_args *args);
 
+/* Support for the filesys-themed syscalls. */
+
+/* Entries in a process's thread's fd_table. */
+struct fd_entry
+{
+  enum fd_type type; /* What type of fd is this? */
+  void *entry; /* Pointer to the in-memory representation of this fd. */
+};
+
+static void process_close_fd (void *, void *);
+static struct fd_entry * process_fd_lookup_raw (int);
+
 /* IPC between parent and child for syscall_{exec,wait,exit}. */
 
 /* Used by parent. */
@@ -536,7 +548,7 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  process_close_all_files ();
+  process_close_all_fds ();
   /* Not required, but keep user processes out of trouble if they happen to share locks. */
   thread_release_all_locks ();
 
@@ -911,7 +923,7 @@ ix_to_fd (id_t ix)
   return ix + N_RESERVED_FILENOS;
 }
 
-/* Open a new fd corresponding to this file. 
+/* Open a new fd corresponding to existing FILE. 
    Caller must hold filesys lock. 
 
    Returns the fd, or -1 on failure. */
@@ -923,21 +935,84 @@ process_new_file (const char *file)
   struct file *f = filesys_open (file);
   if (f == NULL)
     return -1;
-  return ix_to_fd (vector_add_elt (&thread_current ()->fd_table, f));
+  struct fd_entry *fde = (struct fd_entry *) malloc (sizeof(struct fd_entry));
+  if (fde == NULL)
+    return -1;
+  fde->type = FD_FILE;
+  fde->entry = f;
+  return ix_to_fd (vector_add_elt (&thread_current ()->fd_table, fde));
 }
 
-/* Return the 'struct file*' associated with this fd. 
+/* Open a new fd corresponding to existing DIR. 
+   Caller must hold filesys lock. 
 
-   Returns NULL if there is no such fd. */ 
-struct file * 
-process_fd_lookup (int fd)
+   Returns the fd, or -1 on failure. */
+int
+process_new_dir (const char *dir)
+{
+  ASSERT (dir != NULL);
+
+  struct dir *d = filesys_open_dir (dir);
+  if (d == NULL)
+    return -1;
+  struct fd_entry *fde = (struct fd_entry *) malloc (sizeof(struct fd_entry));
+  if (fde == NULL)
+    return -1;
+  fde->type = FD_DIRECTORY;
+  fde->entry = d;
+  return ix_to_fd (vector_add_elt (&thread_current ()->fd_table, fde));
+}
+
+/* Return the fd_entry entry associated with FD.
+   Returns NULL if there is no such FD or if the TYPE does not match. */ 
+void *
+process_fd_lookup (int fd, enum fd_type type)
 {
   if (fd < N_RESERVED_FILENOS)
     return NULL;
-  return (struct file *) vector_lookup (&thread_current ()->fd_table, fd_to_ix (fd));
+
+  struct fd_entry *fde = process_fd_lookup_raw (fd);
+  if (fde != NULL && fde->type == type)
+    return fde->entry;
+  else
+    return NULL;
+} 
+
+/* Return the inumber of the FS object associated with FD.
+   Returns -1 if FD is not an FS object. */ 
+int 
+process_fd_inumber (int fd)
+{
+  int inumber = -1;
+  struct fd_entry *fde = process_fd_lookup_raw (fd);
+  if (fde)
+  {
+    struct inode *inode = NULL;
+    switch (fde->type)
+    {
+      case FD_FILE:
+        inode = file_get_inode ((struct file *) fde->entry);
+        break;
+      case FD_DIRECTORY:
+        inode = dir_get_inode ((struct dir *) fde->entry);
+        break;
+      default:
+        NOT_REACHED ();
+      inumber = (int) inode_get_inumber (inode);
+    }
+  }
+  return inumber;
 }
 
-/* Close the file instance associated with this fd. 
+/* Return the fd_entry associated with FD, or NULL if no such FD. */
+static struct fd_entry *
+process_fd_lookup_raw (int fd)
+{
+  struct fd_entry *fde = vector_lookup (&thread_current ()->fd_table, fd_to_ix (fd));
+  return fde;
+}
+
+/* Close the fd_entry instance associated with this fd. 
    Caller must hold filesys lock. 
    If there is no such fd, does nothing. */
 void 
@@ -945,33 +1020,41 @@ process_fd_delete (int fd)
 {
   if (fd < N_RESERVED_FILENOS)
     return;
-  struct file *f = (struct file *) vector_delete_elt (&thread_current ()->fd_table, fd_to_ix (fd) );
-  if (f != NULL)
-    file_close (f);
+  struct fd_entry *fde = (struct fd_entry *) vector_delete_elt (&thread_current ()->fd_table, fd_to_ix (fd) );
+  process_close_fd (fde, NULL);
 }
 
-/* Close this file. For use with vector_foreach. 
-   Acquires and releases filesys_lock. */
+/* Close this fd. Frees associated memory. 
+   For use with vector_foreach. */
 static void
-process_close_file (void *elt, void *aux UNUSED)
+process_close_fd (void *elt, void *aux UNUSED)
 {
-  struct file *f = (struct file *) elt;
-  if (f == NULL)
-    return;
-
-  filesys_lock ();
-  file_close (f);
-  filesys_unlock ();
+  struct fd_entry *fde = (struct fd_entry *) elt;
+  if (fde != NULL)
+  {
+    switch (fde->type)
+    {
+      case FD_FILE:
+        file_close ((struct file *) fde->entry);
+        break;
+      case FD_DIRECTORY:
+        dir_close ((struct dir *) fde->entry);
+        break;
+      default:
+        NOT_REACHED ();
+    }
+    free (fde);
+  }
 }
 
 /* Close all open file handles and free the memory.
    Use when a process is exiting. */
 void 
-process_close_all_files (void)
+process_close_all_fds (void)
 {
   struct vector *vec = &thread_current ()->fd_table;
   /* Each call acquires and releases filesys_lock. */
-  vector_foreach (vec, process_close_file, NULL);
+  vector_foreach (vec, process_close_fd, NULL);
   vector_destroy (vec);
 }
 
