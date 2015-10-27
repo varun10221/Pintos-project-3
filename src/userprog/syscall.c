@@ -5,6 +5,7 @@
 #include <syscall-nr.h>
 #include <limits.h>
 #include <string.h>
+#include <stdlib.h>
 #include "userprog/stack.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
@@ -26,6 +27,9 @@ enum io_type
     IO_TYPE_READ, /* IO will read. */
     IO_TYPE_WRITE /* IO will write. */
   };
+
+/* For avoiding page faults when working with user-provided strings. */
+static void * copy_str_into_sp (const char *str);
 
 /* For testing user-provided addresses. */
 static bool maybe_valid_uaddr (const void *uaddr);
@@ -266,12 +270,9 @@ syscall_create (const char *file, unsigned initial_size)
     syscall_exit (-1);
     /* return false; */
 
-  /* Copy file into process's scratch page so that it will be safe from page fault. */
-  char *sp = (char *) process_scratch_page_get ();
-  ASSERT (PATH_MAX <= PGSIZE);
-  size_t len = strlcpy (sp, file, PGSIZE);
-  /* If too long, fail gracefully (a la ENAMETOOLONG). */
-  if (PATH_MAX < len+1) 
+  /* Copy name into process's scratch page so that it will be safe from page fault. */
+  char *sp = copy_str_into_sp (file);
+  if (!sp)
     return false;
 
   bool success = false;
@@ -288,12 +289,9 @@ syscall_remove (const char *file)
   if (file == NULL)
     return -1;
 
-  /* Copy file into process's scratch page so that it will be safe from page fault. */
-  char *sp = (char *) process_scratch_page_get ();
-  ASSERT (PATH_MAX <= PGSIZE);
-  size_t len = strlcpy (sp, file, PGSIZE);
-  /* If too long, fail gracefully (a la ENAMETOOLONG). */
-  if (PATH_MAX < len+1) 
+  /* Copy name into process's scratch page so that it will be safe from page fault. */
+  char *sp = copy_str_into_sp (file);
+  if (!sp)
     return false;
 
   bool success = false;
@@ -313,13 +311,10 @@ syscall_open (const char *file)
   if (file == NULL)
     return -1;
 
-  /* Copy file into process's scratch page so that it will be safe from page fault. */
-  char *sp = (char *) process_scratch_page_get ();
-  ASSERT (PATH_MAX <= PGSIZE);
-  size_t len = strlcpy (sp, file, PGSIZE);
-  /* If too long, fail gracefully (a la ENAMETOOLONG). */
-  if (PATH_MAX < len+1) 
-    return -1;
+  /* Copy name into process's scratch page so that it will be safe from page fault. */
+  char *sp = copy_str_into_sp (file);
+  if (!sp)
+    return false;
 
   filesys_lock ();
   int fd = process_new_file (sp);
@@ -646,21 +641,46 @@ syscall_readdir (int fd, char *name)
 static bool 
 syscall_isdir (int fd)
 {
-  /* TODO */
-  ASSERT (0 == 1);
+  struct dir *d = (struct dir *) process_fd_lookup (fd, FD_DIRECTORY);
+  if (d)
+    return true;
+  return false;
 }
 
 /* Returns the inode number of the inode associated with fd, 
-   which may represent an ordinary file or a directory. */
+   which may represent an ordinary file or a directory. 
+
+   Returns -1 if no such fd. */
 static int 
 syscall_inumber (int fd)
 {
-  /* TODO */
-  ASSERT (0 == 1);
+  return process_fd_inumber (fd);
 }
 
-
 /* Helper functions. */
+
+/* Copy STR into the process's stack page.
+   STR must not be NULL, though it can be an empty string. 
+
+   Returns a pointer to the copy in the stack page. The copy can
+     be accessed without the risk of a page fault.
+   If STR is too long to fit into the stack page (PGSIZE bytes),
+     returns NULL. */ 
+static void *
+copy_str_into_sp (const char *str)
+{
+  ASSERT (str != NULL);
+  ASSERT (PATH_MAX <= PGSIZE);
+  char *sp = (char *) process_scratch_page_get ();
+  ASSERT (sp != NULL);
+
+  size_t len = strlcpy (sp, str, PGSIZE);
+  /* If too long, fail gracefully (a la ENAMETOOLONG). */
+  if (PATH_MAX < len+1) 
+    return NULL;
+  return sp;
+}
+
 
 /* Returns true if UADDR is non-null and below kernel space. 
    UADDR may point to un-mapped user space. */
