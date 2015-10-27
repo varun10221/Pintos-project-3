@@ -16,6 +16,7 @@
 #include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/directory.h"
 #include "lib/user/syscall.h"
 #include "vm/page.h"
 
@@ -328,7 +329,7 @@ syscall_filesize (int fd)
 {
   int rc = -1;
   filesys_lock ();
-  struct file *f = process_fd_lookup (fd);
+  struct file *f = (struct file *) process_fd_lookup (fd, FD_FILE);
   if (f != NULL)
     rc = file_length (f);
   filesys_unlock ();
@@ -356,7 +357,8 @@ syscall_read (int fd, void *buffer, unsigned size)
   if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
-    f = process_fd_lookup (fd);
+    f = (struct file *) process_fd_lookup (fd, FD_FILE);
+
     if (f == NULL)
       /* We don't have this fd open. */
       return -1;
@@ -447,7 +449,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
   if (fd != STDOUT_FILENO)
   {
     /* Get the corresponding file. */
-    f = process_fd_lookup (fd);
+    f = (struct file *) process_fd_lookup (fd, FD_FILE);
     if (f == NULL)
       /* We don't have this fd open. */
       return -1;
@@ -516,7 +518,7 @@ static void
 syscall_seek (int fd, unsigned position)
 {
   filesys_lock ();
-  struct file *f = process_fd_lookup (fd);
+  struct file *f = (struct file *) process_fd_lookup (fd, FD_FILE);
   if (f != NULL)
     file_seek (f, position);
   filesys_unlock ();
@@ -531,7 +533,7 @@ syscall_tell (int fd)
   unsigned rc = 0;
 
   filesys_lock ();
-  struct file *f = process_fd_lookup (fd);
+  struct file *f = (struct file *) process_fd_lookup (fd, FD_FILE);
   if (f != NULL)
     rc = file_tell (f);
   filesys_unlock ();
@@ -560,7 +562,7 @@ syscall_mmap (int fd, void *addr)
   struct mmap_info *mmap_info = NULL;
   mapid_t mapping = -1;
 
-  f = process_fd_lookup (fd);
+  f = (struct file *) process_fd_lookup (fd, FD_FILE);
   if (f == NULL)
     goto CLEANUP_AND_ERROR;
 
@@ -608,19 +610,31 @@ syscall_munmap (mapid_t mapping)
 static bool 
 syscall_chdir (const char *dir)
 {
+  if (dir == NULL)
+    syscall_exit (-1);
+
+  /* Copy name into process's scratch page so that it will be safe from page fault. */
+  char *sp = copy_str_into_sp (dir);
+  if (!sp)
+    return false;
   /* TODO */
   ASSERT (0 == 1);
 }
 
 /* Creates the directory named dir, which may be relative or absolute. 
    Returns true if successful, false on failure. Fails if dir already exists or 
-     if any directory name in dir, besides the last, does not already exist. 
-   That is, mkdir("/a/b/c") succeeds only if "/a/b" already exists and "/a/b/c" does not. */
+     if any directory name in dir, besides the last, does not already exist. */
 static bool 
 syscall_mkdir (const char *dir)
 {
-  /* TODO */
-  ASSERT (0 == 1);
+  if (dir == NULL)
+    syscall_exit (-1);
+
+  /* Copy name into process's scratch page so that it will be safe from page fault. */
+  char *sp = copy_str_into_sp (dir);
+  if (!sp)
+    return false;
+  return filesys_create_dir (sp);
 }
 
 /* Reads a directory entry from file descriptor fd, which must represent a directory. 
@@ -632,8 +646,26 @@ syscall_mkdir (const char *dir)
 static bool 
 syscall_readdir (int fd, char *name)
 {
-  /* TODO */
-  ASSERT (0 == 1);
+  char *buf = process_scratch_page_get  ();
+  if (!buf)
+    return false;
+  struct dir *d = (struct dir *) process_fd_lookup (fd, FD_DIRECTORY);
+  if (d)
+  {
+    bool success = false;
+    do
+    {
+      memset (buf, 0, READDIR_MAX_LEN + 1); /* Don't leak previous file names. */
+      success = dir_readdir (d, buf);
+    } while (strcmp (".", buf) == 0 || strcmp ("..", buf) == 0); /* Skip . and .. */
+
+    if (success)
+      /* Copy the latest result from BUF into NAME. */
+      strlcpy (name, buf, MIN (READDIR_MAX_LEN + 1, PGSIZE));
+    return success;
+  }
+  else
+    return false;
 }
 
 /* Returns true if fd represents a directory, 
