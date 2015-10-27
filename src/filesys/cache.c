@@ -161,7 +161,7 @@ cache_init (struct block *backing_block)
   struct bdflush_args_s bdflush_args;
   sema_init (&bdflush_args.sema, 0);
   bdflush_args.flush_freq = 10; 
-  bdflush_tid = thread_create ("bdflush", PRI_DEFAULT, bdflush, &bdflush_args);
+  bdflush_tid = thread_create ("bdflushd", PRI_DEFAULT, bdflush, &bdflush_args);
   ASSERT (bdflush_tid != TID_ERROR);
 
   /* Create the readahead thread. */
@@ -172,7 +172,7 @@ cache_init (struct block *backing_block)
 
   struct semaphore readahead_started;
   sema_init (&readahead_started, 0);
-  readahead_tid = thread_create ("readahead", PRI_DEFAULT, readahead, &readahead_started);
+  readahead_tid = thread_create ("readaheadd", PRI_DEFAULT, readahead, &readahead_started);
   ASSERT (readahead_tid != TID_ERROR);
 
   /* Wait for bdflush to get started (otherwise the bdflush_args pointer could be invalid). */
