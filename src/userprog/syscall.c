@@ -19,7 +19,7 @@
 #include "vm/page.h"
 
 /* Size of tables. */
-#define N_SUPPORTED_SYSCALLS 15
+#define N_SUPPORTED_SYSCALLS 20
 
 enum io_type 
   {
@@ -48,7 +48,9 @@ static int syscall_nargs[N_SUPPORTED_SYSCALLS] =
 3 /* read */,   3 /*write */,
 2 /* seek */,   1 /* tell */,
 1 /* close */,  2 /* mmap */,
-1 /* munmap */
+1 /* munmap */, 1 /* chdir */,
+1 /* mkdir */,  2 /* readdir */,
+1 /* isdir */,  1 /* inumber */
 };
 
 static void syscall_handler (struct intr_frame *);
@@ -74,6 +76,11 @@ static unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
 static mapid_t syscall_mmap (int fd, void *addr);
 static void syscall_munmap (mapid_t mapping);
+static bool syscall_chdir (const char *dir);
+static bool syscall_mkdir (const char *dir);
+static bool syscall_readdir (int fd, char *name);
+static bool syscall_isdir (int fd);
+static int syscall_inumber (int fd);
 
 /* Handle the syscall contained in this stack frame.
    Any invalid pointers (stack pointer itself, or values
@@ -138,7 +145,7 @@ syscall_handler (struct intr_frame *f)
       f->eax = syscall_wait ((pid_t) args[0]);
       break;
     case SYS_CREATE:                 /* Create a file. */
-      /* TODO Is this the correct return value for f->eax ?*/
+      /* TODO Is this the correct return value for f->eax on a bool?*/
       f->eax = (syscall_create ((char *) args[0], (unsigned) args[1]) ? 1 : 0);
       break;
     case SYS_REMOVE:                 /* Delete a file. */
@@ -177,23 +184,34 @@ syscall_handler (struct intr_frame *f)
       f->eax = 0; /* void */
       break;
 
-    /* Un-implemented syscalls: drop through to the printf. */
     /* Project 4 only. */
     case SYS_CHDIR:                  /* Change the current directory. */
+      /* TODO Is this the correct return value for f->eax on a bool?*/
+      f->eax = (syscall_chdir ((const char *) args[0]) ? 1 : 0);
+      break;
     case SYS_MKDIR:                  /* Create a directory. */
+      /* TODO Is this the correct return value for f->eax on a bool?*/
+      f->eax = (syscall_mkdir ((const char *) args[0]) ? 1 : 0);
+      break;
     case SYS_READDIR:                /* Reads a directory entry. */
+      /* TODO Is this the correct return value for f->eax on a bool?*/
+      f->eax = (syscall_readdir ((int) args[0], (char *) args[1]) ? 1 : 0);
+      break;
     case SYS_ISDIR:                  /* Tests if a fd represents a directory. */
+      /* TODO Is this the correct return value for f->eax on a bool?*/
+      f->eax = (syscall_isdir ((int) args[0]) ? 1 : 0);
+      break;
     case SYS_INUMBER:                 /* Returns the inode number for a fd. */
+      f->eax = syscall_inumber ((int) args[0]); 
+      break;
 
+    /* Un-implemented syscalls: drop through to the printf. */
     default:
       printf ("Unsupported system call! vec %i esp %i\n", f->vec_no, *(int32_t *) f->esp);
   };  
 }
 
-/* Any user-provided addresses given to the syscall_* routines have
-   already been tested for correctness.
-
-   The use of an invalid fd produces undefined behavior. */
+/* Implementations of syscalls. */
 
 /* Terminates Pintos by calling shutdown_power_off(). */
 static void 
@@ -540,7 +558,8 @@ syscall_close (int fd)
  
    Returns a "mapping ID" that uniquely identifies the mapping within
    the process. Returns -1 on failure. */
-static mapid_t syscall_mmap (int fd, void *addr)
+static mapid_t 
+syscall_mmap (int fd, void *addr)
 {
   struct file *f = NULL;
   struct mmap_info *mmap_info = NULL;
@@ -576,7 +595,8 @@ static mapid_t syscall_mmap (int fd, void *addr)
 }
 
 /* Unmaps the mapping designated by MAPPING. */
-static void syscall_munmap (mapid_t mapping)
+static void 
+syscall_munmap (mapid_t mapping)
 {
   struct mmap_info *mmap_info = process_mmap_lookup (mapping);
 
@@ -587,6 +607,60 @@ static void syscall_munmap (mapid_t mapping)
   process_delete_mapping (mmap_info);
   process_mmap_remove (mapping);
 }
+
+/* Changes the current working directory of the process to dir, which may be relative or absolute. 
+   Returns true if successful, false on failure. */
+static bool 
+syscall_chdir (const char *dir)
+{
+  /* TODO */
+  ASSERT (0 == 1);
+}
+
+/* Creates the directory named dir, which may be relative or absolute. 
+   Returns true if successful, false on failure. Fails if dir already exists or 
+     if any directory name in dir, besides the last, does not already exist. 
+   That is, mkdir("/a/b/c") succeeds only if "/a/b" already exists and "/a/b/c" does not. */
+static bool 
+syscall_mkdir (const char *dir)
+{
+  /* TODO */
+  ASSERT (0 == 1);
+}
+
+/* Reads a directory entry from file descriptor fd, which must represent a directory. 
+   If successful, stores the null-terminated file name in name, which must have room 
+     for READDIR_MAX_LEN + 1 bytes, and returns true. 
+   If no entries are left in the directory, returns false.  
+ 
+   "." and ".." should not be returned by readdir. */
+static bool 
+syscall_readdir (int fd, char *name)
+{
+  /* TODO */
+  ASSERT (0 == 1);
+}
+
+/* Returns true if fd represents a directory, 
+   false if it represents an ordinary file. */
+static bool 
+syscall_isdir (int fd)
+{
+  /* TODO */
+  ASSERT (0 == 1);
+}
+
+/* Returns the inode number of the inode associated with fd, 
+   which may represent an ordinary file or a directory. */
+static int 
+syscall_inumber (int fd)
+{
+  /* TODO */
+  ASSERT (0 == 1);
+}
+
+
+/* Helper functions. */
 
 /* Returns true if UADDR is non-null and below kernel space. 
    UADDR may point to un-mapped user space. */
