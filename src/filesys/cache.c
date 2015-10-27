@@ -160,7 +160,7 @@ cache_init (struct block *backing_block)
   /* Create the bdflush thread. */
   struct bdflush_args_s bdflush_args;
   sema_init (&bdflush_args.sema, 0);
-  bdflush_args.flush_freq = 30;
+  bdflush_args.flush_freq = 10; 
   bdflush_tid = thread_create ("bdflush", PRI_DEFAULT, bdflush, &bdflush_args);
   ASSERT (bdflush_tid != TID_ERROR);
 
@@ -190,7 +190,8 @@ cache_init (struct block *backing_block)
 void 
 cache_destroy (void)
 {
-  /* TODO */
+  /* TODO This is not a great implementation, but at least we flush all the dirty data to disk on our way out! */
+  cache_flush ();
   buffer_cache_destroy ();
 }
 
@@ -571,15 +572,22 @@ cache_zero_block (struct cache_block *cb)
   return cb->contents;
 }
 
-/* Flush all dirty pages from the cache. */
+/* Flush all dirty blocks from the cache. */
 void 
 cache_flush (void)
 {
-  /* TODO Implement this. */
   int i;
   for (i = 0; i < CACHE_SIZE; i++)
   {
-
+    struct cache_block *cb = &buffer_cache.blocks[i];
+    /* Only flush dirty blocks. Optimistic search. */
+    if (cb->is_valid && cb->is_dirty)
+    {
+      lock_acquire (&cb->lock);
+      if (cb->is_valid && cb->is_dirty) 
+        cache_flush_block (cb);
+      lock_release (&cb->lock);
+    }
   }
 }
 
@@ -881,7 +889,7 @@ cache_self_test_thread (void *args)
   for (i = 0; i < 2*CACHE_SIZE; i++)
     cache_discard (999999999, CACHE_BLOCK_DATA);
 
-  /* Flush the cache (this is a no-op, as we haven't modified anything). */
+  /* Flush the cache (this should be a no-op, as we haven't modified anything). */
   cache_flush ();
 
   sema_up (is_done);
