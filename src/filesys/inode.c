@@ -225,6 +225,7 @@ inode_close (struct inode *inode)
       /* Deallocate blocks if removed. */
       if (inode->removed) 
         { 
+          /* TODO You are discarding the inode itself but not the data blocks or metadata blocks. */
           cache_discard (inode->sector, CACHE_BLOCK_INODE); 
           free_map_release (inode->sector, 1);
           free_map_release (inode->data.direct_blocks[0],
@@ -270,6 +271,7 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
         break;
      
       /* Reserve a cache block in buffer cache and save it . */
+      /* TODO 'false' means that you are going to READ, not write. */
       struct cache_block * cb = cache_get_block (sector_idx , CACHE_BLOCK_INODE , false);
       ASSERT (cb != NULL);    
 
@@ -279,14 +281,13 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
      
       /*copying contents on to buffer */
       memcpy (buffer + bytes_read , cache_src + sector_ofs , chunk_size);
+     /*release the access to the block */
+      cache_put_block (cb);
       
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
       bytes_read += chunk_size;
-  
-     /*release the access to the block */
-      cache_put_block (cb);
     }
   return bytes_read;
 }
@@ -326,19 +327,19 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       ASSERT (cb != NULL);
      
       /* cache dst to which contents will be written to */
+      /* TODO If we are writing a full sector, no need to read_block. Just zero_block. Otherwise you pay extra cost of reading disk for no reason. */
        uint8_t *cache_dst = cache_read_block (cb);
       
       /* Copying contents from buffer to cache */
         memcpy (cache_dst + sector_ofs, buffer + bytes_written, chunk_size);   
         cache_mark_block_dirty (cb);
+      /* Release the cache_block */
+      cache_put_block (cb);
      
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
       bytes_written += chunk_size;
-    
-      /* Release the cache_block */
-      cache_put_block (cb);
     }
 
   return bytes_written;
