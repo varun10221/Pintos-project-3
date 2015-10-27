@@ -115,7 +115,7 @@ do_format (void)
 void
 filesys_lock ()
 {
-  lock_acquire (&filesys_mutex);
+//  lock_acquire (&filesys_mutex);
 }
 
 /* P2: You should use synchronization to ensure that only one process 
@@ -123,5 +123,5 @@ filesys_lock ()
 void
 filesys_unlock ()
 {
-  lock_release (&filesys_mutex);
+  //lock_release (&filesys_mutex);
 }
