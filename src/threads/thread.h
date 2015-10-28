@@ -161,7 +161,9 @@ struct thread
     /* Used to map virtual addresses to pages. */
     struct supp_page_table supp_page_table;
 #endif
-
+    
+    /* Keeps track of Current Working Directory of the thread */
+    struct dir *current_directory;
     /* Owned by devices/timer.c. */
     int64_t wake_me_at; /* Wake a thread in thread_status THREAD_BLOCKED when 0 < wake_me_at <= current timer tick */
 
