@@ -105,8 +105,7 @@ inode_init (void)
    writes the new inode to sector SECTOR on the file system
    device.
    Returns true if successful.
-   Returns false if memory or disk allocation fails.
-   TODO:should we use buffer cache for inode create? */
+   Returns false if memory or disk allocation fails. */
 bool
 inode_create (block_sector_t sector, off_t length)
 {
@@ -127,15 +126,28 @@ inode_create (block_sector_t sector, off_t length)
       disk_inode->magic = INODE_MAGIC;
       if (free_map_allocate (sectors, &disk_inode->direct_blocks[0])) 
         {
-          block_write (fs_device, sector, disk_inode);
+          struct cache_block *cb = cache_get_block (sector, CACHE_BLOCK_INODE,
+  true); 
+          void *buf = cache_zero_block (cb);
+          memcpy (buf, disk_inode, INODE_SIZE);
+          cache_mark_block_dirty (cb);
+          cache_put_block (cb);
+
           if (sectors > 0) 
             {
               static char zeros[BLOCK_SECTOR_SIZE];
               size_t i;
               
               for (i = 0; i < sectors; i++) 
-                block_write (fs_device, disk_inode->direct_blocks[0]+ i, zeros);
-            }
+                {
+                  struct cache_block *cb = cache_get_block (disk_inode->
+                   direct_blocks[0] + i , CACHE_BLOCK_INODE, true);
+                   void *buf = cache_zero_block (cb);
+                   memcpy (buf,disk_inode->start+i, INODE_SIZE);
+                   cache_mark_block_dirty (cb);
+                   cache_put_block (cb);
+                } 
+            }   
           success = true; 
         } 
       free (disk_inode);
@@ -226,6 +238,8 @@ inode_close (struct inode *inode)
       if (inode->removed) 
         { 
           /* TODO You are discarding the inode itself but not the data blocks or metadata blocks. */
+       /* cache_discard (inode->sector, CACHE_BLOCK_DATA); 
+          cache_discard (inode->sector, CACHE_BLOCK_METADATA); */
           cache_discard (inode->sector, CACHE_BLOCK_INODE); 
           free_map_release (inode->sector, 1);
           free_map_release (inode->data.direct_blocks[0],
@@ -272,7 +286,7 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
      
       /* Reserve a cache block in buffer cache and save it . */
       /* TODO 'false' means that you are going to READ, not write. */
-      struct cache_block * cb = cache_get_block (sector_idx , CACHE_BLOCK_INODE , false);
+      struct cache_block * cb = cache_get_block (sector_idx , CACHE_BLOCK_INODE , true);
       ASSERT (cb != NULL);    
 
       /* cache source from which the date will be transferred 
@@ -328,7 +342,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
      
       /* cache dst to which contents will be written to */
       /* TODO If we are writing a full sector, no need to read_block. Just zero_block. Otherwise you pay extra cost of reading disk for no reason. */
-       uint8_t *cache_dst = cache_read_block (cb);
+       uint8_t *cache_dst = cache_zero_block (cb);
       
       /* Copying contents from buffer to cache */
         memcpy (cache_dst + sector_ofs, buffer + bytes_written, chunk_size);   
