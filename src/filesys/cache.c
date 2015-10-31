@@ -20,11 +20,11 @@
 
 #define CACHE_BLOCK_MAGIC 123456789
 
-enum cache_block_state
+/* Which one of the buffer_cache's lists is this cache block in? */
+enum cache_block_location
 {
-  CACHE_BLOCK_FREE,
-  CACHE_BLOCK_IN_USE,
-  CACHE_BLOCK_UNSAFE
+  CACHE_BLOCK_FREE_LIST,
+  CACHE_BLOCK_IN_USE_LIST
 };
 
 /* Locking order: 
@@ -36,7 +36,7 @@ struct cache_block
 {
   /* For debugging. */
   int id;
-  enum cache_block_state state;
+  enum cache_block_location location;
   int magic;
 
   block_sector_t block;         /* Block address */
@@ -88,25 +88,22 @@ struct cache_block
   struct condition cb_ready; /* These processes found the block in the hash table, but it's not safe yet (because someone else cache_get_block'd too and hasn't finished setting it up). They wait until it is safe. */
 
   void *contents;               /* Pointer to the contents of this block. */
+  bool has_cached_info;         /* Does this block contain cached information? (cb->contents can be NULL). This is equivalent to "is in buffer_cache's hash". */
 
   struct list_elem l_elem; /* For inclusion in one of the buffer_cache_table's lists. Protected by buffer_cache's lock. */
   struct hash_elem h_elem; /* For inclusion in the buffer_cache_table's lookup hash. Protected by buffer_cache's lock. */
 };
 
 /* A global buffer_cache_table stores cache_blocks. */
-/* TODO With CACHE_SIZE 1 and n_threads 30, cache_self_test_parallel deadlocks or asserts. */
 #define CACHE_SIZE 64
 struct buffer_cache_table
 {
-  /* Invariant: when lock is released, all CACHE_SIZE blocks must be in one of these three lists. 
+  /* Invariant: when lock is released, all CACHE_SIZE blocks must be in one of these two lists. 
      Use cache_all_blocks_accounted_for to test this. */
-  struct list free_blocks;        /* List of free cache blocks. */
-  struct list in_use_blocks;      /* List of in-use cache blocks, ordered with MRU at the head of the list. */
-  struct list unsafe_blocks;      /* List of blocks that are unsafe (being evicted or discarded). Still being processed, but could be expensive so
-                                      don't want to be holding lock. When done, re-lock the cache and signal no_usable_blocks. */
+  struct list free_blocks;        /* List of free cache blocks. These are blocks with no current users. They may have contents; if evicting then remove from hash. Never-used blocks are at the head and the block whose last user most recently put'd it is at the tail. These blocks are eligible for replacement. */
+  struct list in_use_blocks;      /* List of in-use cache blocks with one or more users. Blocks might have 0 users and be in state is_being_prepared. */
 
-  struct condition no_usable_blocks;     /* If no block is found that can be used or evicted (free or in-use), wait on this until signaled. 
-                                            This means that all blocks are being evicted at the moment. */
+  struct condition any_free_blocks; /* If no free blocks are found in cache_get_block, wait on this until ready. Could also PANIC. */
 
   struct cache_block blocks[CACHE_SIZE]; /* The cache_blocks we use. */
   struct hash addr_to_block;             /* Maps address to cache_block. */
@@ -188,10 +185,14 @@ struct bdflush_args_s
 
    The lock is used for atomic access to the queue.
    The sema is Up'd at the end of cache_readahead, 
-     and Down'd by the readahead thread (to wait for a new item). */
+     and Down'd by the readahead thread (to wait for a new item). 
+   The cond and the bool are protected by the lock, and are used
+     for synchronization with cache_discard. */
 static struct list readahead_queue;
 static struct lock readahead_queue_lock;
 static struct semaphore readahead_queue_items_available;
+static struct condition readahead_finished_item;
+static bool readahead_handling_item;
 
 /* Function definitions. */
 
@@ -213,10 +214,12 @@ cache_init (struct block *backing_block)
   ASSERT (bdflush_tid != TID_ERROR);
 
   /* Create the readahead thread. */
-  /* Initialize the readahead queue used by the readahead thread. */
+  /* Initialize the readahead fields used by the readahead thread and cache_discard. */
   list_init (&readahead_queue);
   lock_init (&readahead_queue_lock);
   sema_init (&readahead_queue_items_available, 0);
+  cond_init (&readahead_finished_item);
+  readahead_handling_item = false;
 
   struct semaphore readahead_started;
   sema_init (&readahead_started, 0);
@@ -254,9 +257,8 @@ buffer_cache_init (struct block *backing_block)
   lock_init (&buffer_cache.lock);
   list_init (&buffer_cache.free_blocks);
   list_init (&buffer_cache.in_use_blocks);
-  list_init (&buffer_cache.unsafe_blocks);
 
-  cond_init (&buffer_cache.no_usable_blocks);
+  cond_init (&buffer_cache.any_free_blocks);
   hash_init (&buffer_cache.addr_to_block, cache_block_hash_func, cache_block_less_func, NULL);
 
   /* Initialize each cache block. */
@@ -266,7 +268,7 @@ buffer_cache_init (struct block *backing_block)
     struct cache_block *cb = &buffer_cache.blocks[i];
     cache_block_init (cb);
     cb->id = i;
-    cb->state = CACHE_BLOCK_FREE;
+    cb->location = CACHE_BLOCK_FREE_LIST;
     list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
   }
 }
@@ -283,9 +285,7 @@ buffer_cache_destroy (void)
    Caller must hold lock on buffer cache. 
    Returns the locked victim. 
    
-   On return, victim is in buffer_cache's unsafe_blocks list,
-   and is thus safe from competing calls to buffer_cache_get_eviction_victim. 
-   This means that the caller should signal no_usable_blocks once it is done. */
+   On return, victim is in buffer_cache's in_use_blocks list. */
 static struct cache_block * 
 buffer_cache_get_eviction_victim (void)
 {
@@ -293,21 +293,17 @@ buffer_cache_get_eviction_victim (void)
 
   ASSERT (cache_locked_by_me ());
 
-  /* We must need to evict in order to get a block. */
-  ASSERT (list_empty (&buffer_cache.free_blocks));
-  /* There must be at least one in_use block -- an eviction candidate. */
-  ASSERT (!list_empty (&buffer_cache.in_use_blocks));
-
   struct cache_block *cb;
 
-  /* in_use_blocks is in MRU order, with MRU at front and LRU at back. */
-  cb = list_entry (list_pop_back (&buffer_cache.in_use_blocks), struct cache_block, l_elem);
-  ASSERT (cb->state == CACHE_BLOCK_IN_USE);
-  ASSERT (!cb->is_being_prepared); /* TODO DEBUG */
+  /* We evict from free_blocks. */
+  ASSERT (!list_empty (&buffer_cache.free_blocks));
+  /* Any "truly free" blocks (those that do not represent a once-used on-disk block) are at the head. */
+  cb = list_entry (list_pop_front (&buffer_cache.free_blocks), struct cache_block, l_elem);
+  ASSERT (cb->location == CACHE_BLOCK_FREE_LIST);
 
-  /* This block is unsafe. */
-  cb->state = CACHE_BLOCK_UNSAFE;
-  list_push_front (&buffer_cache.unsafe_blocks, &cb->l_elem);
+  /* This block is now in use. */
+  cb->location = CACHE_BLOCK_IN_USE_LIST;
+  list_push_front (&buffer_cache.in_use_blocks, &cb->l_elem);
 
   cache_block_lock (cb);
   return cb;
@@ -329,6 +325,7 @@ cache_block_init (struct cache_block *cb)
 
   cb->is_being_prepared = false;
   cb->contents = NULL;
+  cb->has_cached_info = false;
   /* 0 readers and no writer: Not in use. */
   cb->readers_count = 0;
   cb->is_writer = false;
@@ -360,8 +357,7 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
          and since we only cond_signal() the starving_process condition when the user type can change,
          when I am woken there should no longer be a conflict. */
     cond_wait (&cb->starving_process, &cb->lock);
-    /* TODO There should be no conflict now. Why does it conflict sometimes? CACHE_SIZE 64 n_threads 16. */
-    /* ASSERT (!cache_block_is_usage_conflict (cb, exclusive)); */
+    ASSERT (!cache_block_is_usage_conflict (cb, exclusive));
   }
 
   /* There must now be no conflict between my intended usage and the block status. */
@@ -412,35 +408,17 @@ cache_block_alloc_contents (struct cache_block *cb)
 }
 
 /* Evict the contents of unlocked CB so that another block can be stored in it. 
-   The caller should already have updated CB->BLOCK and CB->TYPE and placed CB in the hash, though
-     it should NOT have updated CB->ORIG_BLOCK and CB->ORIG_TYPE because we use those.
-     CB should be marked as is_being_prepared.
-
-     Once all waiters are gone, we unlock CB so that cache_get_block callers can
-     lock it and wait for it to be ready. The is_being_prepared flag is equivalent to a lock
-     on the block, as no new users will access the block until CB's cb_ready condition is signaled.
-
-   On return, CB is not in any of the buffer_cache lists. 
-     CB is not locked, but is_being_prepared is true. */
+   The caller should already have updated CB->BLOCK and CB->TYPE and placed CB in the hash 
+   under its "new name", though it should NOT have updated CB->ORIG_BLOCK and CB->ORIG_TYPE 
+   because we use those to flush contents if CB is dirty. 
+   
+   CB should be marked as is_being_prepared. */
 static void 
 cache_evict_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
   ASSERT (!cache_block_locked_by_me (cb));
   ASSERT (cb->is_being_prepared);
-
-  /* Wait until all other users are gone. */
-  cache_block_lock (cb);
-  while (cache_block_in_use (cb) || 
-         0 < cond_n_waiters (&cb->starving_process, &cb->lock) || 
-         0 < cond_n_waiters (&cb->polite_processes, &cb->lock))
-  {
-    cond_wait (&cb->polite_processes, &cb->lock);
-  }
-  ASSERT (!cache_block_in_use (cb));
-  cache_block_unlock (cb);
-
-  /* Now the only users are me and anyone waiting on is_being_prepared. */
 
   /* Evict. */
   if (cb->contents != NULL)
@@ -528,14 +506,11 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
     #endif
       cache_block_lock (cb);
 
-      /* If we're good to begin using this block, mark it as MRU.
-         Otherwise, the guy who is preparing it will put it at
-         at the beginning of in_use_blocks when he finishes preparing it.
-         We then consider all of the waiters as having requested it simultaneously. */
-      if (!cb->is_being_prepared) 
+      /* If this CB was on the free list, move it to the in_use list. */
+      if (cb->location == CACHE_BLOCK_FREE_LIST)
       {
-        ASSERT (cb->state == CACHE_BLOCK_IN_USE);
         list_remove (&cb->l_elem);
+        cb->location = CACHE_BLOCK_IN_USE_LIST;
         list_push_front (&buffer_cache.in_use_blocks, &cb->l_elem);
       }
 
@@ -565,56 +540,20 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
     }
     else if (!list_empty (&buffer_cache.free_blocks))
     {
-      /* No match, but there's a free block. Let's use it. */
-      cb = list_entry (list_pop_front (&buffer_cache.free_blocks), struct cache_block, l_elem);
-      ASSERT (cb->state == CACHE_BLOCK_FREE);
-
-    #ifdef CACHE_DEBUG
-      printf ("thread %i: found free block %i\n", tid, cb->id);
-    #endif
-
-      cache_block_lock (cb);
-
-      ASSERT (!cache_block_in_use (cb));
-      ASSERT (!cb->is_being_prepared);
-      
-      /* Mark its new use. */
-      cb->orig_block = address;
-      cb->orig_type = type;
-      cb->block = address;
-      cb->type = type;
-      cb->is_dirty = false;
-      cb->readers_count = 0;
-      cb->is_writer = false;
-      cb->is_being_prepared = false; /* Nothing to do. */
-      cb->contents = NULL;
-
-      /* Add to hash. */
-      hash_insert (&buffer_cache.addr_to_block, &cb->h_elem);
-      
-      /* This is the MRU block. */
-      cb->state = CACHE_BLOCK_IN_USE;
-      list_push_front (&buffer_cache.in_use_blocks, &cb->l_elem);
-
-      /* We hold CB lock (so it cannot be evicted) and it's in the hash, so safe to unlock cache. */
-      cache_unlock (); 
-      /* Ready to exit the loop. */
-    }
-    else if (!list_empty (&buffer_cache.in_use_blocks))
-    {
       cb = buffer_cache_get_eviction_victim ();
-      ASSERT (cb->state == CACHE_BLOCK_UNSAFE);
+      ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       ASSERT (cache_block_locked_by_me (cb));
       ASSERT (!cb->is_being_prepared);
-      /* CB is now in unsafe_blocks and thus safe from being other evicted. */ 
+      /* CB is now in in_use_blocks and thus safe from being evicted. */ 
 
     #ifdef CACHE_DEBUG
       printf ("thread %i: found a victim block: %i. Locking it.\n", tid, cb->id);
     #endif
 
       /* Remove "old" block from the cache's addr table so no new users
-         will be able to find it. */
-      hash_delete (&buffer_cache.addr_to_block, &cb->h_elem);   
+           will be able to find it. */
+      if (cb->has_cached_info)
+        hash_delete (&buffer_cache.addr_to_block, &cb->h_elem);   
 
       cb->is_being_prepared = true;
 
@@ -622,24 +561,27 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
       cb->block = address;
       cb->type = type;
       hash_insert (&buffer_cache.addr_to_block, &cb->h_elem);
+      cb->has_cached_info = true;
 
-      /* We have CB locked, it's marked is_being_prepared, and it's in unsafe_blocks.
+      /* We have CB locked, it's marked is_being_prepared, and it's in in_use_blocks.
          It is therefore safe from eviction, and any new users will wait. 
          We can drop the locks now, wait for current users to finish, and do IO. */
       cache_unlock ();
       cache_block_unlock (cb);
 
-      /* Wait for current users to finish, then evict old contents of CB. May require disk IO. */
+      /* Evict old contents of CB. May require disk IO. */
       cache_evict_block (cb);
 
-      /* Now CB has been evicted. Re-acquire locks, update the location,
-         and signal waiters. */
-      cache_lock ();
+      /* Now CB has been evicted. Re-acquire lock, mark ready, and signal waiters. */
       cache_block_lock (cb);
 
-      /* We must still be the only non-waiting user. */
+      /* No one else should have been here in our absence. */
+      ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       ASSERT (!cache_block_in_use (cb));
       ASSERT (cb->is_being_prepared);
+      /* There should be no one waiting on these conditions, because it has been is_being_prepared. */
+      ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
+      ASSERT (cond_n_waiters (&cb->polite_processes, &cb->lock) == 0);
 
       /* CB is now prepared: if its contents were being evicted, they are now gone. 
            It is not valid, though. */
@@ -650,22 +592,9 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
       cb->orig_block = address;
       cb->orig_type = type;
 
-      /* CB is now the MRU block. */
-      ASSERT (cb->state == CACHE_BLOCK_UNSAFE);
-      list_remove (&cb->l_elem); /* Remove from unsafe_blocks. */
-      cb->state = CACHE_BLOCK_IN_USE;
-      list_push_front (&buffer_cache.in_use_blocks, &cb->l_elem);
-
-      /* Since CB is not in in_use_blocks, there should be no one waiting on these conditions. */
-      ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
-      ASSERT (cond_n_waiters (&cb->polite_processes, &cb->lock) == 0);
       /* Signal anyone waiting on cb_ready. */
       cond_broadcast (&cb->cb_ready, &cb->lock);
 
-      /* This block is now usable. */
-      cond_signal (&buffer_cache.no_usable_blocks, &buffer_cache.lock);
-
-      cache_unlock ();
       /* We hold CB lock (so it cannot be evicted). */
       /* Ready to exit the loop. */
     }
@@ -674,17 +603,20 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
     #ifdef CACHE_DEBUG
       printf ("thread %i: found no blocks. Trying again.\n", tid);
     #endif
-      /* No match, no free blocks, and no in-use blocks. 
-         Wait until there is a usable block. */
-      cond_wait (&buffer_cache.no_usable_blocks, &buffer_cache.lock);
+      /* No match and no free blocks to evict.
+         Wait until there is a free block. 
+
+         During functional testing, this is indicative of a missing cache_put_block. 
+         During "real" use, it could happen if there are more than CACHE_SIZE concurrent users. */
+      /* TODO Revisit this. */
 #if 0
+      PANIC ("cache_get_block: no free blocks. This suggests a missing cache_put_block.\n");
+#else
+      cond_wait (&buffer_cache.any_free_blocks, &buffer_cache.lock);
       /* Try again, holding onto the buffer_cache.lock -- dropping it would be counterproductive.
          We've already released and re-acquired it once. */
       cb = NULL;
       need_to_lock_cache = false;
-#else
-      /* TODO experimenting. */
-      cache_unlock ();
 #endif
       continue;
     }
@@ -708,15 +640,17 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
 
 /* Release access to this cache block. 
    starving_process and polite_processes conditions are signaled appropriately.
-   Even if no users, leave the block around -- only eviction will
-     cause a block to leave the cache. 
-   Acquires and releases lock on CB but not lock on buffer cache. */
+
+   If we were the last user, CB is placed at the tail of the buffer_cache's free_list.
+   Acquires and releases lock on buffer cache and CB. */
 void 
 cache_put_block (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
 
+  cache_lock ();
   cache_block_lock (cb);
+
   ASSERT (cache_block_in_use (cb));
 
   bool any_other_users = true;
@@ -737,7 +671,8 @@ cache_put_block (struct cache_block *cb)
     NOT_REACHED ();
 
   /* If CB is now empty of users, signal starving_process if there is one,
-     otherwise broadcast to polite_processes. */
+     otherwise broadcast to polite_processes if there are any,
+     otherwise move onto free_list. */
   if (!any_other_users)
   {
 #ifdef CACHE_DEBUG
@@ -747,9 +682,21 @@ cache_put_block (struct cache_block *cb)
       cond_signal (&cb->starving_process, &cb->lock);
     else if (cond_n_waiters (&cb->polite_processes, &cb->lock))
       cond_broadcast (&cb->polite_processes, &cb->lock);
+    else
+    {
+      /* No current users and no processes, so put at the *back* of the free list.
+         Leave in the hash, though, so that new users can still find it. */
+      ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
+      list_remove (&cb->l_elem);
+      cb->location = CACHE_BLOCK_FREE_LIST;
+      list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
+      /* There's now a free block! */
+      cond_signal (&buffer_cache.any_free_blocks, &buffer_cache.lock);
+    }
   }
 
   cache_block_unlock (cb);
+  cache_unlock ();
 }
 
 /* (If CB is not valid, fill CB with data and) return pointer to the data. 
@@ -1042,7 +989,7 @@ cache_readahead (block_sector_t address, enum cache_block_type type)
       Now any re-use of A's blocks will result in a cache miss. 
 
    This should only be used when protected by filesystem-level synchronization.
-   HOWEVER There may have been an old readahead request pending. 
+   HOWEVER there may have been an old readahead request pending. 
    We remove any we can find, but if readahead has begun to process one already, 
      we have to dance around it.
 
@@ -1061,20 +1008,28 @@ cache_discard (block_sector_t address, enum cache_block_type type)
      no longer needs them fulfilled. */
   /* TODO Make this a function. */
   lock_acquire (&readahead_queue_lock);
-  struct list_elem *e;
-  for (e = list_begin (&readahead_queue); e != list_end (&readahead_queue); e = e->next)
+
+  struct list_elem *e = list_begin (&readahead_queue);
+  while (e != list_end (&readahead_queue))
   {
     readahead_request_t *req = list_entry (e, readahead_request_t, elem);
+    struct list_elem *e_next = list_next (e);
     if (req->address == address && req->type == type)
     {
-      /* Match, so remove this item from list and decrement the sema. */
-      struct list_elem *e_next = e->next;
       list_remove (e);
-      e = e_next;
       free (req);
       sema_down (&readahead_queue_items_available);
     }
+    e = e_next;
   }
+
+  /* If readahead is currently being performed, wait until it finishes. 
+     We don't want to race with a readahead on this block!
+
+     Since we deleted all other corresponding readahead requests, 
+       we only wait once. */
+  if (readahead_handling_item)
+    cond_wait (&readahead_finished_item, &readahead_queue_lock);
   lock_release (&readahead_queue_lock);
 
   /* Prepare to search hash. */
@@ -1090,55 +1045,43 @@ cache_discard (block_sector_t address, enum cache_block_type type)
   {
     /* Match found. We have work to do. */
     cb = hash_entry (match, struct cache_block, h_elem);
-    cache_block_lock (cb);
+    /* Don't bother locking CB: per contract no one else is using it or wants it. */
+    /* TODO Perhaps mark CB as being_discarded so that we can assert about it in other places? */
 
-    /* We may have raced with a pending readahead request. */
-    if (cb->is_being_prepared)
-    {
-      cache_unlock ();
-      while (cb->is_being_prepared)
-        cond_wait (&cb->cb_ready, &cb->lock);
-      /* Contract promises no one else wants this CB, so we can safely drop the CB lock to avoid violation of locking order. */
-      cache_block_unlock (cb);
-      cache_lock ();
-    }
-    else
-      /* Contract promises no one else wants this CB, so we can safely drop the CB lock anyway. */
-      cache_block_unlock (cb);
-
-    /* Now we hold cache_lock but not CB lock. */
-
-    /* Per contract, once readahead request has finished there are no new
-       requests. Make sure block has no users and is clean. */
+    ASSERT (cb->has_cached_info);
     ASSERT (!cache_block_in_use (cb));
 
     /* Remove from hash. Now no one in cache_get_block will find it. */
     hash_delete (&buffer_cache.addr_to_block, &cb->h_elem);   
+    cb->has_cached_info = false;
 
-    /* Remove from its current list (in_use_blocks) and place on the unsafe_blocks list. */
-    ASSERT (cb->state == CACHE_BLOCK_IN_USE);
-    list_remove (&cb->l_elem);
-    cb->state = CACHE_BLOCK_UNSAFE;
-    list_push_back (&buffer_cache.unsafe_blocks, &cb->l_elem);
+    /* Since we want to unlock the cache, move the CB to the IN_USE list until we flush it. */
+    if (cb->location != CACHE_BLOCK_IN_USE_LIST)
+    {
+      /* TODO A CB 'move' function that does this for us? */
+      list_remove (&cb->l_elem);
+      cb->location = CACHE_BLOCK_IN_USE_LIST;
+      list_push_back (&buffer_cache.in_use_blocks, &cb->l_elem);
+    }
 
-    /* We can unlock the buffer cache while we flush the block. */
     cache_unlock ();
 
-    if (cb->is_dirty)
-      cache_flush_block (cb);
+    /* Flush. */
     if (cb->contents != NULL)
     {
+      if (cb->is_dirty)
+        cache_flush_block (cb);
       free (cb->contents);
       cb->contents = NULL;
     }
 
-    /* Now this CB is free, so we can update the buffer cache. */
+    /* Now this CB is "truly free", so put at the *front* of the free list. */
     cache_lock ();
-    ASSERT (cb->state == CACHE_BLOCK_UNSAFE);
-    list_remove (&cb->l_elem); /* Remove from unsafe_blocks. */
-    cb->state = CACHE_BLOCK_FREE;
-    list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
-    cond_signal (&buffer_cache.no_usable_blocks, &buffer_cache.lock);
+    ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
+    list_remove (&cb->l_elem);
+    cb->location = CACHE_BLOCK_FREE_LIST;
+    list_push_front (&buffer_cache.free_blocks, &cb->l_elem);
+    cond_signal (&buffer_cache.any_free_blocks, &buffer_cache.lock);
     cache_unlock ();
   }
   else
@@ -1209,7 +1152,7 @@ cache_unlock (void)
 static bool 
 cache_all_blocks_accounted_for (void)
 {
-  size_t n_blocks = list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks) + list_size (&buffer_cache.unsafe_blocks);
+  size_t n_blocks = list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks); 
   return (n_blocks == CACHE_SIZE);
 }
 
@@ -1253,6 +1196,7 @@ readahead (void *arg)
 
     /* Get the readahead request. */
     lock_acquire (&readahead_queue_lock);
+    readahead_handling_item = true;
     ASSERT (!list_empty (&readahead_queue));
     readahead_request_t *req = list_entry (list_pop_front (&readahead_queue), readahead_request_t, elem);
     lock_release (&readahead_queue_lock);
@@ -1271,6 +1215,13 @@ readahead (void *arg)
     cache_put_block (cb);
 
     free (req);
+
+    /* Tell anyone who was listening in cache_discard that we are done handling
+       this request. */
+    lock_acquire (&readahead_queue_lock);
+    readahead_handling_item = false;
+    cond_broadcast (&readahead_finished_item, &readahead_queue_lock);
+    lock_release (&readahead_queue_lock);
   }
 
 }
@@ -1317,8 +1268,10 @@ cache_self_test_thread (void *args)
   cache_put_block (cb);
 
   /* Get a random block with random exclusive value. */
-  //int n_rand_iters = MAX(10*CACHE_SIZE, 500); /* TODO */
-  int n_rand_iters = 200;
+  int n_rand_iters;
+  //n_rand_iters = MAX(10*CACHE_SIZE, 500); /* TODO */
+  //n_rand_iters = 200;
+  n_rand_iters = 50;
   for (i = 0; i < n_rand_iters; i++)
   {
     int block = random_ulong () % (2*CACHE_SIZE);
@@ -1404,10 +1357,12 @@ cache_self_test_parallel (void)
 
   /* Discard all to avoid discomfiting anything after us. */
   /* This will compete with readahead thread, which is fun. */
+  printf ("cache_self_test_parallel: Discarding all (compete with readahead)\n");
   cache_discard_all ();
   /* But make sure the cache is really empty before we return. */
   while (!list_empty (&readahead_queue))
     thread_yield ();
+  printf ("cache_self_test_parallel: Discarding all (cleanup)\n");
   cache_discard_all ();
   printf ("cache_self_test_parallel: Returning. Cache is empty.\n");
 }
