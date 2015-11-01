@@ -88,5 +88,5 @@ void process_mmap_remove_all (void);
 /* Syscall handling. */
 void * process_scratch_page_get (void);
 void process_scratch_page_free (void);
-
+bool process_chdir (const char *);
 #endif /* userprog/process.h */

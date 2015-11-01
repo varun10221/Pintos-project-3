@@ -13,6 +13,7 @@
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "filesys/directory.h"
 #include "filesys/off_t.h"
 #include "threads/flags.h"
 #include "threads/init.h"
@@ -1264,3 +1265,18 @@ process_scratch_page_free (void)
   if (t->scratch_page != NULL)
     free (t->scratch_page);
 }
+
+
+/* Change the current working directory of the process 
+   to directory represented by the path 'name' */
+bool
+process_chdir (const char *name)
+{
+  struct dir *dir = dir_find_dir_from_path (dir);
+  ASSERT (dir != NULL);
+  struct thread * t = thread_current ();
+  dir_close (t->current_dir);
+  t->current_dir = dir;
+  return true;
+}
+
