@@ -84,6 +84,7 @@ struct cache_block
   bool is_being_prepared;       
 
   struct condition starving_process;  /* A process that would like to use the block, but cannot due to a conflicting use. */
+  bool is_starving_process;           /* A starving process may not run immediately after being signal'd. This variable keeps others from beating him to the lock. */
   struct condition polite_processes;  /* If there is a waiter on the starving_process condition, other processes queue up on this condition variable to give the starving process a turn. */
   struct condition cb_ready; /* These processes found the block in the hash table, but it's not safe yet (because someone else cache_get_block'd too and hasn't finished setting it up). They wait until it is safe. */
 
@@ -320,6 +321,7 @@ cache_block_init (struct cache_block *cb)
 
   lock_init (&cb->lock);
   cond_init (&cb->starving_process);
+  cb->is_starving_process = false;
   cond_init (&cb->polite_processes);
   cond_init (&cb->cb_ready);
 
@@ -343,21 +345,24 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
   ASSERT (!cache_locked_by_me ());
 
   ASSERT (!cb->is_being_prepared);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
-  while (0 < cond_n_waiters (&cb->starving_process, &cb->lock))
+  while (cb->is_starving_process)
     /* While there is a starving process, wait politely. */
     cond_wait (&cb->polite_processes, &cb->lock);
   ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
 
   /* No starving process. Graduate to being the starving process if conflict. */
-  while (cache_block_is_usage_conflict (cb, exclusive))
+  if (cache_block_is_usage_conflict (cb, exclusive))
   {
-    /* While there is a conflict, wait as the starving process. 
-       Since only one process can ever become the starving process at a time,
-         and since we only cond_signal() the starving_process condition when the user type can change,
-         when I am woken there should no longer be a conflict. */
+    /* If there is a conflict, wait as the starving process. 
+       1. Only one process can become the starving process at a time,
+       2. We only cond_signal() the starving_process condition when the usage can change.
+       3. Until the starving process wakes up, everyone else waits on polite_processes.
+       Consequently, when I am woken there should no longer be a conflict. */
+    cb->is_starving_process = true;
     cond_wait (&cb->starving_process, &cb->lock);
-    ASSERT (!cache_block_is_usage_conflict (cb, exclusive));
+    cb->is_starving_process = false;
   }
 
   /* There must now be no conflict between my intended usage and the block status. */
@@ -652,6 +657,7 @@ cache_put_block (struct cache_block *cb)
   cache_block_lock (cb);
 
   ASSERT (cache_block_in_use (cb));
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   bool any_other_users = true;
   /* If there's a writer, that's me and I'm done. */
@@ -675,16 +681,13 @@ cache_put_block (struct cache_block *cb)
      otherwise move onto free_list. */
   if (!any_other_users)
   {
-#ifdef CACHE_DEBUG
-    ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) <= 1);
-#endif
-    if (cond_n_waiters (&cb->starving_process, &cb->lock))
+    if (cb->is_starving_process)
       cond_signal (&cb->starving_process, &cb->lock);
     else if (cond_n_waiters (&cb->polite_processes, &cb->lock))
       cond_broadcast (&cb->polite_processes, &cb->lock);
     else
     {
-      /* No current users and no processes, so put at the *back* of the free list.
+      /* No current or pending processes, so put at the *back* of the free list.
          Leave in the hash, though, so that new users can still find it. */
       ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       list_remove (&cb->l_elem);
@@ -1075,6 +1078,8 @@ cache_discard (block_sector_t address, enum cache_block_type type)
       cb->contents = NULL;
     }
 
+    /* Check for race conditions -- violation of contract. */
+    ASSERT (!cache_block_in_use (cb));
     /* Now this CB is "truly free", so put at the *front* of the free list. */
     cache_lock ();
     ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
