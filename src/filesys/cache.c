@@ -450,7 +450,7 @@ cache_flush_block (struct cache_block *cb)
   for (i = 0; i < n_sectors; i++)
   {
     size_t rel_offset = i*BLOCK_SECTOR_SIZE;
-    block_write (buffer_cache.backing_block, cb->orig_block + rel_offset, cb->contents + rel_offset);
+    block_write (buffer_cache.backing_block, cb->orig_block + i, cb->contents + rel_offset);
   }
 
   cache_mark_block_clean (cb);
@@ -729,7 +729,7 @@ cache_read_block (struct cache_block *cb)
     for (i = 0; i < n_sectors; i++)
     {
       rel_offset = i*BLOCK_SECTOR_SIZE;
-      block_read (buffer_cache.backing_block, cb->block + rel_offset, cb->contents + rel_offset);
+      block_read (buffer_cache.backing_block, cb->block + i, cb->contents + rel_offset);
     }
   }
 
