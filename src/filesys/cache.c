@@ -826,7 +826,7 @@ cache_block_set_hash (struct cache_block *cb, block_sector_t address, enum cache
 
 
 /* For use with buffer_cache.addr_to_block. 
-   Hash is the hash of the CB's block field. 
+   Hash is the hash of the CB's block and type fields. 
    Keep in sync with cache_block_set_hash. */ 
 static unsigned 
 cache_block_hash_func (const struct hash_elem *cb_elem, void *aux UNUSED)
@@ -835,7 +835,7 @@ cache_block_hash_func (const struct hash_elem *cb_elem, void *aux UNUSED)
   struct cache_block *cb = hash_entry (cb_elem, struct cache_block, h_elem);
   ASSERT (cb != NULL);
 
-  return hash_bytes (&cb->block, sizeof(block_sector_t));
+  return hash_bytes (&cb->block, sizeof(block_sector_t)) ^ hash_int (cb->type);
 }
 
 /* For use with buffer_cache.addr_to_block. 
