@@ -8,6 +8,7 @@
 #include "filesys/directory.h"
 #include "filesys/cache.h"
 #include "threads/synch.h"
+#include "threads/thread.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
@@ -15,6 +16,9 @@ struct block *fs_device;
 static void do_format (void);
 
 static struct lock filesys_mutex;
+
+/* Some Internal functions */
+struct dir * dir_retrieve_absolute_path (const char *);
 
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
@@ -84,7 +88,7 @@ filesys_open (const char *name)
   return file_open (inode);
 }
 
-/* Creates a dir named NAME.
+/* Creates a dir named NAME, with initial size 0
    Returns true if successful, false otherwise.
    Fails if an FS object named NAME already exists,
    or if internal memory allocation fails. */
@@ -92,7 +96,51 @@ bool
 filesys_create_dir (const char *name) 
 {
   /* TODO */
-  return false;
+ block_sector_t inode_sector = 0;
+ char *dir_name = dir_extract_directory_name (name);
+ struct dir *dir = dir_find_dir_from_path ();
+ int initial_size = 0;
+ bool success;
+ /* Check if . or .. is passed to create directory, print an error
+    message if true */
+ if (strcmp (dir_name, ".") != 0 && strcmp (dir_name, ".") != 0)
+     { 
+      bool success = (dir != NULL
+                  && free_map_allocate (1, &inode_sector)
+                  && inode_create (inode_sector, initial_size)
+                  && dir_add (dir, dir_name, inode_sector));
+      
+      if (!success && inode_sector != 0)
+        free_map_release (inode_sector, 1);
+      /* Create the link to parent_directory and to itself */
+      char name [2] = ".";
+      char *path = name;
+      filesys_create_dir (path);
+    
+      char name_parent [3] = "..";
+      char *path_parent = name_parent;
+      filesys_create_dir (path_parent);
+     } 
+  else
+     {
+       if(strcmp (dir_name,".") == 0)
+         {
+          struct thread * t = thread_current ();
+          struct dir * dir = t->current_dir;
+          inode_sector = dir_get_inode (dir);
+          dir_add (dir, dir_name, inode_sector);
+         }
+       else if (strcmp (dir_name,"..") == 0)
+         {
+           struct thread * t = thread_current ();
+           struct dir *dir = dir_retrieve_parent_dir (t->current_dir);
+          inode_sector = dir_get_inode (dir);
+          dir_add (dir, dir_name, inode_sector);
+         }
+      }
+  free (dir_name);
+  dir_close (dir);
+  return success;
 }
 
 /* Opens the dir with the given NAME.
@@ -120,7 +168,8 @@ filesys_remove (const char *name)
 
   return success;
 }
-
+
+
 /* Formats the file system. */
 static void
 do_format (void)
@@ -148,3 +197,7 @@ filesys_unlock ()
 {
   //lock_release (&filesys_mutex);
 }
+
+
+
+   
