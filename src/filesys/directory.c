@@ -5,12 +5,14 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "threads/thread.h"
 
 /* A directory. */
 struct dir 
   {
     struct inode *inode;                /* Backing store. */
     off_t pos;                          /* Current position. */
+    struct dir *parent_dir;
   };
 
 /* A single directory entry. */
@@ -233,4 +235,131 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
         } 
     }
   return false;
+}
+
+
+ 
+/* Directory is the last directory in the path
+   Accepts a char * (absolute / relative address and outputs
+   another char * (directory name ) */
+char *
+dir_extract_directory_name (char *path)
+{
+  if (path == NULL)
+    return path;
+  
+  /* No. of characters in path */
+  int path_length = strlen (path);
+  char path_buf [path_length];
+  strlcpy (path_buf, path, path_length +1);
+
+  /* Now split the path based on  '/' */
+   char * token , *save_ptr , *temp;
+  /* TODO: should replace with a while, will make more sense */
+   for (token = strtok_r (path_buf, "/", &save_ptr); token != NULL;
+        token = strtok_r (NULL, "/", &save_ptr))
+        {    
+         temp = token;
+        }
+
+   return temp;
+}
+
+
+/* Finds the directory from the name (path)
+ *    and returns a pointer to it 
+ *       TODO: synchronization yet to be handled */
+
+struct dir *
+dir_find_dir_from_path (const char *name )
+{
+ /* Return NULL if name is NULL */
+ if (name == NULL) 
+   return NULL;
+
+ /* Return current directory if '.' */
+ if (name == ".")
+   return thread_current()->current_dir;
+
+ /* TODO : check if we need path_buf variable,if yes allocate it thru malloc */
+ struct thread *t = thread_current ();
+ int name_length = strlen (name);
+ char *path_buf;
+ path_buf = (char*) malloc (name_length * sizeof(char));
+ 
+ /* Copy the input name/path in to path_buf */
+ memcpy (path_buf, name, name_length +1);
+ 
+ if (strcmp (path_buf, "..") == 0)
+      return dir_retrieve_parent_directory (t->current_dir);
+
+ else if (strcmp (path_buf, "/") == 0)
+      return dir_open_root ();
+
+ char *token, *save_ptr;
+ char *next_token;
+ 
+ /* Tokenize the string with '/' to 
+ *     extract the first portion of path */
+ token = strtok_r (path_buf, "/", &save_ptr);
+ next_token = NULL;
+ 
+ struct dir *dir;
+ 
+ /* Check if path begins with '/' (absolute path) */
+ if (path_buf [0] == '/')
+     dir = dir_open_root ();
+ 
+ /* If the path is not absolute , then it must be relative */
+ else dir = dir_reopen (t->current_dir);
+  
+ if (token != NULL)
+     next_token = strtok_r (path_buf, "/", &save_ptr);
+ 
+ /* Directory traversal */
+ while (next_token) /* Fails if next_token becomes null */
+  {
+    struct inode *inode;   
+    /* TODO : Use a directory lookup to find files */
+    
+    /* Look up for the directory */
+    if (! dir_lookup (dir, token, &inode))    
+        return NULL;
+    
+    if (inode_is_directory (inode))
+       {
+          dir_close (dir);
+          dir = dir_open (inode);
+       }
+    else inode_close (inode); /* Directory is found */    
+ 
+    token = next_token;
+    next_token = strtok_r (NULL, "/", &save_ptr);  
+  }
+ /* Found the required directory */
+ return dir; 
+}
+
+
+/* Returns the Parent directory of the given dir,
+ *    returns NULL in case of no parent (root) */
+struct dir *
+dir_retrieve_parent_directory (struct dir *dir)
+{
+  
+  return dir->parent_dir;
+
+}
+  
+/* Adds a parent directory to the exisiting struct dir */
+void 
+dir_add_parent_dir (struct dir *parent_dir)
+{
+  if (parent_dir == NULL)
+      return;
+  
+  struct thread *t = thread_current ();
+  struct dir *dir = t->current_dir;
+  dir->parent_dir = parent_dir;
+ 
 }
