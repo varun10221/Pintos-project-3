@@ -138,6 +138,7 @@ filesys_create_dir (const char *name)
           dir_add (dir, dir_name, inode_sector);
          }
       }
+  
   free (dir_name);
   dir_close (dir);
   return success;
