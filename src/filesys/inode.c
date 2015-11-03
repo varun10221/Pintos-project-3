@@ -46,6 +46,7 @@ struct inode_disk
   uint32_t indirect_1_blocks [INODE_N_INDIRECT_1_BLOCKS]; /* Each is the address of a block of direct blocks. */
   uint32_t indirect_2_blocks [INODE_N_INDIRECT_2_BLOCKS]; /* Each is the address of a block of indirect_1 blocks. */
   uint32_t indirect_3_blocks [INODE_N_INDIRECT_3_BLOCKS]; /* Each is the address of a block of indirect_2 blocks. */
+  bool is_directory; /* TODO: check inode size */
 };
 
 /* On-disk indirect block.
@@ -74,6 +75,7 @@ struct inode
     bool removed;                       /* True if deleted, false otherwise. */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     struct inode_disk data;             /* Inode content. */
+    bool is_directory;                  /* true for directory, false for file */
   };
 
 /* Returns the block device sector that contains byte offset POS
@@ -143,7 +145,6 @@ inode_create (block_sector_t sector, off_t length)
                   struct cache_block *cb = cache_get_block (disk_inode->
                    direct_blocks[0] + i , CACHE_BLOCK_INODE, true);
                    void *buf = cache_zero_block (cb);
-                   memcpy (buf,disk_inode->start+i, INODE_SIZE);
                    cache_mark_block_dirty (cb);
                    cache_put_block (cb);
                 } 
@@ -384,4 +385,19 @@ off_t
 inode_length (const struct inode *inode)
 {
   return inode->data.length;
+}
+
+/* Returns if the structure referenced by the inode is directory or not */
+bool
+inode_is_directory (struct inode *inode)
+{
+  if (inode == NULL)
+    return false;
+  else
+     {
+       if(inode->is_directory)
+          return true;
+       else return false;
+      }
+
 }
