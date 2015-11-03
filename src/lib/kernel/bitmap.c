@@ -340,6 +340,9 @@ bitmap_file_size (const struct bitmap *b)
 bool
 bitmap_read (struct bitmap *b, struct file *file) 
 {
+  ASSERT (b != NULL);
+  ASSERT (file != NULL);
+
   bool success = true;
   if (b->bit_cnt > 0) 
     {
@@ -355,6 +358,9 @@ bitmap_read (struct bitmap *b, struct file *file)
 bool
 bitmap_write (const struct bitmap *b, struct file *file)
 {
+  ASSERT (b != NULL);
+  ASSERT (file != NULL);
+
   off_t size = byte_cnt (b->bit_cnt);
   return file_write_at (file, b->bits, size, 0) == size;
 }
