@@ -42,6 +42,9 @@ static bool pop_int32_t_from_user_stack (int32_t *dest, int32_t **stack);
 
 static int get_user (const uint8_t *uaddr);
 
+/* For converting a path to standard form */
+static char * convert_string_to_std_form (const char *);
+
 /* Number of args for each syscall.
    Table is indexed by SYSCALL_* value from lib/syscall-nr.h */
 static int syscall_nargs[N_SUPPORTED_SYSCALLS] =
@@ -612,13 +615,20 @@ syscall_chdir (const char *dir)
 {
   if (dir == NULL)
     syscall_exit (-1);
-
+ 
+  char *temp_path;
+  temp_path = malloc ((strlen (dir) + 1) * sizeof (char));
+  temp_path = convert_string_to_std_form (dir);
+ 
+  bool success;
   /* Copy name into process's scratch page so that it will be safe from page fault. */
-  char *sp = copy_str_into_sp (dir);
+  char *sp = copy_str_into_sp (temp_path);
   if (!sp)
     return false;
-  /* TODO */
-  ASSERT (0 == 1);
+
+  success = process_chdir (sp);
+  return success;
+  
 }
 
 /* Creates the directory named dir, which may be relative or absolute. 
@@ -780,6 +790,42 @@ get_user (const uint8_t *uaddr)
        : "=&a" (result) : "m" (*uaddr));
   return result;
 }
+
+
+/* Convert the path to a standard form by replacing multiple '/' (if any) 
+  to single */  
+static char *
+convert_string_to_std_form (const char *path)
+{
+  int length = strlen (path) + 1;
+  char *a;
+  a = (char*) malloc (length * sizeof (char));
+  int i = 0;
+  char previous_char;
+  while (i <= length && path[length] != '\0')
+    {
+        if ( i == 0)
+         { a[i] = path[i];
+           previous_char = a[i];
+         }
+        
+        if (previous_char == '/' && path [i] =='/' )
+           {
+             /* Need to refactor code in a better way */
+           } 
+        else
+           {
+             a[i] = path[i];
+             previous_char = a[i];
+           }
+        i++;
+    }
+  /* check if the final char in a is null terminator , else add one */
+  if(a[i] !='\0')
+    a[i] = '\0';
+  return a; 
+}
+
 
 /* Human-readable syscall. Useful for debugging syscall_handler. */
 static char *

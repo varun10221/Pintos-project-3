@@ -1364,3 +1364,12 @@ inode_set_hash (struct inode *ino, block_sector_t sector)
   memset (ino, 0, sizeof(struct inode));
   ino->sector = sector;
 }
+
+/* Returns if INODE is a directory. */
+bool
+inode_is_directory (const struct inode *inode)
+{
+  ASSERT (inode != NULL);
+  enum inode_type type = inode_get_type (inode);
+  return (type == INODE_DIRECTORY);
+}
