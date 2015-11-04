@@ -71,6 +71,29 @@ struct cache_block
        - if there is a process waiting on starving_process, it signals that condition.
        - else it broadcasts on the polite_processes condition variable, and lets those waiters "fight it out".
 
+     TODO This design can result in starvation, since there is no guarantee that every process will
+       eventually become the starving process. Broadcast doesn't guarantee FIFO order the way signal does.
+       Time permitting, a superior approach might be:
+         cond for waiting readers
+         cond for waiting writers
+         last_signaled flag for 'last type signaled'
+
+         When a CB has no users:
+           if last_signaled == readers
+             if writers
+               signal the first waiting writer
+               last_signaled = writers
+             else
+               last_signaled = reader
+
+           if last_signaled == writer
+             if readers
+               broadcast the readers
+               last_signaled = readers
+
+           This still doesn't get around the possibility of priority-based starvation in the condition variable.
+           However, cond_signal is priority-based FIFO, so this is "the best we can do".
+
      To evict a block: Remove the block from the hash (so no new processes can use it), then wait until 
        there are no active users and no pending users. Then modify block as desired.
 
