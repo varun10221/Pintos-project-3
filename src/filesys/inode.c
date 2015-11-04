@@ -360,15 +360,15 @@ inode_lookup_block_info (struct io_info *io_info, struct block_info *block_info)
   struct inode *inode = io_info->inode;
   ASSERT (inode != NULL);
 
-  int data_blocksize = inode_get_direct_block_size (inode); 
+  int direct_block_size = inode_get_direct_block_size (inode); 
   if (io_info->write)
   {
     /* Ensure the write does not cross a block boundary. */
-    int max_size = data_blocksize;
-    off_t mod = io_info->offset % data_blocksize;
+    int max_size = direct_block_size;
+    off_t mod = io_info->offset % direct_block_size;
     if (mod) 
       /* Non-aligned write. Only go up to the end of this block. */
-      max_size = data_blocksize - mod;
+      max_size = direct_block_size - mod;
     ASSERT (io_info->size <= max_size);
   }
 
@@ -1228,8 +1228,8 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size, off_t offs
   while (size > 0) 
   {
     io_info.offset = offset;
-    io_info.size = size;
     /* Chunk IO requests to avoid growing too much at once. */
+    io_info.size = blocksize;
     off_t mod = io_info.offset % blocksize;
     if (mod)
       /* Non-aligned write. Only go up to the end of this block. */
