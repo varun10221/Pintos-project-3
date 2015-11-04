@@ -14,6 +14,7 @@ struct dir
     struct inode *inode;                /* Backing store. */
     off_t pos;                          /* Current position. */
     struct dir *parent_dir;             /* Parent dir to current_ dir */
+    struct lock dir_lock [4];           /* Dir lock */
   };
 
 /* A single directory entry. */
@@ -23,6 +24,13 @@ struct dir_entry
     char name[NAME_MAX + 1];            /* Null terminated file name. */
     bool in_use;                        /* In use or free? */
   };
+
+
+/* Internal directory functions */
+static int dir_hash_lock_acquire (struct dir *,const char *);
+static void dir_hash_lock_release (struct dir *, int);
+static int dir_lock_compute_hash_number (const char *);
+
 
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
@@ -42,14 +50,21 @@ dir_open (struct inode *inode)
     {
       dir->inode = inode;
       dir->pos = 0;
-      return dir;
     }
+
   else
     {
       inode_close (inode);
       free (dir);
-      return NULL; 
+      dir = NULL; 
     }
+
+  if (dir)
+  {  int i;
+     for (i = 0; i < 4; i++)
+     lock_init (&dir->dir_lock[i]);
+  }
+   return dir;
 }
 
 /* Opens the root directory and returns a directory for it.
@@ -127,11 +142,10 @@ dir_lookup (const struct dir *dir, const char *name,
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
-  struct inode *dir_inode = dir_get_inode ((struct dir *) (dir));
   int hash_number;
 
   /* Acquire an inode based on char name */
-  hash_number = inode_hash_lock_acquire (dir_inode, name);
+  hash_number = dir_hash_lock_acquire ((struct dir *) dir, name);
     
   if (lookup (dir, name, &e, NULL))
     *inode = inode_open (e.inode_sector);
@@ -139,7 +153,7 @@ dir_lookup (const struct dir *dir, const char *name,
     *inode = NULL;
 
   /* Release the inode_lock */
-   inode_hash_lock_release (dir_inode, hash_number);
+   dir_hash_lock_release (dir, hash_number);
 
   return *inode != NULL;
 }
@@ -165,9 +179,8 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   if (*name == '\0' || strlen (name) > NAME_MAX)
     return false;
  
-  struct inode *inode = dir_get_inode (dir);
   /* Acquires a diretory lock */
-  int hash_number = inode_hash_lock_acquire (inode, name); 
+  int hash_number = dir_hash_lock_acquire (dir, name); 
      
   /* Check that NAME is not in use. */
   if (lookup (dir, name, NULL, NULL))
@@ -192,7 +205,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
 
  done:
-  { inode_hash_lock_release (inode, hash_number); 
+  { dir_hash_lock_release (dir, hash_number); 
     return success;
   }
 }
@@ -213,7 +226,7 @@ dir_remove (struct dir *dir, const char *name)
   
   /* Acquire hash_lock */
   int hash_number;
-  hash_number = inode_hash_lock_acquire (dir_get_inode (dir), name);
+  hash_number = dir_hash_lock_acquire (dir, name);
 
   /* Find directory entry. */
   if (!lookup (dir, name, &e, &ofs))
@@ -235,7 +248,7 @@ dir_remove (struct dir *dir, const char *name)
 
  done:
   inode_close (inode);
-  inode_hash_lock_release (inode, hash_number);
+  dir_hash_lock_release (dir, hash_number);
   return success;
 }
 
@@ -247,11 +260,10 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
 {
   struct dir_entry e;
 
-  struct inode *inode = dir_get_inode (dir);
   int hash_number;
  
   /* Acquire the inode hash lock */
-  hash_number = inode_hash_lock_acquire (inode, name);
+  hash_number = dir_hash_lock_acquire (dir, name);
    
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {
@@ -264,7 +276,7 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
     }
   
   /* Release the inode_hash_lock */
-   inode_hash_lock_release (inode, hash_number);
+   dir_hash_lock_release (dir, hash_number);
 
   return false;
 }
@@ -310,7 +322,7 @@ dir_find_dir_from_path (const char *name )
    return NULL;
 
  /* Return current directory if '.' */
- if (name == ".")
+ if (strcmp (name, ".") == 0)
    return thread_current()->current_dir;
 
  /* TODO : check if we need path_buf variable,if yes allocate it thru malloc */
@@ -397,7 +409,6 @@ dir_add_parent_dir (struct dir *parent_dir)
 }
 
 
-#if 0
 /* Returns the hash value based on 's'
    for acquiring the inode_lock, the value is ensured
    to lie between 0 and 3 */
@@ -413,7 +424,7 @@ dir_hash_lock_acquire (struct dir* dir, const char *s)
 {
   int a;
   a = dir_lock_compute_hash_number (s);
-  lock_acquire (dir->dir_lock[a]);
+  lock_acquire (&dir->dir_lock[a]);
   return a;
 }
 
@@ -425,10 +436,10 @@ dir_hash_lock_acquire (struct dir* dir, const char *s)
 static void
 dir_hash_lock_release (struct dir *dir, int hash_number)
 {
-  lock_release (dir->dir_lock[hash_number];
+  lock_release (&dir->dir_lock[hash_number]);
 }
 
-#endif
+
 
   
  
