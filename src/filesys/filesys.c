@@ -107,7 +107,7 @@ filesys_create_dir (const char *name)
      { 
       bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
-                  && inode_create (inode_sector, initial_size)
+                  && inode_create (inode_sector, INODE_DIRECTORY, initial_size)
                   && dir_add (dir, dir_name, inode_sector));
       
       if (!success && inode_sector != 0)
