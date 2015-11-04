@@ -1,5 +1,6 @@
 #include "filesys/inode.h"
 #include <hash.h>
+#include <list.h>
 #include <debug.h>
 #include <round.h>
 #include <string.h>
@@ -148,6 +149,7 @@ static bool inode_address_is_being_filled (block_sector_t);
 
 /* Private indirect block functions. */
 static block_sector_t indirect_block_allocate (uint32_t); 
+static void indirect_block_free (block_sector_t, int);
 static void indirect_block_read (block_sector_t, struct indirect_block *);
 static void indirect_block_flush (block_sector_t, struct indirect_block *);
 
@@ -232,6 +234,7 @@ inode_create (block_sector_t sector, enum inode_type type, off_t length)
 
 /* Reads an inode from SECTOR
    and returns a `struct inode' that contains it.
+   If someone else already has this inode open, we return that inode*.
    Returns a null pointer if memory allocation fails. */
 struct inode *
 inode_open (block_sector_t sector)
@@ -682,9 +685,10 @@ inode_decr_users (struct inode *inode)
 }
 
 /* Grows locked INODE to POS. This does NOT modify
-   the inode's size, but only its maximum possible size.
+   the inode's length, but only its maximum possible length.
    Waits for any current users to finish. 
-   Returns true on success, false on failure. */
+   Returns true on success, false on failure. 
+   Unlocks inode and then re-locks it at the end. */
 static bool
 inode_grow (struct inode *inode, off_t pos)
 {
@@ -708,15 +712,128 @@ inode_grow (struct inode *inode, off_t pos)
      extant growers to finish before testing length prior to calling this function. */
   ASSERT (inode_length (inode) < pos);
 
-  /* TODO */
-  /* TODO Make sure to flush in each iteration. */
-  ASSERT (0 == 1);
+  /* Calculate the indirection level required to address POS. */
+  int direct_block_size = inode_get_direct_block_size (inode);
+  int n_addrs = INODE_N_ADDRESSES;
+
+  uint32_t curr_indirection = inode->data.meta_info.indirection_level;
+  /* We can start at curr_indirection+1, but starting here lets us assert that we have to grow. */
+  uint32_t indirection_required = curr_indirection;
+  int address_size = calc_addressable_bytes (direct_block_size, indirection_required);
+  int max_addressable = n_addrs*address_size;
+  while (max_addressable < pos)
+  {
+    indirection_required++;
+    address_size = calc_addressable_bytes (direct_block_size, indirection_required);
+    max_addressable = n_addrs*address_size;
+  }
+  ASSERT (curr_indirection < indirection_required);
+
+  /* We now have to grow by an arbitrary number of blocks.
+     If allocation fails partway through, maintaining a list of newly allocated blocks will
+     facilitate cleanup. */
+  struct new_ind_blk
+  {
+    block_sector_t sector;
+    struct indirect_block ind_blk;
+    struct list_elem elem;
+  };
+
+  /* In order of indirection level, largest to smallest. */
+  struct list new_ind_blks;
+  list_init (&new_ind_blks);
+
+  /* If false, we discard all elements of new_ind_blks. */
+  bool success = true;
+
+  /* A tmp block for use with indirect_block_read and indirect_block_flush. */
+  block_sector_t tmp_ind_blk_sector = HOLE;
+  struct indirect_block *tmp_ind_blk = (struct indirect_block *) malloc (sizeof(struct indirect_block));
+  ASSERT (tmp_ind_blk != NULL);
+
+  /* Allocate each new block, beginning at the lowest level of indirection.
+     Each subsequent block references the previous one. */
+  int n_new_blocks = indirection_required - curr_indirection;
+  int i;
+  block_sector_t prev_ind_blk_addr = HOLE;
+  for (i = 0; i < n_new_blocks; i++)
+  {
+    struct new_ind_blk *nib = (struct new_ind_blk *) malloc (sizeof(struct new_ind_blk));
+    ASSERT (nib != NULL);
+    list_push_front (&new_ind_blks, &nib->elem);
+    /* Some inefficiency, as we read the indirect block "from disk" twice: once here and once below when 
+       setting the address to the previous indirect block.
+       This uses clean APIs, though, and we expect the buffer cache to come to our rescue. */
+    nib->sector = indirect_block_allocate (curr_indirection + i);
+    tmp_ind_blk_sector = nib->sector;
+    if (inode_address_is_hole (nib->sector))
+    {
+      success = false;
+      break;
+    }
+
+    if (i == 0)
+      prev_ind_blk_addr = nib->sector;
+    else
+    {
+      /* If an intermediate block, point to the previously-allocated block. */
+      ASSERT (!inode_address_is_hole (prev_ind_blk_addr) && !inode_address_is_being_filled (prev_ind_blk_addr)); 
+      ASSERT (!inode_address_is_hole (tmp_ind_blk_sector) && !inode_address_is_being_filled (tmp_ind_blk_sector)); 
+      indirect_block_read (nib->sector, tmp_ind_blk);
+      tmp_ind_blk->addresses[0] = prev_ind_blk_addr;
+      indirect_block_flush (tmp_ind_blk_sector, tmp_ind_blk);
+    }
+  }
+
+  /* On success, copy inode contents to the bottom-most newly-allocated indirect block (which should be
+     at the same level of indirection as the inode itself). Then point the inode to the upper-most newly-allocated
+     indirect block, and set the inode's level of indirection to be one higher than that. */
+  if (success)
+  {
+    /* If fewer addrs in indirect block, have to do some footwork. Should never be the case. */
+    ASSERT (INODE_N_ADDRESSES < INDIRECT_BLOCK_N_ADDRESSES); 
+    ASSERT (!list_empty (&new_ind_blks));
+    /* Update bottom-most's contents. */
+    struct new_ind_blk *nib = list_entry (list_back (&new_ind_blks), struct new_ind_blk, elem);
+    indirect_block_read (nib->sector, tmp_ind_blk);
+    ASSERT (tmp_ind_blk->meta_info.indirection_level == curr_indirection);
+    uint32_t i;
+    for (i = 0; i < INODE_N_ADDRESSES; i++)
+    {
+      tmp_ind_blk->addresses[i] = inode->data.addresses[i];
+      inode->data.addresses[i] = HOLE;
+    }
+    indirect_block_flush (nib->sector, tmp_ind_blk);
+
+    /* Update inode to point to upper-most. */ 
+    nib = list_entry (list_back (&new_ind_blks), struct new_ind_blk, elem);
+    inode->data.addresses[0] = nib->sector;
+    inode->data.meta_info.indirection_level = indirection_required;
+    inode_flush (inode);
+  }
+
+  free (tmp_ind_blk);
+
+  /* Clean up all of the nib's. If we failed, also release the sectors in the free map. */
+  struct list_elem *e;
+  while (!list_empty (&new_ind_blks))
+  {
+    e = list_pop_front (&new_ind_blks);
+    struct new_ind_blk *nib = list_entry (e, struct new_ind_blk, elem);
+    ASSERT (nib != NULL);
+    bool any_sectors_to_free = (!inode_address_is_hole (nib->sector) && !inode_address_is_being_filled (nib->sector));
+    /* On failure, free sectors. */
+    if (!success && any_sectors_to_free)
+      free_map_release (nib->sector, SECTORS_PER_METADATA_BLOCK);
+    free (nib);
+  }
 
   /* Done, signal waiting users. */
   inode_lock (inode);
   inode->is_being_grown = false;
   cond_broadcast (&inode->done_being_grown, &inode->lock);
-  inode_unlock (inode);
+
+  return success;
 }
 
 /* Allocate an indirect block at INDIRECTION_LEVEL. 
@@ -758,6 +875,38 @@ indirect_block_allocate (uint32_t indirection_level)
   free (ind_blk);
   return ind_blk_sector;
 }
+
+/* Free the disk space allocated to the indirect block at SECTOR, and all of its children. 
+   Intended to be used recursively. 
+   Direct blocks consist of DIRECT_BLOCK_N_SECTORS sectors.
+   Not thread safe. */
+static void
+indirect_block_free (block_sector_t sector, int direct_block_n_sectors)
+{
+  ASSERT (!inode_address_is_hole (sector) && !inode_address_is_being_filled (sector))
+
+  struct indirect_block *ind_blk = (struct indirect_block *) malloc(sizeof *ind_blk);
+  ASSERT (ind_blk != NULL);
+
+  indirect_block_read (sector, ind_blk);
+  unsigned i;
+  /* Free children. */
+  for (i = 0; i < INDIRECT_BLOCK_N_ADDRESSES; i++)
+  {
+    block_sector_t child_sector = ind_blk->addresses[i];
+    if (inode_address_is_hole (child_sector) || inode_address_is_being_filled (child_sector))
+      continue;
+
+    if (ind_blk->meta_info.indirection_level == 0)
+      free_map_release (child_sector, direct_block_n_sectors);
+    else
+      indirect_block_free (child_sector, direct_block_n_sectors);
+  }
+  /* Free self. */
+  free_map_release (sector, SECTORS_PER_METADATA_BLOCK);
+  free (ind_blk);
+}
+
 
 /* Read the indirect block that resides at SECTOR and write it to IND_BLK. */
 static void
@@ -902,14 +1051,23 @@ inode_close (struct inode *inode)
     /* Deallocate blocks if removed. */
     if (inode->removed) 
     { 
-      /* TODO Must traverse entire inode tree, releasing all data and metadata blocks. */
-      /* Mimic the loop in inode_find_block. */
-      //unsigned i;
+      struct inode_disk *ino_d = &inode->data;
+      int direct_block_n_sectors = inode_get_direct_block_size (inode) / BLOCK_SECTOR_SIZE;
+      unsigned i;
+      /* Free children. */
+      for (i = 0; i < INODE_N_ADDRESSES; i++)
+      {
+        block_sector_t child_sector = ino_d->addresses[i];
+        if (inode_address_is_hole (child_sector) || inode_address_is_being_filled (child_sector))
+          continue;
 
-      /* Mark data free. */
-      //free_map_release (inode->data.direct_blocks[0], n_sectors);
-      /* Mark inode free. */
-      //free_map_release (inode->sector, 1);
+        if (ino_d->meta_info.indirection_level == 0)
+          free_map_release (child_sector, direct_block_n_sectors);
+        else
+          indirect_block_free (child_sector, direct_block_n_sectors);
+      }
+      /* Free self. */
+      free_map_release (inode->sector, INODE_SIZE/BLOCK_SECTOR_SIZE);
     }
     else
       /* Flush any remaining changes. */
