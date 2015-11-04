@@ -29,4 +29,8 @@ void inode_deny_write (struct inode *);
 void inode_allow_write (struct inode *);
 off_t inode_length (const struct inode *);
 bool inode_is_directory (const struct inode *);
+int inode_lock_compute_hash_number (const char *);
+int inode_hash_lock_acquire (struct inode *, const char *);
+void inode_hash_lock_release (struct inode *, int );
+
 #endif /* filesys/inode.h */
