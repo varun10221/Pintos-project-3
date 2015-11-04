@@ -555,9 +555,11 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
       while (cb->is_being_prepared)
         cond_wait (&cb->cb_ready, &cb->lock);
 
-      /* CB is ready. Is it still what we thought it was? Might have been itself evicted, "changing shape" 
-           between it becoming ready and our acquisition of the lock. */
-      if (cb->block != address || cb->type != type)
+      /* CB is ready. Is it still what we thought it was? 
+           The last user may have finished with it and moved it onto the FREE_LIST. 
+           It might still be there, ready for us, or it might have "changed shape".
+           Just retry on any difference. */
+      if (cb->location != CACHE_BLOCK_IN_USE_LIST || cb->block != address || cb->type != type)
       {
         /* Bummer. Retry. */
       #ifdef CACHE_DEBUG
