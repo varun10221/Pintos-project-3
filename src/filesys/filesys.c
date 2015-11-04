@@ -116,6 +116,7 @@ filesys_create_dir (const char *name)
       /* Create the link to parent_directory and to itself */
       char name [2] = ".";
       char *path = name;
+      /* TODO This isn't right. We just want to add two dir entries. We don't want to call filesys_create_dir recursively. */
       filesys_create_dir (path);
     
       char name_parent [3] = "..";
