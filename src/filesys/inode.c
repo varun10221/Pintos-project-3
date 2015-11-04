@@ -268,6 +268,9 @@ inode_open (block_sector_t sector)
   cond_init (&inode->done_being_grown);
   cond_init (&inode->done_being_used);
   cond_init (&inode->done_being_filled);
+  int i;
+  for (i = 0; i < 4; i++)
+    lock_init (&inode->inode_hash_lock[i]);
   inode->n_users = 0;
  
   inode_disk_read (inode->sector, &inode->data);
