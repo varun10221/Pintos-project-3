@@ -802,7 +802,7 @@ convert_string_to_std_form (const char *path)
   a = (char*) malloc (length * sizeof (char));
   int i = 0;
   char previous_char;
-  while (i <= length && path[length] != '\0')
+  while (i <= length )
     {
         if ( i == 0)
          { a[i] = path[i];
