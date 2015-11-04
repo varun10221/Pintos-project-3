@@ -31,6 +31,7 @@ static inline long long int llabs (long long int j)
 
 /* Standard functions. */
 int atoi (const char *);
+long atol (const char *);
 void qsort (void *array, size_t cnt, size_t size,
             int (*compare) (const void *, const void *));
 void *bsearch (const void *key, const void *array, size_t cnt,
