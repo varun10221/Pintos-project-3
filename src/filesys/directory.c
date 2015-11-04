@@ -7,12 +7,13 @@
 #include "threads/malloc.h"
 #include "threads/thread.h"
 
+
 /* A directory. */
 struct dir 
   {
     struct inode *inode;                /* Backing store. */
     off_t pos;                          /* Current position. */
-    struct dir *parent_dir;
+    struct dir *parent_dir;             /* Parent dir to current_ dir */
   };
 
 /* A single directory entry. */
@@ -126,10 +127,19 @@ dir_lookup (const struct dir *dir, const char *name,
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
+  struct inode *dir_inode = dir_get_inode ((struct dir *) (dir));
+  int hash_number;
+
+  /* Acquire an inode based on char name */
+  hash_number = inode_hash_lock_acquire (dir_inode, name);
+    
   if (lookup (dir, name, &e, NULL))
     *inode = inode_open (e.inode_sector);
   else
     *inode = NULL;
+
+  /* Release the inode_lock */
+   inode_hash_lock_release (dir_inode, hash_number);
 
   return *inode != NULL;
 }
@@ -149,11 +159,16 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
 
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
+  
 
   /* Check NAME for validity. */
   if (*name == '\0' || strlen (name) > NAME_MAX)
     return false;
-
+ 
+  struct inode *inode = dir_get_inode (dir);
+  /* Acquires a diretory lock */
+  int hash_number = inode_hash_lock_acquire (inode, name); 
+     
   /* Check that NAME is not in use. */
   if (lookup (dir, name, NULL, NULL))
     goto done;
@@ -177,7 +192,9 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   success = inode_write_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
 
  done:
-  return success;
+  { inode_hash_lock_release (inode, hash_number); 
+    return success;
+  }
 }
 
 /* Removes any entry for NAME in DIR.
@@ -193,6 +210,10 @@ dir_remove (struct dir *dir, const char *name)
 
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
+  
+  /* Acquire hash_lock */
+  int hash_number;
+  hash_number = inode_hash_lock_acquire (dir_get_inode (dir), name);
 
   /* Find directory entry. */
   if (!lookup (dir, name, &e, &ofs))
@@ -214,6 +235,7 @@ dir_remove (struct dir *dir, const char *name)
 
  done:
   inode_close (inode);
+  inode_hash_lock_release (inode, hash_number);
   return success;
 }
 
@@ -225,6 +247,12 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
 {
   struct dir_entry e;
 
+  struct inode *inode = dir_get_inode (dir);
+  int hash_number;
+ 
+  /* Acquire the inode hash lock */
+  hash_number = inode_hash_lock_acquire (inode, name);
+   
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {
       dir->pos += sizeof e;
@@ -234,6 +262,10 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
           return true;
         } 
     }
+  
+  /* Release the inode_hash_lock */
+   inode_hash_lock_release (inode, hash_number);
+
   return false;
 }
 
@@ -267,8 +299,8 @@ dir_extract_directory_name (char *path)
 
 
 /* Finds the directory from the name (path)
- *    and returns a pointer to it 
- *       TODO: synchronization yet to be handled */
+   and returns a pointer to it 
+   TODO: synchronization yet to be handled */
 
 struct dir *
 dir_find_dir_from_path (const char *name )
@@ -363,3 +395,40 @@ dir_add_parent_dir (struct dir *parent_dir)
   dir->parent_dir = parent_dir;
  
 }
+
+
+#if 0
+/* Returns the hash value based on 's'
+   for acquiring the inode_lock, the value is ensured
+   to lie between 0 and 3 */
+static int
+dir_lock_compute_hash_number (const char *s)
+{
+  return (int) (hash_string (s) % 4);
+}
+
+/* API to acquire the hash_lock to perform directory operation */
+static int
+dir_hash_lock_acquire (struct dir* dir, const char *s)
+{
+  int a;
+  a = dir_lock_compute_hash_number (s);
+  lock_acquire (dir->dir_lock[a]);
+  return a;
+}
+
+/* API to release the  dir_lock_that was acquired,
+   Gets the dir and hash_number (computed based on its file_name)
+   as input, hash_number is used becoz, in future if we have feature to 
+   modify the filename,lock should not be lost */
+
+static void
+dir_hash_lock_release (struct dir *dir, int hash_number)
+{
+  lock_release (dir->dir_lock[hash_number];
+}
+
+#endif
+
+  
+ 
