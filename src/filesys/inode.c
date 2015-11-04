@@ -57,7 +57,6 @@ struct meta_info
      the type of corruption. If magic is clobbered, the issue is a wild
      write or an incorrect read. If magic is OK but cksum is clobbered,
      the issue is likely an internal consistency error. */
-     information about the 
   uint32_t info_and_cksum; /* Bits 0-7 are "info". Bits 8-31 are a cksum. */
   uint32_t magic;
   uint32_t indirection_level; /* 0 means addresses are to data blocks. 1 means addresses are to indirect blocks at indirection_level 0. etc. */
@@ -77,7 +76,7 @@ struct inode_disk
 
 /* On-disk indirect block.
    Must be exactly METADATA_BLOCKSIZE bytes long. */
-#define INDIRECT_BLOCK_N_ADDRESSES (METADATA_BLOCKSIZE - 3*ADDRESS_LEN)/ADDRESS_LEN /* The number of addresses contained in an indirect blcok. */
+#define INDIRECT_BLOCK_N_ADDRESSES (METADATA_BLOCKSIZE - 3*ADDRESS_LEN)/ADDRESS_LEN /* The number of addresses contained in an indirect block. */
 struct indirect_block
 {
   /* Bits 0-7 of meta_info.info_and_cksum are reserved. Bits 8-31 are a cksum of the metadata in the indirect block. */
@@ -111,8 +110,8 @@ struct inode
     struct condition done_being_grown;  /* Condition. Inode is unsafe while it is being grown. */
     struct condition done_being_used;   /* Condition. Growers can proceed when the last current user leaves. */
     bool is_being_grown;                /* Set by a grower. Readers wait on done_being_grown while there's a grower. */
-  s truct condition done_being_filled; /* Condition. If an address in inode_find_block is BEING_FILLED, wait on this. */
-    struct lock inode_lock[4];          /* Inode lock based on hash */
+    struct condition done_being_filled; /* Condition. If an address in inode_find_block is BEING_FILLED, wait on this. */
+    struct lock inode_hash_lock[4];     /* Inode lock based on hash */
   };
 
 /* Private inode_disk functions. */
@@ -1374,3 +1373,38 @@ inode_is_directory (const struct inode *inode)
   enum inode_type type = inode_get_type (inode);
   return (type == INODE_DIRECTORY);
 }
+
+
+/* Returns the hash value based on 's'
+   for acquiring the inode_lock, the value is ensured
+   to lie between 0 and 3 */
+int
+inode_lock_compute_hash_number (const char *s)
+{
+  return (int) (hash_string (s) % 4);
+}
+
+/* API to acquire the hash_lock to perform directory operation */
+int
+inode_hash_lock_acquire (struct inode *inode, const char *s)
+{
+  ASSERT (inode != NULL);
+  int a;
+  a = inode_lock_compute_hash_number (s);
+  lock_acquire (&inode->inode_hash_lock[a]);
+  return a;
+}
+
+/* API to release the  dir_lock_that was acquired,
+   Gets the dir and hash_number (computed based on its file_name)
+   as input, hash_number is used becoz, in future if we have feature to 
+   modify the filename,lock should not be lost */
+
+void
+inode_hash_lock_release (struct inode *inode, int hash_number)
+{
+  ASSERT (inode != NULL);
+  lock_release (&inode->inode_hash_lock[hash_number]);
+}
+
+
