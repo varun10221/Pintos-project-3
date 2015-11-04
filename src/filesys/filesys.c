@@ -99,7 +99,7 @@ filesys_create_dir (const char *name)
   /* TODO */
  block_sector_t inode_sector = 0;
  char *dir_name = dir_extract_directory_name (name);
- struct dir *dir = dir_find_dir_from_path ();
+ struct dir *dir = dir_find_dir_from_path (name);
  int initial_size = 0;
  bool success;
  /* Check if . or .. is passed to create directory, print an error
