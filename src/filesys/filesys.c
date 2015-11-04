@@ -9,6 +9,7 @@
 #include "filesys/cache.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
 
 /* Partition that contains the file system. */
 struct block *fs_device;
@@ -107,7 +108,7 @@ filesys_create_dir (const char *name)
      { 
       bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
-                  && inode_create (inode_sector, initial_size)
+                  && inode_create (inode_sector, INODE_DIRECTORY, initial_size)
                   && dir_add (dir, dir_name, inode_sector));
       
       if (!success && inode_sector != 0)
@@ -133,7 +134,7 @@ filesys_create_dir (const char *name)
        else if (strcmp (dir_name,"..") == 0)
          {
            struct thread * t = thread_current ();
-           struct dir *dir = dir_retrieve_parent_dir (t->current_dir);
+           struct dir *dir = dir_retrieve_parent_directory (t->current_dir);
           inode_sector = dir_get_inode (dir);
           dir_add (dir, dir_name, inode_sector);
          }

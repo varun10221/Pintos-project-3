@@ -57,7 +57,6 @@ struct meta_info
      the type of corruption. If magic is clobbered, the issue is a wild
      write or an incorrect read. If magic is OK but cksum is clobbered,
      the issue is likely an internal consistency error. */
-     information about the 
   uint32_t info_and_cksum; /* Bits 0-7 are "info". Bits 8-31 are a cksum. */
   uint32_t magic;
   uint32_t indirection_level; /* 0 means addresses are to data blocks. 1 means addresses are to indirect blocks at indirection_level 0. etc. */
