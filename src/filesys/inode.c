@@ -1211,6 +1211,7 @@ inode_disk_read (block_sector_t sector, struct inode_disk *ino_disk)
   memcpy (ino_disk, buffer, INODE_SIZE);
   cache_put_block (cb);
 
+  ASSERT (ino_disk->meta_info.magic == INODE_MAGIC);
   inode_disk_verify_cksum (ino_disk);
 }
 
