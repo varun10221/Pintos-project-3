@@ -272,6 +272,13 @@ thread_create (const char *name, int priority,
      to run to completion before we go again.
      */
   old_level = intr_disable ();
+
+  /* Updates the current dir for the new_thread spawned */
+
+  if (thread_current () -> current_dir != NULL)
+       t->current_dir = dir_reopen (thread_current ()->current_dir);
+  else t->current_dir = NULL;
+   
   thread_unblock (t);
   if (thread_current ()->effective_priority < priority)
     thread_yield ();
