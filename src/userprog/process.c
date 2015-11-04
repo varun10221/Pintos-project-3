@@ -395,10 +395,17 @@ start_process (void *thr_args)
 
   /* Grab the filesys_lock, allowing us to file_deny_write and then load() atomically. */
   bool success = load (file_name, &if_.eip, &if_.esp);
+   
+
 
   /* Set and signal load status. */
   process_set_load_success (success);
   process_signal_loaded ();
+
+  /* Setting the current_dir to be the root directory */
+  if (thread_current ()->current_dir == NULL)
+       thread_current ()->current_dir = dir_open_root ();
+  
 
   /* If we've failed to deny writes to the executable and load it, quit. */
   if (!success) 
@@ -565,6 +572,10 @@ process_exit (void)
     file_close (cur->my_executable);
     filesys_unlock ();
   }
+  
+  /* Close the processes current directory */
+     if (cur->current_dir != NULL)
+        dir_close (cur->current_dir);
 
   /* Done with our scratch page, if we allocated one. */
   process_scratch_page_free ();
