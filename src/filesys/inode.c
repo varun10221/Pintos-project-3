@@ -982,10 +982,14 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
     int block_left = blocksize - block_ofs;
     int min_left = MIN (inode_left, block_left);
 
-    /* Number of bytes to actually copy out of this block. */
+    /* Number of bytes to copy out of this block. */
     int chunk_size = MIN (size, min_left);
     if (chunk_size <= 0)
+    {
+      /* Done with this inode for now. */
+      inode_decr_users (inode);
       break;
+    }
 
     if (is_allocated)
     {
@@ -1076,6 +1080,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size, off_t offs
          If this was a sparse file, it's conceivable that advancing might drop 
          us onto an already-allocated region where we would be able to write SOMETHING. 
          However, this is grasping at straws and would produce confusing behavior. */
+      /* Done with this inode for now. */
       inode_decr_users (inode);
       break;
     }
@@ -1084,7 +1089,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size, off_t offs
     block_sector_t block_idx = block_info.block_idx;
     int block_ofs = offset % blocksize;
 
-    /* Number of bytes to actually write into this block. */
+    /* Number of bytes to write into this block. */
     int chunk_size = io_info.size;
     if (chunk_size <= 0)
       break;
