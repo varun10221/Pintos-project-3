@@ -133,7 +133,7 @@ thread_init (void)
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
    /* TODO may need to initialize current dir to different value */
-  initial_thread->current_dir = dir_open_root ();
+  initial_thread->current_dir = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
