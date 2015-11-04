@@ -29,5 +29,7 @@ bool dir_readdir (struct dir *, char name[NAME_MAX + 1]);
 
 /* Retrieving the directory */
 struct dir * dir_retrieve_parent_directory (struct dir *);
-
+char * dir_extract_directory_name (char *);
+void dir_add_parent_dir (struct dir *);
+struct dir * dir_find_dir_from_path (const char *);
 #endif /* filesys/directory.h */
