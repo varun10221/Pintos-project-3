@@ -1549,6 +1549,8 @@ inode_lock_compute_hash_number (const char *s)
 int
 inode_hash_lock_acquire (struct inode *inode, const char *s)
 {
+  /* TODO @Varun not being used properly. */
+  return 0;
   ASSERT (inode != NULL);
   int a;
   a = inode_lock_compute_hash_number (s);
@@ -1556,7 +1558,7 @@ inode_hash_lock_acquire (struct inode *inode, const char *s)
   return a;
 }
 
-/* API to release the  dir_lock_that was acquired,
+/* API to release the dir_lock_that was acquired,
    Gets the dir and hash_number (computed based on its file_name)
    as input, hash_number is used becoz, in future if we have feature to 
    modify the filename,lock should not be lost */
@@ -1564,6 +1566,8 @@ inode_hash_lock_acquire (struct inode *inode, const char *s)
 void
 inode_hash_lock_release (struct inode *inode, int hash_number)
 {
+  /* TODO @Varun not being used properly. */
+  return;
   ASSERT (inode != NULL);
   lock_release (&inode->inode_hash_lock[hash_number]);
 }
