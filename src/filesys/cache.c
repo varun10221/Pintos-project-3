@@ -94,6 +94,11 @@ struct cache_block
            This still doesn't get around the possibility of priority-based starvation in the condition variable.
            However, cond_signal is priority-based FIFO, so this is "the best we can do".
 
+           Hmmm...but on the other hand, doesn't broadcast'ing on polite_processes give us the same effect anyway,
+             *provided* that processes get a higher priority the longer they wait?
+           So using polite_processes relies on the scheduler to increase the priority of waiting processes,
+             whereas using the multi-cond approach would be safer I think.
+
      To evict a block: Remove the block from the hash (so no new processes can use it), then wait until 
        there are no active users and no pending users. Then modify block as desired.
 
