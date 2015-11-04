@@ -76,6 +76,7 @@ struct inode
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     struct inode_disk data;             /* Inode content. */
     bool is_directory;                  /* true for directory, false for file */
+    struct lock inode_lock[4];          /* Inode lock based on hash */
   };
 
 /* Returns the block device sector that contains byte offset POS
