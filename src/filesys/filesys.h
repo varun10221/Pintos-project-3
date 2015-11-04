@@ -9,8 +9,12 @@
 #define FREE_MAP_SECTOR 0       /* Free map file inode sector. */
 #define ROOT_DIR_SECTOR 1       /* Root directory file inode sector. */
 
-#define DATA_BLOCKSIZE 8*BLOCK_SECTOR_SIZE     /* 4KB. For data. */
-#define METADATA_BLOCKSIZE 4*BLOCK_SECTOR_SIZE /* 2KB. For indirect blocks. */
+#define SECTORS_PER_DATA_BLOCK 8     /* 4KB. */
+#define SECTORS_PER_METADATA_BLOCK 4 /* 2KB. */
+
+#define DATA_BLOCKSIZE     SECTORS_PER_DATA_BLOCK*BLOCK_SECTOR_SIZE
+#define METADATA_BLOCKSIZE SECTORS_PER_METADATA_BLOCK*BLOCK_SECTOR_SIZE
+
 
 /* Block device that contains the file system. */
 struct block *fs_device;

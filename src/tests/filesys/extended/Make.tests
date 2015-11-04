@@ -10,7 +10,8 @@ tests/filesys/extended_TESTS = $(patsubst %,tests/filesys/extended/%,$(raw_tests
 tests/filesys/extended_EXTRA_GRADES = $(patsubst %,tests/filesys/extended/%-persistence,$(raw_tests))
 
 tests/filesys/extended_PROGS = $(tests/filesys/extended_TESTS) \
-tests/filesys/extended/child-syn-rw tests/filesys/extended/tar
+tests/filesys/extended/child-syn-rw tests/filesys/extended/tar \
+tests/filesys/extended/huge-file
 
 $(foreach prog,$(tests/filesys/extended_PROGS),			\
 	$(eval $(prog)_SRC += $(prog).c tests/lib.c tests/filesys/seq-test.c))
