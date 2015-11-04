@@ -417,6 +417,7 @@ cond_wait (struct condition *cond, struct lock *lock)
 /* If any threads are waiting on COND (protected by LOCK), then
    this function signals one of them to wake up from its wait.
    LOCK must be held before calling this function.
+   This signal is done in a thread-priority-FIFO order.
 
    An interrupt handler cannot acquire a lock, so it does not
    make sense to try to signal a condition variable within an

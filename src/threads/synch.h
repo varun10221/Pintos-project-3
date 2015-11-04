@@ -47,6 +47,7 @@ struct condition
 
 void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
+/* cond_signal is thread-priority-FIFO. */
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
 size_t cond_n_waiters (struct condition *, struct lock *);
