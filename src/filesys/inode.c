@@ -1213,13 +1213,20 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size, off_t offs
     return 0;
 
   enum cache_block_type cb_type;
-  int blocksize = inode_get_direct_block_size (inode);
-  if (blocksize == DATA_BLOCKSIZE)
-    cb_type = CACHE_BLOCK_DATA;
-  else if (blocksize == METADATA_BLOCKSIZE)
-    cb_type = CACHE_BLOCK_METADATA;
-  else
-    NOT_REACHED ();
+  int blocksize = -1;
+  switch (inode_get_type (inode))
+  {
+    case INODE_FILE:
+      cb_type = CACHE_BLOCK_DATA;
+      blocksize = DATA_BLOCKSIZE;
+      break;
+    case INODE_DIRECTORY:
+      cb_type = CACHE_BLOCK_METADATA;
+      blocksize = METADATA_BLOCKSIZE;
+      break;
+    default:
+      NOT_REACHED ();
+  }
 
   struct io_info io_info;
   io_info.inode = inode;
