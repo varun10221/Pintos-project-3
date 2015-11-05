@@ -79,15 +79,27 @@ filesys_create (const char *name, off_t initial_size)
 struct file *
 filesys_open (const char *name)
 {
-  struct dir *dir = dir_open_root ();
+  /* Check if the name is NULL */
+  if (!name)
+    return NULL;
+  struct dir *dir;
+  
+  /* Check for the root directory */
+  if (strcmp (name, "/") == 0)
+       dir = dir_open_root ();
+   
+  dir = dir_find_dir_from_path (name);
+  char *file_name = dir_extract_directory_name (name);
   struct inode *inode = NULL;
 
   if (dir != NULL)
-    dir_lookup (dir, name, &inode);
-  dir_close (dir);
-
-  return file_open (inode);
-}
+    {
+      dir_lookup (dir, name, &inode);
+      dir_close (dir);
+      return file_open (inode);
+    }
+  else return NULL;
+ }
 
 /* Creates a dir named NAME, with initial size 0
    Returns true if successful, false otherwise.
@@ -96,15 +108,22 @@ filesys_open (const char *name)
 bool
 filesys_create_dir (const char *name) 
 {
-  /* TODO */
+  
+ int hash_number;
+   
+  /* Check for an empty directory name */
+  if (strcmp (name, "") == 0)
+        return false;
+
  block_sector_t inode_sector = 0;
  char *dir_name = dir_extract_directory_name (name);
  struct dir *dir = dir_find_dir_from_path (name);
+ hash_number = dir_hash_lock_acquire (dir, name);
  int initial_size = 0;
  bool success;
  /* Check if . or .. is passed to create directory, print an error
     message if true */
- if (strcmp (dir_name, ".") != 0 && strcmp (dir_name, ".") != 0)
+ if (strcmp (dir_name, ".") != 0 && strcmp (dir_name, "..") != 0)
      { 
       bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
@@ -113,6 +132,7 @@ filesys_create_dir (const char *name)
       
       if (!success && inode_sector != 0)
         free_map_release (inode_sector, 1);
+#if 0
       /* Create the link to parent_directory and to itself */
       char name [2] = ".";
       char *path = name;
@@ -122,6 +142,7 @@ filesys_create_dir (const char *name)
       char name_parent [3] = "..";
       char *path_parent = name_parent;
       filesys_create_dir (path_parent);
+#endif
      } 
   else
      {
@@ -140,7 +161,8 @@ filesys_create_dir (const char *name)
           dir_add (dir, dir_name, inode_sector);
          }
       }
-  free (dir_name);
+  dir_hash_lock_release (dir, hash_number);
+ // free (dir_name);
   dir_close (dir);
   return success;
 }
@@ -153,7 +175,7 @@ filesys_create_dir (const char *name)
 struct dir *
 filesys_open_dir (const char *name)
 {
-  /* TODO */
+  /* Functionality implemented in filesys_open ()*/
   return NULL;
 }
 
