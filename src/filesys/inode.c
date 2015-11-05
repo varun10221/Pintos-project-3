@@ -15,10 +15,6 @@
 #define INODE_MAGIC 0x494e4f44
 #define INDIRECT_MAGIC 0xabcd1234
 
-#define ADDRESS_LEN sizeof(uint32_t)
-#define INODE_N_ADDRESSES (INODE_SIZE - 4*ADDRESS_LEN)/ADDRESS_LEN /* Number of addresses an inode can store. */
-#define DATA_IN_INODE_LENGTH (INODE_N_ADDRESSES * ADDRESS_LEN) /* If data-in-inode, this is the max file length. */
-
 /* Whether a block is a direct block (points to data) or an indirect block (points to metadata). */
 enum inode_block_type
 {
@@ -63,6 +59,15 @@ struct meta_info
   uint32_t indirection_level; /* 0 means addresses are to data blocks. 1 means addresses are to indirect blocks at indirection_level 0. etc. */
 };
 
+#define ADDRESS_LEN sizeof(uint32_t)
+#define META_INFO_SPACE (ROUND_UP(sizeof(struct meta_info), ADDRESS_LEN)) /* Number of addresses used up by a 'struct meta_info'. */
+
+#define INODE_META_SPACE (ADDRESS_LEN + META_INFO_SPACE) /* Meta space used in the inode, rounded up to nearest ADDRESS_LEN. length + a 'struct meta_info'. */
+#define INODE_N_ADDRESSES (INODE_SIZE - INODE_META_SPACE)/ADDRESS_LEN /* Number of addresses an inode can store. */
+
+#define INDIRECT_BLOCK_META_SPACE META_INFO_SPACE /* Nothing besides a 'struct meta_info'. */
+#define INDIRECT_BLOCK_N_ADDRESSES (METADATA_BLOCKSIZE - INDIRECT_BLOCK_META_SPACE)/ADDRESS_LEN /* The number of addresses contained in an indirect block. */
+
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
@@ -77,7 +82,6 @@ struct inode_disk
 
 /* On-disk indirect block.
    Must be exactly METADATA_BLOCKSIZE bytes long. */
-#define INDIRECT_BLOCK_N_ADDRESSES (METADATA_BLOCKSIZE - 3*ADDRESS_LEN)/ADDRESS_LEN /* The number of addresses contained in an indirect block. */
 struct indirect_block
 {
   /* Bits 0-7 of meta_info.info_and_cksum are reserved. Bits 8-31 are a cksum of the metadata in the indirect block. */
@@ -242,13 +246,14 @@ inode_open (block_sector_t sector)
   struct hash_elem *e;
   struct inode *inode = NULL;
 
-  struct inode dummy;
-  inode_set_hash (&dummy, sector);
+  struct inode *dummy = (struct inode *) malloc (sizeof (struct inode));
+  ASSERT (dummy != NULL);
+  inode_set_hash (dummy, sector);
 
   lock_open_inodes ();
 
   /* Check whether this inode is already open. */
-  e = hash_find (&open_inodes, &dummy.elem);
+  e = hash_find (&open_inodes, &dummy->elem);
   if (e != NULL)
   {
     inode = hash_entry (e, struct inode, elem);
@@ -282,6 +287,7 @@ inode_open (block_sector_t sector)
   hash_insert (&open_inodes, &inode->elem);
   
   UNLOCK_AND_RETURN:
+    free (dummy);
     unlock_open_inodes ();
     return inode;
 }
@@ -941,6 +947,7 @@ indirect_block_flush (block_sector_t sector, struct indirect_block *ind_blk)
   ASSERT (data != NULL);
 
   memcpy (data, ind_blk, sizeof *ind_blk);
+  ASSERT (sizeof *ind_blk == METADATA_BLOCKSIZE);
   cache_mark_block_dirty (cb);
   cache_put_block (cb);
 }
@@ -1067,7 +1074,7 @@ inode_close (struct inode *inode)
           indirect_block_free (child_sector, direct_block_n_sectors);
       }
       /* Free self. */
-      free_map_release (inode->sector, INODE_SIZE/BLOCK_SECTOR_SIZE);
+      free_map_release (inode->sector, SECTORS_PER_INODE);
     }
     else
       /* Flush any remaining changes. */
@@ -1164,6 +1171,9 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       ASSERT (cb != NULL);    
       uint8_t *data = cache_read_block (cb);
       ASSERT (data != NULL);
+
+      ASSERT (chunk_size + block_ofs <= blocksize);
+      /* Copy contents from cache to buffer. */
       memcpy (buffer + bytes_read, data + block_ofs, chunk_size);
       cache_put_block (cb);
     }
@@ -1284,6 +1294,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size, off_t offs
     ASSERT (data != NULL);
     
     /* Copy contents from buffer to cache */
+    ASSERT (chunk_size + block_ofs <= blocksize);
     memcpy (data + block_ofs, buffer + bytes_written, chunk_size);   
     cache_mark_block_dirty (cb);
     /* Release the cache_block */
@@ -1402,6 +1413,7 @@ inode_disk_flush (block_sector_t sector, struct inode_disk *ino_disk)
   void *data = cache_zero_block (cb);
   ASSERT (data != NULL);
 
+  ASSERT (sizeof *ino_disk == INODE_SIZE);
   memcpy (data, ino_disk, sizeof *ino_disk);
   cache_mark_block_dirty (cb);
   cache_put_block (cb);
@@ -1426,7 +1438,7 @@ inode_create_empty (block_sector_t sector, enum inode_type type)
   unsigned i;
   /* If this assertion fails, the inode structure is not exactly
      one sector in size, and you should fix that. */
-  ASSERT (sizeof *ino_d == BLOCK_SECTOR_SIZE);
+  ASSERT (sizeof *ino_d == INODE_SIZE);
 
   ino_d = (struct inode_disk *) malloc (sizeof *ino_d);
   if (ino_d != NULL)

@@ -21,8 +21,16 @@ free_map_init (void)
   free_map = bitmap_create (block_size (fs_device));
   if (free_map == NULL)
     PANIC ("bitmap creation failed--file system device is too large");
-  bitmap_mark (free_map, FREE_MAP_SECTOR);
-  bitmap_mark (free_map, ROOT_DIR_SECTOR);
+  int i;
+  for (i = 0; i < SECTORS_PER_INODE; i++)
+  {
+    /* Mark an inode's worth for the FREE_MAP and the ROOT_DIR. */
+    bitmap_mark (free_map, FREE_MAP_SECTOR + i);
+    bitmap_mark (free_map, ROOT_DIR_SECTOR + i);
+    /* Make sure there's no overlap. */
+    ASSERT (ROOT_DIR_SECTOR + i != FREE_MAP_SECTOR);
+    ASSERT (FREE_MAP_SECTOR + i != ROOT_DIR_SECTOR);
+  }
 }
 
 /* Allocates CNT consecutive sectors from the free map and stores

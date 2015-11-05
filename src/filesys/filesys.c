@@ -61,7 +61,7 @@ filesys_create (const char *name, off_t initial_size)
   block_sector_t inode_sector = 0;
   struct dir *dir = dir_open_root ();
   bool success = (dir != NULL
-                  && free_map_allocate (1, &inode_sector)
+                  && free_map_allocate (SECTORS_PER_INODE, &inode_sector)
                   && inode_create (inode_sector, INODE_FILE, initial_size)
                   && dir_add (dir, name, inode_sector));
   if (!success && inode_sector != 0) 
@@ -107,7 +107,7 @@ filesys_create_dir (const char *name)
  if (strcmp (dir_name, ".") != 0 && strcmp (dir_name, ".") != 0)
      { 
       bool success = (dir != NULL
-                  && free_map_allocate (1, &inode_sector)
+                  && free_map_allocate (SECTORS_PER_INODE, &inode_sector)
                   && inode_create (inode_sector, INODE_DIRECTORY, initial_size)
                   && dir_add (dir, dir_name, inode_sector));
       

@@ -5,16 +5,17 @@
 #include "filesys/off_t.h"
 #include "devices/block.h"
 
+#define SECTORS_PER_INODE 2           /* 1KB. */
+#define SECTORS_PER_METADATA_BLOCK 4  /* 2KB. */
+#define SECTORS_PER_DATA_BLOCK 8      /* 4KB. */
+
+#define INODE_SIZE         SECTORS_PER_INODE          * BLOCK_SECTOR_SIZE
+#define METADATA_BLOCKSIZE SECTORS_PER_METADATA_BLOCK * BLOCK_SECTOR_SIZE
+#define DATA_BLOCKSIZE     SECTORS_PER_DATA_BLOCK     * BLOCK_SECTOR_SIZE
+
 /* Sectors of system file inodes. */
-#define FREE_MAP_SECTOR 0       /* Free map file inode sector. */
-#define ROOT_DIR_SECTOR 1       /* Root directory file inode sector. */
-
-#define SECTORS_PER_DATA_BLOCK 8     /* 4KB. */
-#define SECTORS_PER_METADATA_BLOCK 4 /* 2KB. */
-
-#define DATA_BLOCKSIZE     SECTORS_PER_DATA_BLOCK*BLOCK_SECTOR_SIZE
-#define METADATA_BLOCKSIZE SECTORS_PER_METADATA_BLOCK*BLOCK_SECTOR_SIZE
-
+#define FREE_MAP_SECTOR 0                                      /* Free map file inode sector. */
+#define ROOT_DIR_SECTOR (FREE_MAP_SECTOR + SECTORS_PER_INODE)  /* Root directory file inode sector. */
 
 /* Block device that contains the file system. */
 struct block *fs_device;

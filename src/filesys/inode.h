@@ -7,7 +7,6 @@
 
 struct bitmap;
 struct inode;
-#define INODE_SIZE BLOCK_SECTOR_SIZE
 
 /* Inodes can be one of these types. */
 enum inode_type
