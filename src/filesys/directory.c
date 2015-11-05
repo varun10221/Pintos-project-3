@@ -26,11 +26,6 @@ struct dir_entry
   };
 
 
-/* Internal directory functions */
-static int dir_hash_lock_acquire (struct dir *,const char *);
-static void dir_hash_lock_release (struct dir *, int);
-static int dir_lock_compute_hash_number (const char *);
-
 
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
@@ -153,7 +148,7 @@ dir_lookup (const struct dir *dir, const char *name,
     *inode = NULL;
 
   /* Release the inode_lock */
-   dir_hash_lock_release (dir, hash_number);
+   dir_hash_lock_release ((struct dir *) dir, hash_number);
 
   return *inode != NULL;
 }
@@ -298,15 +293,22 @@ dir_extract_directory_name (char *path)
   strlcpy (path_buf, path, path_length +1);
 
   /* Now split the path based on  '/' */
-   char * token , *save_ptr , *temp;
-  /* TODO: should replace with a while, will make more sense */
-   for (token = strtok_r (path_buf, "/", &save_ptr); token != NULL;
-        token = strtok_r (NULL, "/", &save_ptr))
-        {    
-         temp = token;
-        }
+  volatile char * token , *save_ptr , *next_token;
+ 
+   token = strtok_r(path_buf,"/",&save_ptr);
+   if (token != NULL)
+      {  next_token = strtok_r (NULL, "/", &save_ptr);
 
-   return temp;
+         /* TODO: should replace with a while, will make more sense */
+    
+         while (next_token != NULL)
+         {
+          token = next_token;
+          next_token = strtok_r (NULL, "/", &save_ptr);
+         }     
+      } 
+
+   return token;
 }
 
 
@@ -340,7 +342,7 @@ dir_find_dir_from_path (const char *name )
  else if (strcmp (path_buf, "/") == 0)
       return dir_open_root ();
 
- char *token, *save_ptr;
+ volatile char *token, *save_ptr;
  char *next_token;
  
  /* Tokenize the string with '/' to 
@@ -351,14 +353,14 @@ dir_find_dir_from_path (const char *name )
  struct dir *dir;
  
  /* Check if path begins with '/' (absolute path) */
- if (path_buf [0] == '/')
+ if (path_buf [0] == '/' || t->current_dir == NULL)
      dir = dir_open_root ();
  
  /* If the path is not absolute , then it must be relative */
  else dir = dir_reopen (t->current_dir);
   
  if (token != NULL)
-     next_token = strtok_r (path_buf, "/", &save_ptr);
+     next_token = strtok_r (NULL, "/", &save_ptr);
  
  /* Directory traversal */
  while (next_token) /* Fails if next_token becomes null */
@@ -412,14 +414,14 @@ dir_add_parent_dir (struct dir *parent_dir)
 /* Returns the hash value based on 's'
    for acquiring the inode_lock, the value is ensured
    to lie between 0 and 3 */
-static int
+int
 dir_lock_compute_hash_number (const char *s)
 {
   return (int) (hash_string (s) % 4);
 }
 
 /* API to acquire the hash_lock to perform directory operation */
-static int
+int
 dir_hash_lock_acquire (struct dir* dir, const char *s)
 {
   int a;
@@ -433,7 +435,7 @@ dir_hash_lock_acquire (struct dir* dir, const char *s)
    as input, hash_number is used becoz, in future if we have feature to 
    modify the filename,lock should not be lost */
 
-static void
+void
 dir_hash_lock_release (struct dir *dir, int hash_number)
 {
   lock_release (&dir->dir_lock[hash_number]);

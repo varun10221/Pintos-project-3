@@ -32,4 +32,12 @@ struct dir * dir_retrieve_parent_directory (struct dir *);
 char * dir_extract_directory_name (char *);
 void dir_add_parent_dir (struct dir *);
 struct dir * dir_find_dir_from_path (const char *);
+
+/* Dir lock operations */
+/* Internal directory functions */
+int dir_hash_lock_acquire (struct dir *,const char *);
+void dir_hash_lock_release (struct dir *, int);
+int dir_lock_compute_hash_number (const char *);
+
+
 #endif /* filesys/directory.h */
