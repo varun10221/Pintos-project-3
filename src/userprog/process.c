@@ -950,7 +950,11 @@ process_new_file (const char *file)
   struct fd_entry *fde = (struct fd_entry *) malloc (sizeof(struct fd_entry));
   if (fde == NULL)
     return -1;
-  fde->type = FD_FILE;
+  if (inode_is_directory (file_get_inode (f)))
+       fde->type = FD_DIRECTORY;
+  else 
+      fde->type = FD_FILE;
+
   fde->entry = f;
   return ix_to_fd (vector_add_elt (&thread_current ()->fd_table, fde));
 }
