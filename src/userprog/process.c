@@ -1288,7 +1288,7 @@ process_scratch_page_free (void)
 bool
 process_chdir (const char *name)
 {
-  struct dir *dir = dir_find_dir_from_path (dir);
+  struct dir *dir = dir_find_dir_from_path (name);
   ASSERT (dir != NULL);
   struct thread * t = thread_current ();
   dir_close (t->current_dir);
