@@ -167,6 +167,7 @@ static bool cache_locked_by_me (void);
 static void cache_lock (void);
 static void cache_unlock (void);
 static bool cache_all_blocks_accounted_for (void);
+static bool cache_all_blocks_in_correct_list (void);
 static void cache_evict_block (struct cache_block *);
 static void cache_flush_block (struct cache_block *);
 static void cache_mark_block_clean (struct cache_block *);
@@ -1164,6 +1165,7 @@ cache_lock (void)
   lock_acquire (&buffer_cache.lock);
 #ifdef CACHE_DEBUG
   ASSERT (cache_all_blocks_accounted_for ());
+  ASSERT (cache_all_blocks_in_correct_list ());
 #endif
 
 #ifdef CACHE_DEBUG
@@ -1179,7 +1181,9 @@ cache_unlock (void)
 
 #ifdef CACHE_DEBUG
   ASSERT (cache_all_blocks_accounted_for ());
+  ASSERT (cache_all_blocks_in_correct_list ());
 #endif
+
   lock_release (&buffer_cache.lock);
 
 #ifdef CACHE_DEBUG
@@ -1188,13 +1192,39 @@ cache_unlock (void)
 #endif
 }
 
-/* Return true if all CACHE_SIZE blocks are in one of the 3 lists, else false.
+/* Return true if all CACHE_SIZE blocks are in one of the 2 lists, else false.
    Caller must hold lock on buffer cache. */
 static bool 
 cache_all_blocks_accounted_for (void)
 {
+  ASSERT (cache_locked_by_me ());
   size_t n_blocks = list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks); 
   return (n_blocks == CACHE_SIZE);
+}
+
+/* Return true if all blocks are in the correct list, else false. 
+   Caller must hold lock on buffer cache. */
+static bool
+cache_all_blocks_in_correct_list (void)
+{
+  struct list_elem *e = NULL;
+  struct cache_block *cb = NULL;
+
+  for (e = list_begin (&buffer_cache.free_blocks); e != list_end (&buffer_cache.free_blocks); e = list_next (e))
+  {
+    cb = list_entry (e, struct cache_block, l_elem);
+    if (cb->location != CACHE_BLOCK_FREE_LIST)
+      return false;
+  }
+
+  for (e = list_begin (&buffer_cache.in_use_blocks); e != list_end (&buffer_cache.in_use_blocks); e = list_next (e))
+  {
+    cb = list_entry (e, struct cache_block, l_elem);
+    if (cb->location != CACHE_BLOCK_IN_USE_LIST)
+      return false;
+  }
+
+  return true;
 }
 
 /* bdflush ("buffer dirty flush") kernel thread. 
