@@ -615,14 +615,15 @@ syscall_chdir (const char *dir)
 {
   if (dir == NULL)
     syscall_exit (-1);
- 
+#if 0 
   char *temp_path;
   temp_path = malloc ((strlen (dir) + 1) * sizeof (char));
   temp_path = convert_string_to_std_form (dir);
+#endif
  
   bool success;
   /* Copy name into process's scratch page so that it will be safe from page fault. */
-  char *sp = copy_str_into_sp (temp_path);
+  char *sp = copy_str_into_sp (dir);
   if (!sp)
     return false;
 
@@ -792,8 +793,9 @@ get_user (const uint8_t *uaddr)
 }
 
 
-/* Convert the path to a standard form by replacing multiple '/' (if any) 
-  to single */  
+/* TODO (not called by any function temporarily) 
+   Convert the path to a standard form by replacing 
+   multiple '/' (if any)to single */  
 static char *
 convert_string_to_std_form (const char *path)
 {
