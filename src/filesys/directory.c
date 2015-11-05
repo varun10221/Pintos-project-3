@@ -306,9 +306,10 @@ dir_extract_directory_name (char *path)
           token = next_token;
           next_token = strtok_r (NULL, "/", &save_ptr);
          }     
-      } 
-
-   return token;
+      }
+   char *dir_name = malloc (sizeof(char)*strlen(token)+1);
+   memcpy (dir_name, token, strlen(token)+1); 
+   return dir_name;
 }
 
 
