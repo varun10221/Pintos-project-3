@@ -114,6 +114,7 @@ struct cache_block
   struct condition starving_process;  /* A process that would like to use the block, but cannot due to a conflicting use. */
   bool is_starving_process;           /* A starving process may not run immediately after being signal'd. This variable keeps others from beating him to the lock. */
   struct condition polite_processes;  /* If there is a waiter on the starving_process condition, other processes queue up on this condition variable to give the starving process a turn. */
+  uint32_t polite_count;              /* No. of polite waiters. */
   struct condition cb_ready; /* These processes found the block in the hash table, but it's not safe yet (because someone else cache_get_block'd too and hasn't finished setting it up). They wait until it is safe. */
 
   void *contents;               /* Pointer to the contents of this block. */
@@ -376,9 +377,13 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
   ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   while (cb->is_starving_process)
+  {
     /* While there is a starving process, wait politely. */
+    cb->polite_count++;
     cond_wait (&cb->polite_processes, &cb->lock);
-  ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
+    cb->polite_count--;
+  }
+  ASSERT (!cb->is_starving_process);
 
   /* No starving process. Graduate to being the starving process if conflict. */
   if (cache_block_is_usage_conflict (cb, exclusive))
@@ -614,9 +619,9 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
       ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       ASSERT (!cache_block_in_use (cb));
       ASSERT (cb->is_being_prepared);
-      /* There should be no one waiting on these conditions, because it has been is_being_prepared. */
-      ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
-      ASSERT (cond_n_waiters (&cb->polite_processes, &cb->lock) == 0);
+      /* There should be no starving or polite processes, because it has been is_being_prepared. */
+      ASSERT (!cb->is_starving_process);
+      ASSERT (cb->polite_count == 0);
 
       /* CB is now prepared: if its contents were being evicted, they are now gone. 
            It is not valid, though. */
@@ -713,12 +718,13 @@ cache_put_block (struct cache_block *cb)
   {
     if (cb->is_starving_process)
       cond_signal (&cb->starving_process, &cb->lock);
-    else if (cond_n_waiters (&cb->polite_processes, &cb->lock))
+    else if (cb->polite_count)
       cond_broadcast (&cb->polite_processes, &cb->lock);
     else
     {
       /* No current or pending processes, so put at the *back* of the free list.
          Leave in the hash, though, so that new users can still find it. */
+      ASSERT (!cache_block_in_use (cb));
       ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       list_remove (&cb->l_elem);
       cb->location = CACHE_BLOCK_FREE_LIST;
