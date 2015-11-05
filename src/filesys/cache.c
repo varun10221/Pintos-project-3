@@ -179,6 +179,7 @@ static void cache_block_get_access (struct cache_block *, bool);
 static bool cache_block_is_usage_conflict (const struct cache_block *, bool);
 static size_t cache_block_alloc_contents (struct cache_block *);
 static void cache_block_destroy (struct cache_block *);
+static struct cache_block * cache_block_make_dummy (block_sector_t, enum cache_block_type);
 static void cache_block_set_hash (struct cache_block *, block_sector_t, enum cache_block_type);
 static unsigned cache_block_hash_func (const struct hash_elem *, void *);
 static bool cache_block_less_func (const struct hash_elem *, const struct hash_elem *, void *);
@@ -324,7 +325,7 @@ buffer_cache_get_eviction_victim (void)
 
   ASSERT (cache_locked_by_me ());
 
-  struct cache_block *cb;
+  struct cache_block *cb = NULL;
 
   /* We evict from free_blocks. */
   ASSERT (!list_empty (&buffer_cache.free_blocks));
@@ -501,8 +502,7 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
   struct cache_block *cb = NULL;
 
   /* Prepare to search hash. */
-  struct cache_block dummy;
-  cache_block_set_hash (&dummy, address, type);
+  struct cache_block *dummy = cache_block_make_dummy (address, type);
 
   ASSERT (!cache_locked_by_me ());
   bool need_to_lock_cache = true;
@@ -535,7 +535,7 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
                 - no block, no free blocks, no in-use block: wait and try again */
 
     /* Is this block already in the cache? */
-    struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
+    struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy->h_elem);
     if (match)
     {
       /* Already in the hash. Lock it, update LRU status, and wait until it is valid. */
@@ -662,6 +662,8 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
       continue;
     }
   } /* Loop waiting for CB. */
+
+  free (dummy);
 
   /* Ensure that we don't have cache locked and that we do have CB locked. */
   ASSERT (!cache_locked_by_me ());
@@ -848,6 +850,18 @@ cache_mark_block_clean (struct cache_block *cb)
   ASSERT (cb != NULL);
 
   cb->is_dirty = false;
+}
+
+/* Allocate and return a dummy cache block suitable for searching
+   the buffer_cache hash. 
+   Caller must free this dummy. */
+static struct cache_block *
+cache_block_make_dummy (block_sector_t address, enum cache_block_type type)
+{
+  struct cache_block *dummy = (struct cache_block *) malloc (sizeof(struct cache_block));
+  ASSERT (dummy != NULL);
+  cache_block_set_hash (dummy, address, type);
+  return dummy;
 }
 
 /* Sets the fields of DUMMY appropriately. Keep in sync with cache_block_hash_func. */
@@ -1074,13 +1088,12 @@ cache_discard (block_sector_t address, enum cache_block_type type)
 
   /* Prepare to search hash. */
   struct cache_block *cb = NULL;
-  struct cache_block dummy;
-  cache_block_set_hash (&dummy, address, type);
+  struct cache_block *dummy = cache_block_make_dummy (address, type);
 
   cache_lock ();
 
   /* Check for a match. */
-  struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
+  struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy->h_elem);
   if (match)
   {
     /* Match found. We have work to do. */
@@ -1129,6 +1142,8 @@ cache_discard (block_sector_t address, enum cache_block_type type)
   else
     /* No match, nothing to do. */
     cache_unlock ();
+
+  free (dummy);
 }
 
 /* Discard all blocks from the cache.
