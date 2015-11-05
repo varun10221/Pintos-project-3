@@ -114,6 +114,7 @@ struct cache_block
   struct condition starving_process;  /* A process that would like to use the block, but cannot due to a conflicting use. */
   bool is_starving_process;           /* A starving process may not run immediately after being signal'd. This variable keeps others from beating him to the lock. */
   struct condition polite_processes;  /* If there is a waiter on the starving_process condition, other processes queue up on this condition variable to give the starving process a turn. */
+  uint32_t polite_count;              /* No. of polite waiters. */
   struct condition cb_ready; /* These processes found the block in the hash table, but it's not safe yet (because someone else cache_get_block'd too and hasn't finished setting it up). They wait until it is safe. */
 
   void *contents;               /* Pointer to the contents of this block. */
@@ -166,6 +167,7 @@ static bool cache_locked_by_me (void);
 static void cache_lock (void);
 static void cache_unlock (void);
 static bool cache_all_blocks_accounted_for (void);
+static bool cache_all_blocks_in_correct_list (void);
 static void cache_evict_block (struct cache_block *);
 static void cache_flush_block (struct cache_block *);
 static void cache_mark_block_clean (struct cache_block *);
@@ -177,11 +179,12 @@ static void cache_block_get_access (struct cache_block *, bool);
 static bool cache_block_is_usage_conflict (const struct cache_block *, bool);
 static size_t cache_block_alloc_contents (struct cache_block *);
 static void cache_block_destroy (struct cache_block *);
+static struct cache_block * cache_block_make_dummy (block_sector_t, enum cache_block_type);
 static void cache_block_set_hash (struct cache_block *, block_sector_t, enum cache_block_type);
 static unsigned cache_block_hash_func (const struct hash_elem *, void *);
 static bool cache_block_less_func (const struct hash_elem *, const struct hash_elem *, void *);
-static size_t cache_block_get_contents_size (const struct cache_block *);
-static size_t cache_block_get_n_sectors (const struct cache_block *);
+static size_t cache_block_get_contents_size (enum cache_block_type);
+static size_t cache_block_get_n_sectors (enum cache_block_type);
 static bool cache_block_in_use (const struct cache_block *);
 
 static bool cache_block_locked_by_me (const struct cache_block *);
@@ -298,6 +301,7 @@ buffer_cache_init (struct block *backing_block)
     cache_block_init (cb);
     cb->id = i;
     cb->location = CACHE_BLOCK_FREE_LIST;
+    ASSERT (!cache_block_in_use (cb));
     list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
   }
 }
@@ -322,7 +326,7 @@ buffer_cache_get_eviction_victim (void)
 
   ASSERT (cache_locked_by_me ());
 
-  struct cache_block *cb;
+  struct cache_block *cb = NULL;
 
   /* We evict from free_blocks. */
   ASSERT (!list_empty (&buffer_cache.free_blocks));
@@ -376,9 +380,13 @@ cache_block_get_access (struct cache_block *cb, bool exclusive)
   ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   while (cb->is_starving_process)
+  {
     /* While there is a starving process, wait politely. */
+    cb->polite_count++;
     cond_wait (&cb->polite_processes, &cb->lock);
-  ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
+    cb->polite_count--;
+  }
+  ASSERT (!cb->is_starving_process);
 
   /* No starving process. Graduate to being the starving process if conflict. */
   if (cache_block_is_usage_conflict (cb, exclusive))
@@ -421,10 +429,11 @@ static void
 cache_block_destroy (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
+  /* TODO Do anything? */
 }
 
 /* Dynamically allocate the contents field of locked CB. 
-   Requires cb->type to be set appropriately. 
+   Requires CB->type to be set appropriately. 
    Returns the size of contents. */
 static size_t 
 cache_block_alloc_contents (struct cache_block *cb)
@@ -433,7 +442,8 @@ cache_block_alloc_contents (struct cache_block *cb)
   ASSERT (cb->contents == NULL);
   ASSERT (cache_block_locked_by_me (cb));
 
-  size_t n_bytes = cache_block_get_contents_size (cb);
+  size_t n_bytes = cache_block_get_contents_size (cb->type);
+
   cb->contents = malloc (n_bytes);
   ASSERT (cb->contents != NULL);
 
@@ -465,7 +475,8 @@ cache_evict_block (struct cache_block *cb)
 
 /* Flush this dirty CB to disk.
    CB does not need to be locked (may be being prepared), but caller
-   should ensure that access to this method is synchronized. */
+   should ensure that access to this method is synchronized. 
+   Relies on CB->orig_block and CB->orig_type. */
 static void 
 cache_flush_block (struct cache_block *cb)
 {
@@ -473,7 +484,8 @@ cache_flush_block (struct cache_block *cb)
   ASSERT (cb->is_dirty);
   ASSERT (cb->contents != NULL);
 
-  size_t n_sectors = cache_block_get_n_sectors (cb);
+  size_t n_sectors = cache_block_get_n_sectors (cb->orig_type);
+    
   size_t i;
   for (i = 0; i < n_sectors; i++)
   {
@@ -495,8 +507,7 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
   struct cache_block *cb = NULL;
 
   /* Prepare to search hash. */
-  struct cache_block dummy;
-  cache_block_set_hash (&dummy, address, type);
+  struct cache_block *dummy = cache_block_make_dummy (address, type);
 
   ASSERT (!cache_locked_by_me ());
   bool need_to_lock_cache = true;
@@ -529,7 +540,7 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
                 - no block, no free blocks, no in-use block: wait and try again */
 
     /* Is this block already in the cache? */
-    struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
+    struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy->h_elem);
     if (match)
     {
       /* Already in the hash. Lock it, update LRU status, and wait until it is valid. */
@@ -614,9 +625,9 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
       ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       ASSERT (!cache_block_in_use (cb));
       ASSERT (cb->is_being_prepared);
-      /* There should be no one waiting on these conditions, because it has been is_being_prepared. */
-      ASSERT (cond_n_waiters (&cb->starving_process, &cb->lock) == 0);
-      ASSERT (cond_n_waiters (&cb->polite_processes, &cb->lock) == 0);
+      /* There should be no starving or polite processes, because it has been is_being_prepared. */
+      ASSERT (!cb->is_starving_process);
+      ASSERT (cb->polite_count == 0);
 
       /* CB is now prepared: if its contents were being evicted, they are now gone. 
            It is not valid, though. */
@@ -657,6 +668,8 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
     }
   } /* Loop waiting for CB. */
 
+  free (dummy);
+
   /* Ensure that we don't have cache locked and that we do have CB locked. */
   ASSERT (!cache_locked_by_me ());
   ASSERT (cb != NULL);
@@ -664,6 +677,7 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
 
   /* Update CB to indicate that we are using it. */
   cache_block_get_access (cb, exclusive);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
   cache_block_unlock (cb);
 
 #ifdef CACHE_DEBUG
@@ -713,12 +727,13 @@ cache_put_block (struct cache_block *cb)
   {
     if (cb->is_starving_process)
       cond_signal (&cb->starving_process, &cb->lock);
-    else if (cond_n_waiters (&cb->polite_processes, &cb->lock))
+    else if (cb->polite_count)
       cond_broadcast (&cb->polite_processes, &cb->lock);
     else
     {
       /* No current or pending processes, so put at the *back* of the free list.
          Leave in the hash, though, so that new users can still find it. */
+      ASSERT (!cache_block_in_use (cb));
       ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
       list_remove (&cb->l_elem);
       cb->location = CACHE_BLOCK_FREE_LIST;
@@ -747,6 +762,7 @@ cache_read_block (struct cache_block *cb)
   cache_block_lock (cb);
 
   ASSERT (cache_block_in_use (cb));
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   if (cb->contents == NULL)
   {
@@ -754,7 +770,7 @@ cache_read_block (struct cache_block *cb)
        If already valid, don't read from disk -- could be dirty in which case we would
        drop the write. */
     cache_block_alloc_contents (cb);
-    n_sectors = cache_block_get_n_sectors (cb);
+    n_sectors = cache_block_get_n_sectors (cb->type);
 
     for (i = 0; i < n_sectors; i++)
     {
@@ -768,7 +784,7 @@ cache_read_block (struct cache_block *cb)
 }
 
 /* Fill CB with zeros and return pointer to the data. 
-   CB->TYPE must be set correctly.
+   CB->type must be set correctly.
    CB is marked dirty. There must be a writer of CB. */
 void * 
 cache_zero_block (struct cache_block *cb)
@@ -781,7 +797,9 @@ cache_zero_block (struct cache_block *cb)
 #endif
   cache_block_lock (cb);
 
+  ASSERT (cache_block_in_use (cb));
   ASSERT (cb->is_writer);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   if (cb->contents == NULL)
   {
@@ -789,7 +807,8 @@ cache_zero_block (struct cache_block *cb)
     cache_block_alloc_contents (cb);
     ASSERT (cb->contents != NULL);
   }
-  size_t n_bytes = cache_block_get_contents_size (cb);
+  size_t n_bytes = cache_block_get_contents_size (cb->type);
+
   memset (cb->contents, 0, n_bytes);
   cb->is_dirty = true;
 
@@ -824,7 +843,10 @@ cache_mark_block_dirty (struct cache_block *cb)
 
   cache_block_lock (cb);
 
+  ASSERT (cache_block_in_use (cb));
   ASSERT (cb->is_writer);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
+
   ASSERT (cb->contents != NULL);
 
   cb->is_dirty = true;
@@ -841,6 +863,18 @@ cache_mark_block_clean (struct cache_block *cb)
   ASSERT (cb != NULL);
 
   cb->is_dirty = false;
+}
+
+/* Allocate and return a dummy cache block suitable for searching
+   the buffer_cache hash. 
+   Caller must free this dummy. */
+static struct cache_block *
+cache_block_make_dummy (block_sector_t address, enum cache_block_type type)
+{
+  struct cache_block *dummy = (struct cache_block *) malloc (sizeof(struct cache_block));
+  ASSERT (dummy != NULL);
+  cache_block_set_hash (dummy, address, type);
+  return dummy;
 }
 
 /* Sets the fields of DUMMY appropriately. Keep in sync with cache_block_hash_func. */
@@ -865,6 +899,7 @@ cache_block_hash_func (const struct hash_elem *cb_elem, void *aux UNUSED)
   struct cache_block *cb = hash_entry (cb_elem, struct cache_block, h_elem);
   ASSERT (cb != NULL);
 
+  /* Combine block sector and type. */
   return hash_bytes (&cb->block, sizeof(block_sector_t)) ^ hash_int (cb->type);
 }
 
@@ -891,11 +926,9 @@ cache_block_less_func (const struct hash_elem *a_elem, const struct hash_elem *b
 
 /* Return the number of sectors spanned by CB->CONTENTS. */
 static size_t
-cache_block_get_n_sectors (const struct cache_block *cb)
+cache_block_get_n_sectors (enum cache_block_type type)
 {
-  ASSERT (cb != NULL);
-
-  return (cache_block_get_contents_size (cb) / BLOCK_SECTOR_SIZE);
+  return (cache_block_get_contents_size (type) / BLOCK_SECTOR_SIZE);
 }
 
 /* Return true if CB is in use, else false. 
@@ -960,12 +993,10 @@ cache_block_unlock (struct cache_block *cb)
 
 /* Return the size in bytes of CB->CONTENTS. */
 static size_t
-cache_block_get_contents_size (const struct cache_block *cb)
+cache_block_get_contents_size (enum cache_block_type type)
 {
-  ASSERT (cb != NULL);
-
   size_t n_bytes = 0;
-  switch (cb->orig_type)
+  switch (type)
   {
     case CACHE_BLOCK_INODE:
       n_bytes = INODE_SIZE;
@@ -1067,13 +1098,12 @@ cache_discard (block_sector_t address, enum cache_block_type type)
 
   /* Prepare to search hash. */
   struct cache_block *cb = NULL;
-  struct cache_block dummy;
-  cache_block_set_hash (&dummy, address, type);
+  struct cache_block *dummy = cache_block_make_dummy (address, type);
 
   cache_lock ();
 
   /* Check for a match. */
-  struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy.h_elem);
+  struct hash_elem *match = hash_find (&buffer_cache.addr_to_block, &dummy->h_elem);
   if (match)
   {
     /* Match found. We have work to do. */
@@ -1112,6 +1142,7 @@ cache_discard (block_sector_t address, enum cache_block_type type)
     ASSERT (!cache_block_in_use (cb));
     /* Now this CB is "truly free", so put at the *front* of the free list. */
     cache_lock ();
+    ASSERT (!cache_block_in_use (cb));
     ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
     list_remove (&cb->l_elem);
     cb->location = CACHE_BLOCK_FREE_LIST;
@@ -1122,6 +1153,8 @@ cache_discard (block_sector_t address, enum cache_block_type type)
   else
     /* No match, nothing to do. */
     cache_unlock ();
+
+  free (dummy);
 }
 
 /* Discard all blocks from the cache.
@@ -1158,6 +1191,7 @@ cache_lock (void)
   lock_acquire (&buffer_cache.lock);
 #ifdef CACHE_DEBUG
   ASSERT (cache_all_blocks_accounted_for ());
+  ASSERT (cache_all_blocks_in_correct_list ());
 #endif
 
 #ifdef CACHE_DEBUG
@@ -1173,7 +1207,9 @@ cache_unlock (void)
 
 #ifdef CACHE_DEBUG
   ASSERT (cache_all_blocks_accounted_for ());
+  ASSERT (cache_all_blocks_in_correct_list ());
 #endif
+
   lock_release (&buffer_cache.lock);
 
 #ifdef CACHE_DEBUG
@@ -1182,13 +1218,39 @@ cache_unlock (void)
 #endif
 }
 
-/* Return true if all CACHE_SIZE blocks are in one of the 3 lists, else false.
+/* Return true if all CACHE_SIZE blocks are in one of the 2 lists, else false.
    Caller must hold lock on buffer cache. */
 static bool 
 cache_all_blocks_accounted_for (void)
 {
+  ASSERT (cache_locked_by_me ());
   size_t n_blocks = list_size (&buffer_cache.free_blocks) + list_size (&buffer_cache.in_use_blocks); 
   return (n_blocks == CACHE_SIZE);
+}
+
+/* Return true if all blocks are in the correct list, else false. 
+   Caller must hold lock on buffer cache. */
+static bool
+cache_all_blocks_in_correct_list (void)
+{
+  struct list_elem *e = NULL;
+  struct cache_block *cb = NULL;
+
+  for (e = list_begin (&buffer_cache.free_blocks); e != list_end (&buffer_cache.free_blocks); e = list_next (e))
+  {
+    cb = list_entry (e, struct cache_block, l_elem);
+    if (cb->location != CACHE_BLOCK_FREE_LIST)
+      return false;
+  }
+
+  for (e = list_begin (&buffer_cache.in_use_blocks); e != list_end (&buffer_cache.in_use_blocks); e = list_next (e))
+  {
+    cb = list_entry (e, struct cache_block, l_elem);
+    if (cb->location != CACHE_BLOCK_IN_USE_LIST)
+      return false;
+  }
+
+  return true;
 }
 
 /* bdflush ("buffer dirty flush") kernel thread. 
@@ -1402,6 +1464,3 @@ cache_self_test_parallel (void)
   printf ("cache_self_test_parallel: Returning. Cache is empty.\n");
 }
 #endif
-
-/* TODO Once this is "working", remove the filesys_lock() and filesys_unlock()
-   from the rest of the code base. */
