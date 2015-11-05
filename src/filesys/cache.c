@@ -183,8 +183,8 @@ static struct cache_block * cache_block_make_dummy (block_sector_t, enum cache_b
 static void cache_block_set_hash (struct cache_block *, block_sector_t, enum cache_block_type);
 static unsigned cache_block_hash_func (const struct hash_elem *, void *);
 static bool cache_block_less_func (const struct hash_elem *, const struct hash_elem *, void *);
-static size_t cache_block_get_contents_size (const struct cache_block *);
-static size_t cache_block_get_n_sectors (const struct cache_block *);
+static size_t cache_block_get_contents_size (enum cache_block_type);
+static size_t cache_block_get_n_sectors (enum cache_block_type);
 static bool cache_block_in_use (const struct cache_block *);
 
 static bool cache_block_locked_by_me (const struct cache_block *);
@@ -301,6 +301,7 @@ buffer_cache_init (struct block *backing_block)
     cache_block_init (cb);
     cb->id = i;
     cb->location = CACHE_BLOCK_FREE_LIST;
+    ASSERT (!cache_block_in_use (cb));
     list_push_back (&buffer_cache.free_blocks, &cb->l_elem);
   }
 }
@@ -428,10 +429,11 @@ static void
 cache_block_destroy (struct cache_block *cb)
 {
   ASSERT (cb != NULL);
+  /* TODO Do anything? */
 }
 
 /* Dynamically allocate the contents field of locked CB. 
-   Requires cb->type to be set appropriately. 
+   Requires CB->type to be set appropriately. 
    Returns the size of contents. */
 static size_t 
 cache_block_alloc_contents (struct cache_block *cb)
@@ -440,7 +442,8 @@ cache_block_alloc_contents (struct cache_block *cb)
   ASSERT (cb->contents == NULL);
   ASSERT (cache_block_locked_by_me (cb));
 
-  size_t n_bytes = cache_block_get_contents_size (cb);
+  size_t n_bytes = cache_block_get_contents_size (cb->type);
+
   cb->contents = malloc (n_bytes);
   ASSERT (cb->contents != NULL);
 
@@ -472,7 +475,8 @@ cache_evict_block (struct cache_block *cb)
 
 /* Flush this dirty CB to disk.
    CB does not need to be locked (may be being prepared), but caller
-   should ensure that access to this method is synchronized. */
+   should ensure that access to this method is synchronized. 
+   Relies on CB->orig_block and CB->orig_type. */
 static void 
 cache_flush_block (struct cache_block *cb)
 {
@@ -480,7 +484,8 @@ cache_flush_block (struct cache_block *cb)
   ASSERT (cb->is_dirty);
   ASSERT (cb->contents != NULL);
 
-  size_t n_sectors = cache_block_get_n_sectors (cb);
+  size_t n_sectors = cache_block_get_n_sectors (cb->orig_type);
+    
   size_t i;
   for (i = 0; i < n_sectors; i++)
   {
@@ -672,6 +677,7 @@ cache_get_block (block_sector_t address, enum cache_block_type type, bool exclus
 
   /* Update CB to indicate that we are using it. */
   cache_block_get_access (cb, exclusive);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
   cache_block_unlock (cb);
 
 #ifdef CACHE_DEBUG
@@ -756,6 +762,7 @@ cache_read_block (struct cache_block *cb)
   cache_block_lock (cb);
 
   ASSERT (cache_block_in_use (cb));
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   if (cb->contents == NULL)
   {
@@ -763,7 +770,7 @@ cache_read_block (struct cache_block *cb)
        If already valid, don't read from disk -- could be dirty in which case we would
        drop the write. */
     cache_block_alloc_contents (cb);
-    n_sectors = cache_block_get_n_sectors (cb);
+    n_sectors = cache_block_get_n_sectors (cb->type);
 
     for (i = 0; i < n_sectors; i++)
     {
@@ -777,7 +784,7 @@ cache_read_block (struct cache_block *cb)
 }
 
 /* Fill CB with zeros and return pointer to the data. 
-   CB->TYPE must be set correctly.
+   CB->type must be set correctly.
    CB is marked dirty. There must be a writer of CB. */
 void * 
 cache_zero_block (struct cache_block *cb)
@@ -790,7 +797,9 @@ cache_zero_block (struct cache_block *cb)
 #endif
   cache_block_lock (cb);
 
+  ASSERT (cache_block_in_use (cb));
   ASSERT (cb->is_writer);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
 
   if (cb->contents == NULL)
   {
@@ -798,7 +807,8 @@ cache_zero_block (struct cache_block *cb)
     cache_block_alloc_contents (cb);
     ASSERT (cb->contents != NULL);
   }
-  size_t n_bytes = cache_block_get_contents_size (cb);
+  size_t n_bytes = cache_block_get_contents_size (cb->type);
+
   memset (cb->contents, 0, n_bytes);
   cb->is_dirty = true;
 
@@ -833,7 +843,10 @@ cache_mark_block_dirty (struct cache_block *cb)
 
   cache_block_lock (cb);
 
+  ASSERT (cache_block_in_use (cb));
   ASSERT (cb->is_writer);
+  ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
+
   ASSERT (cb->contents != NULL);
 
   cb->is_dirty = true;
@@ -886,6 +899,7 @@ cache_block_hash_func (const struct hash_elem *cb_elem, void *aux UNUSED)
   struct cache_block *cb = hash_entry (cb_elem, struct cache_block, h_elem);
   ASSERT (cb != NULL);
 
+  /* Combine block sector and type. */
   return hash_bytes (&cb->block, sizeof(block_sector_t)) ^ hash_int (cb->type);
 }
 
@@ -912,11 +926,9 @@ cache_block_less_func (const struct hash_elem *a_elem, const struct hash_elem *b
 
 /* Return the number of sectors spanned by CB->CONTENTS. */
 static size_t
-cache_block_get_n_sectors (const struct cache_block *cb)
+cache_block_get_n_sectors (enum cache_block_type type)
 {
-  ASSERT (cb != NULL);
-
-  return (cache_block_get_contents_size (cb) / BLOCK_SECTOR_SIZE);
+  return (cache_block_get_contents_size (type) / BLOCK_SECTOR_SIZE);
 }
 
 /* Return true if CB is in use, else false. 
@@ -981,12 +993,10 @@ cache_block_unlock (struct cache_block *cb)
 
 /* Return the size in bytes of CB->CONTENTS. */
 static size_t
-cache_block_get_contents_size (const struct cache_block *cb)
+cache_block_get_contents_size (enum cache_block_type type)
 {
-  ASSERT (cb != NULL);
-
   size_t n_bytes = 0;
-  switch (cb->orig_type)
+  switch (type)
   {
     case CACHE_BLOCK_INODE:
       n_bytes = INODE_SIZE;
@@ -1132,6 +1142,7 @@ cache_discard (block_sector_t address, enum cache_block_type type)
     ASSERT (!cache_block_in_use (cb));
     /* Now this CB is "truly free", so put at the *front* of the free list. */
     cache_lock ();
+    ASSERT (!cache_block_in_use (cb));
     ASSERT (cb->location == CACHE_BLOCK_IN_USE_LIST);
     list_remove (&cb->l_elem);
     cb->location = CACHE_BLOCK_FREE_LIST;
@@ -1453,6 +1464,3 @@ cache_self_test_parallel (void)
   printf ("cache_self_test_parallel: Returning. Cache is empty.\n");
 }
 #endif
-
-/* TODO Once this is "working", remove the filesys_lock() and filesys_unlock()
-   from the rest of the code base. */
