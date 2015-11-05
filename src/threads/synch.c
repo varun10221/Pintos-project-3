@@ -457,8 +457,11 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 }
 
 /* Returns the number of waiters on COND.
-   LOCK must be held by the caller (otherwise this is a dangerous thing
-   to base decisions on). */
+   LOCK must be held by the caller. 
+   This is a dangerous function, so use with caution:
+     Threads may be signal'd but not yet woken! 
+     So this might be useful as an heuristic, but you should not
+     make big decisions based on it. */
 size_t 
 cond_n_waiters (struct condition *cond, struct lock *lock)
 {
