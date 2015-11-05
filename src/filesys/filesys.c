@@ -94,7 +94,7 @@ filesys_open (const char *name)
 
   if (dir != NULL)
     {
-      dir_lookup (dir, name, &inode);
+      dir_lookup (dir, file_name, &inode);
       dir_close (dir);
       return file_open (inode);
     }
@@ -118,20 +118,22 @@ filesys_create_dir (const char *name)
  block_sector_t inode_sector = 0;
  char *dir_name = dir_extract_directory_name (name);
  struct dir *dir = dir_find_dir_from_path (name);
- hash_number = dir_hash_lock_acquire (dir, name);
+ //hash_number = dir_hash_lock_acquire (dir, name);
  int initial_size = 0;
  bool success;
+ volatile bool check;
  /* Check if . or .. is passed to create directory, print an error
     message if true */
  if (strcmp (dir_name, ".") != 0 && strcmp (dir_name, "..") != 0)
      { 
-      bool success = (dir != NULL
+       
+        success = (dir != NULL
                   && free_map_allocate (SECTORS_PER_INODE, &inode_sector)
-                  && inode_create (inode_sector, INODE_DIRECTORY, initial_size)
-                  && dir_add (dir, dir_name, inode_sector));
-      
-      if (!success && inode_sector != 0)
-        free_map_release (inode_sector, 1);
+                  && inode_create (inode_sector, INODE_DIRECTORY, initial_size));
+	check = dir_add (dir, dir_name, inode_sector);
+        success = success && check;
+	if (!success && inode_sector != 0)
+         free_map_release (inode_sector, 1);
 #if 0
       /* Create the link to parent_directory and to itself */
       char name [2] = ".";
@@ -151,17 +153,17 @@ filesys_create_dir (const char *name)
           struct thread * t = thread_current ();
           struct dir * dir = t->current_dir;
           inode_sector = dir_get_inode (dir);
-          dir_add (dir, dir_name, inode_sector);
+           success = dir_add (dir, dir_name, inode_sector);
          }
        else if (strcmp (dir_name,"..") == 0)
          {
            struct thread * t = thread_current ();
            struct dir *dir = dir_retrieve_parent_directory (t->current_dir);
-          inode_sector = dir_get_inode (dir);
-          dir_add (dir, dir_name, inode_sector);
+           inode_sector = dir_get_inode (dir);
+           success = dir_add (dir, dir_name, inode_sector);
          }
       }
-  dir_hash_lock_release (dir, hash_number);
+ // dir_hash_lock_release (dir, hash_number);
  // free (dir_name);
   dir_close (dir);
   return success;
@@ -186,8 +188,13 @@ filesys_open_dir (const char *name)
 bool
 filesys_remove (const char *name) 
 {
-  struct dir *dir = dir_open_root ();
-  bool success = dir != NULL && dir_remove (dir, name);
+  /* Check for an attemp to remove the root */
+  if (strcmp (name, "/") == 0)
+     return false;
+
+  struct dir *dir = dir_find_dir_from_path (name);
+  char * dir_name = dir_extract_directory_name (name);
+  bool success = dir != NULL && dir_remove (dir, dir_name);
   dir_close (dir); 
 
   return success;
